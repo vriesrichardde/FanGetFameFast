@@ -1,0 +1,36 @@
+# FanGetFameFast — Python package requirements
+# Install into the project virtual environment:
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+# PDF generation
+weasyprint>=60.0
+cairocffi>=1.7.0
+CairoSVG>=2.7.0
+
+# Office document generation
+python-pptx>=1.0.0
+python-docx>=1.1.0
+xlsxwriter>=3.2.0
+
+# Markdown processing
+Markdown>=3.4.0
+
+# HTTP / networking
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Data processing
+PyYAML>=6.0
+numpy>=1.26.0
+scipy>=1.11.0
+
+# Graph analysis (network topology, correlation graphs)
+networkx>=3.2.0
+
+# Fuzzy matching (vault dedup, IOC correlation)
+rapidfuzz>=3.0.0
+datasketch>=1.6.0
+
+# Graphify visualisation
+graphifyy>=0.7.0

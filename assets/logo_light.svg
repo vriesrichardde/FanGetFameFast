@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500" role="img" aria-label="SecurityOperationsCenterOnSteroids logo (light)">
+  <defs>
+    <linearGradient id="hexFillL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0B1629"/>
+      <stop offset="100%" style="stop-color:#0D2040"/>
+    </linearGradient>
+    <pattern id="gridL" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#4AA8D4" stroke-width="0.5"/>
+    </pattern>
+    <clipPath id="hexClipL">
+      <polygon points="250,40 432,145 432,355 250,460 68,355 68,145"/>
+    </clipPath>
+  </defs>
+
+  <!-- White background -->
+  <rect width="500" height="500" fill="#FFFFFF"/>
+
+  <!-- Subtle outer shadow ring -->
+  <polygon points="250,36 436,143 436,357 250,464 64,357 64,143"
+           fill="none" stroke="#CBD5E0" stroke-width="2"/>
+
+  <!-- Hexagon fill (dark — badge stays dark on white bg) -->
+  <polygon points="250,40 432,145 432,355 250,460 68,355 68,145" fill="url(#hexFillL)"/>
+
+  <!-- Circuit grid overlay -->
+  <rect x="0" y="0" width="500" height="500" fill="url(#gridL)" opacity="0.06" clip-path="url(#hexClipL)"/>
+
+  <!-- Radar arcs -->
+  <circle cx="250" cy="250" r="160" fill="none" stroke="#4AA8D4" stroke-width="0.6" opacity="0.1" clip-path="url(#hexClipL)"/>
+  <circle cx="250" cy="250" r="120" fill="none" stroke="#4AA8D4" stroke-width="0.6" opacity="0.08" clip-path="url(#hexClipL)"/>
+
+  <!-- Inner decorative hexagon -->
+  <polygon points="250,72 406,162 406,338 250,428 94,338 94,162"
+           fill="none" stroke="#4AA8D4" stroke-width="1" opacity="0.22"/>
+
+  <!-- Outer hexagon border -->
+  <polygon points="250,40 432,145 432,355 250,460 68,355 68,145"
+           fill="none" stroke="#0085B2" stroke-width="2.5"/>
+
+  <!-- Vertex accent dots -->
+  <circle cx="250" cy="40"  r="5" fill="#0085B2"/>
+  <circle cx="432" cy="145" r="5" fill="#0085B2"/>
+  <circle cx="432" cy="355" r="5" fill="#0085B2"/>
+  <circle cx="250" cy="460" r="5" fill="#0085B2"/>
+  <circle cx="68"  cy="355" r="5" fill="#0085B2"/>
+  <circle cx="68"  cy="145" r="5" fill="#0085B2"/>
+
+  <!-- "SOC" primary text -->
+  <text x="250" y="232"
+        font-family="'Arial Black', 'Impact', 'Helvetica Neue', Arial, sans-serif"
+        font-weight="900"
+        font-size="142"
+        fill="#FFFFFF"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        letter-spacing="4">SOC</text>
+
+  <!-- "+" superscript -->
+  <text x="386" y="176"
+        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-weight="900"
+        font-size="68"
+        fill="#E85D20"
+        text-anchor="middle">+</text>
+
+  <!-- Top rule -->
+  <line x1="100" y1="310" x2="400" y2="310" stroke="#4AA8D4" stroke-width="0.75" opacity="0.5"/>
+
+  <!-- "SECURITY OPERATIONS CENTER" -->
+  <text x="250" y="333"
+        font-family="Arial, 'Helvetica Neue', sans-serif"
+        font-weight="400"
+        font-size="15"
+        fill="#4AA8D4"
+        text-anchor="middle"
+        letter-spacing="3.5">SECURITY OPERATIONS CENTER</text>
+
+  <!-- Flanking lines -->
+  <line x1="83"  y1="358" x2="165" y2="358" stroke="#E85D20" stroke-width="0.75" opacity="0.5"/>
+  <line x1="335" y1="358" x2="417" y2="358" stroke="#E85D20" stroke-width="0.75" opacity="0.5"/>
+
+  <!-- "ON STEROIDS" tagline -->
+  <text x="250" y="360"
+        font-family="Arial, 'Helvetica Neue', sans-serif"
+        font-weight="700"
+        font-size="13"
+        fill="#E85D20"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        letter-spacing="5.5">ON STEROIDS</text>
+
+  <!-- Bottom rule -->
+  <line x1="100" y1="378" x2="400" y2="378" stroke="#4AA8D4" stroke-width="0.75" opacity="0.5"/>
+</svg>

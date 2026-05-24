@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="SOC+ icon">
+  <defs>
+    <linearGradient id="hexFillI" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0B1629"/>
+      <stop offset="100%" style="stop-color:#0D2040"/>
+    </linearGradient>
+    <filter id="glowI" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="hexClipI">
+      <polygon points="100,15 173,57 173,143 100,185 27,143 27,57"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="200" height="200" fill="#080E1A"/>
+
+  <!-- Hex fill -->
+  <polygon points="100,15 173,57 173,143 100,185 27,143 27,57" fill="url(#hexFillI)"/>
+
+  <!-- Radar arc hint -->
+  <circle cx="100" cy="100" r="62" fill="none" stroke="#00C8FF" stroke-width="0.5" opacity="0.12" clip-path="url(#hexClipI)"/>
+
+  <!-- Outer hex border with glow -->
+  <polygon points="100,15 173,57 173,143 100,185 27,143 27,57"
+           fill="none" stroke="#00C8FF" stroke-width="2" filter="url(#glowI)"/>
+
+  <!-- Vertex dots -->
+  <circle cx="100" cy="15"  r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+  <circle cx="173" cy="57"  r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+  <circle cx="173" cy="143" r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+  <circle cx="100" cy="185" r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+  <circle cx="27"  cy="143" r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+  <circle cx="27"  cy="57"  r="3.5" fill="#00C8FF" filter="url(#glowI)"/>
+
+  <!-- "SOC" text -->
+  <text x="100" y="102"
+        font-family="'Arial Black', 'Impact', 'Helvetica Neue', Arial, sans-serif"
+        font-weight="900"
+        font-size="56"
+        fill="#FFFFFF"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        letter-spacing="2">SOC</text>
+
+  <!-- "+" superscript -->
+  <text x="155" y="73"
+        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-weight="900"
+        font-size="28"
+        fill="#FF6B2B"
+        text-anchor="middle">+</text>
+</svg>

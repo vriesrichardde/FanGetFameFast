@@ -1,0 +1,34 @@
+# Investigation working directories — never sync to GitHub
+analysis/
+reports/
+vault/
+graphify-out/
+exports/
+
+# Credentials and API keys
+.env
+*.env
+.soc_env
+
+# Claude Code local settings
+.claude/settings.json
+
+# Python artifacts
+.venv/
+__pycache__/
+*.py[cod]
+
+# Forensic evidence files (safety net if evidence lands outside analysis/)
+*.pcap
+*.pcapng
+*.mem
+*.dmp
+*.E01
+*.vmdk
+*.raw
+*.dd
+*.img
+*.evtx
+
+# Logs
+*.log
