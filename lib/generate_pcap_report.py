@@ -26,12 +26,19 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+    _CET = ZoneInfo("Europe/Amsterdam")
+except ImportError:
+    _CET = timezone.utc
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
@@ -47,6 +54,27 @@ SEVERITY_BADGE = {
 }
 
 MAX_TIMELINE_ROWS = 150   # cap on timeline events
+
+# ── Colour palette ─────────────────────────────────────────────────────────────
+_DARK_NAVY  = (0x0f, 0x17, 0x2a)
+_MID_NAVY   = (0x1e, 0x3a, 0x5f)
+_BLUE       = (0x1d, 0x4e, 0xd8)
+_LIGHT_BLUE = (0x93, 0xc5, 0xfd)
+_WHITE      = (0xff, 0xff, 0xff)
+_LIGHT_BG   = (0xf8, 0xfa, 0xfc)
+_ROW_ALT    = (0xf1, 0xf5, 0xf9)
+_TEXT_DARK  = (0x1f, 0x29, 0x37)
+_TEXT_MID   = (0x6b, 0x72, 0x80)
+_AMBER      = (0xfb, 0xbf, 0x24)
+_GREEN      = (0x22, 0xc5, 0x5e)
+
+_SEV_COLORS = {
+    "critical": (0xef, 0x44, 0x44),
+    "high":     (0xf9, 0x73, 0x16),
+    "medium":   (0xea, 0xb3, 0x08),
+    "low":      (0x22, 0xc5, 0x5e),
+    "info":     (0x6b, 0x72, 0x80),
+}
 
 
 # ── Loaders ────────────────────────────────────────────────────────────────────
@@ -2559,6 +2587,662 @@ def sec_appendix(stem: str, data: dict) -> list[str]:
     return lines
 
 
+# ── DOCX / PPTX helpers ────────────────────────────────────────────────────────
+
+def _compute_file_metadata(file_path: Path) -> tuple[str, str]:
+    if not file_path.exists():
+        return "N/A", "N/A"
+    mtime_str = datetime.fromtimestamp(
+        file_path.stat().st_mtime, tz=_CET
+    ).strftime("%d-%b-%Y %H:%M CET")
+    h = hashlib.sha256()
+    with open(file_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return mtime_str, h.hexdigest()
+
+
+def _set_doc_font(doc: Any, font_name: str = "Arial") -> None:
+    for style_name in [
+        "Normal", "Heading 1", "Heading 2", "Heading 3", "Heading 4",
+        "No Spacing", "Intense Quote", "List Number", "List Bullet", "Table Grid",
+    ]:
+        try:
+            doc.styles[style_name].font.name = font_name
+        except Exception:
+            pass
+
+
+def _add_header_footer(section: Any, case_id: str) -> None:
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    hdr = section.header
+    h_para = hdr.paragraphs[0] if hdr.paragraphs else hdr.add_paragraph()
+    h_para.clear()
+    h_run = h_para.add_run(case_id)
+    h_run.font.name = "Arial"
+    h_run.font.size = Pt(9)
+    h_run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+    h_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+    ftr = section.footer
+    f_para = ftr.paragraphs[0] if ftr.paragraphs else ftr.add_paragraph()
+    f_para.clear()
+    f_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    def _fld_char(fld_type: str) -> Any:
+        r = OxmlElement("w:r")
+        fc = OxmlElement("w:fldChar")
+        fc.set(qn("w:fldCharType"), fld_type)
+        r.append(fc)
+        return r
+
+    def _instr(text: str) -> Any:
+        r = OxmlElement("w:r")
+        it = OxmlElement("w:instrText")
+        it.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        it.text = text
+        r.append(it)
+        return r
+
+    def _txt_run(text: str) -> Any:
+        r = f_para.add_run(text)
+        r.font.name = "Arial"
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+        return r
+
+    _txt_run("Page ")
+    f_para._p.append(_fld_char("begin"))
+    f_para._p.append(_instr(" PAGE "))
+    f_para._p.append(_fld_char("end"))
+    _txt_run(" of ")
+    f_para._p.append(_fld_char("begin"))
+    f_para._p.append(_instr(" NUMPAGES "))
+    f_para._p.append(_fld_char("end"))
+
+
+def _add_watermark(section: Any) -> None:
+    from lxml import etree
+
+    hdr = section.header
+    wm_para = hdr.add_paragraph()
+    vml = (
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:v="urn:schemas-microsoft-com:vml"'
+        ' xmlns:o="urn:schemas-microsoft-com:office:office">'
+        "<w:rPr><w:noProof/></w:rPr>"
+        "<w:pict>"
+        '<v:shape id="WaterMark" o:spid="_x0000_s2049"'
+        ' type="#_x0000_t136"'
+        ' style="position:absolute;margin-left:0;margin-top:0;'
+        "width:430pt;height:120pt;z-index:-251654144;"
+        "rotation:315;"
+        "mso-position-horizontal:center;"
+        "mso-position-horizontal-relative:page;"
+        "mso-position-vertical:center;"
+        'mso-position-vertical-relative:page"'
+        ' fillcolor="#C0C0C0" stroked="f">'
+        "<v:textpath"
+        ' on="t" fitshape="t" string="CONFIDENTIAL"'
+        " style='font-family:\"Arial\";font-size:1pt;font-weight:bold'"
+        "/>"
+        "</v:shape>"
+        "</w:pict>"
+        "</w:r>"
+    )
+    wm_para._p.append(etree.fromstring(vml))
+
+
+def _remove_blank_paragraphs(doc: Any) -> None:
+    from docx.oxml.ns import qn
+
+    paras = list(doc.paragraphs)
+    to_remove = []
+    for i, para in enumerate(paras):
+        if para.text.strip():
+            continue
+        if para.style.name.startswith("Heading"):
+            continue
+        if para._element.find(".//" + qn("w:br")) is not None:
+            continue
+        prev_heading = i > 0 and paras[i - 1].style.name.startswith("Heading")
+        next_heading = i + 1 < len(paras) and paras[i + 1].style.name.startswith("Heading")
+        if prev_heading or next_heading:
+            continue
+        to_remove.append(para._element)
+    for elem in to_remove:
+        if elem.getparent() is not None:
+            elem.getparent().remove(elem)
+
+
+def _build_fan_pptx(
+    stem: str,
+    case_id: str,
+    generated_cet: str,
+    overall_sev: str,
+    timeline: list[dict],
+    iocs: list[dict],
+    recs: list[str],
+    data: dict,
+    output_path: Path,
+) -> None:
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+        from pptx.dml.color import RGBColor
+        from pptx.enum.text import PP_ALIGN
+    except ImportError:
+        print("[fan] WARNING: python-pptx not installed — skipping PPTX. pip3 install python-pptx")
+        return
+
+    prs = Presentation()
+    prs.slide_width  = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+    blank = prs.slide_layouts[6]
+
+    def _rgb(t):
+        return RGBColor(*t)
+
+    def _rect(slide, l, t, w, h, fill):
+        s = slide.shapes.add_shape(1, l, t, w, h)
+        s.fill.solid()
+        s.fill.fore_color.rgb = _rgb(fill)
+        s.line.fill.background()
+        return s
+
+    def _txt(slide, text, l, t, w, h, sz, bold=False, color=_WHITE, align=PP_ALIGN.LEFT):
+        tb  = slide.shapes.add_textbox(l, t, w, h)
+        tf  = tb.text_frame
+        tf.word_wrap = True
+        p   = tf.paragraphs[0]
+        p.alignment = align
+        run = p.add_run()
+        run.text = str(text)
+        run.font.name = "Arial"
+        run.font.size = Pt(sz)
+        run.font.bold = bold
+        run.font.color.rgb = _rgb(color)
+        return tb
+
+    W = prs.slide_width
+    H = prs.slide_height
+    M = Inches(0.4)
+
+    sev_color = _SEV_COLORS.get(overall_sev, _SEV_COLORS["info"])
+    pcap_name = f"{stem}.pcap"
+
+    # ── Slide 1 — Cover ───────────────────────────────────────────────────────
+    s1 = prs.slides.add_slide(blank)
+    _rect(s1, 0, 0, W, H, _DARK_NAVY)
+    _rect(s1, 0, 0, W, Inches(0.08), _BLUE)
+    _rect(s1, 0, H - Inches(0.08), W, Inches(0.08), _BLUE)
+    _txt(s1, "FAN", M, Inches(1.2), W - 2*M, Inches(1.2),
+         72, bold=True, color=_LIGHT_BLUE, align=PP_ALIGN.CENTER)
+    _txt(s1, "Forensics agent network", M, Inches(2.2), W - 2*M, Inches(0.7),
+         28, color=_WHITE, align=PP_ALIGN.CENTER)
+    _txt(s1, "Network forensics incident report", M, Inches(2.9), W - 2*M, Inches(0.6),
+         20, color=_LIGHT_BLUE, align=PP_ALIGN.CENTER)
+    _rect(s1, Inches(3), Inches(3.8), W - Inches(6), Inches(0.04), _BLUE)
+    _txt(s1, f"Case: {case_id}  |  PCAP: {pcap_name}  |  {generated_cet[:10]}",
+         M, Inches(4.1), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
+    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+         M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
+    _txt(s1, "Fan Get Fame Fast  |  FAN module",
+         M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
+
+    # ── Slide 2 — Key findings ────────────────────────────────────────────────
+    s2 = prs.slides.add_slide(blank)
+    _rect(s2, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s2, "Key findings", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s2, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+
+    unique_ips   = len(data.get("unique_ips", []))
+    unique_fqdns = len(data.get("unique_fqdns", []))
+    ioc_count    = len(iocs)
+    alert_count  = sum(1 for e in timeline if e.get("severity") in ("critical", "high"))
+
+    summary = (
+        f"Network forensic analysis of {pcap_name} identified {unique_ips} unique IP "
+        f"addresses and {unique_fqdns} unique domain names. "
+        f"Overall severity: {overall_sev.upper()}. "
+        f"{ioc_count} indicator(s) of compromise extracted; "
+        f"{alert_count} critical/high-severity event(s) in the timeline."
+    )
+    _txt(s2, summary, M, Inches(1.3), W - 2*M, Inches(3.0), 15, color=_TEXT_DARK)
+
+    metrics = [
+        ("Unique IPs",    str(unique_ips)),
+        ("Unique FQDNs",  str(unique_fqdns)),
+        ("IOCs",          str(ioc_count)),
+        ("Severity",      overall_sev.upper()),
+    ]
+    col_w = (W - 2*M) // len(metrics)
+    for i, (label, value) in enumerate(metrics):
+        cx = M + i * col_w
+        val_color = sev_color if label == "Severity" else _AMBER
+        _rect(s2, cx + Inches(0.05), Inches(4.7), col_w - Inches(0.1), Inches(1.3), _MID_NAVY)
+        _txt(s2, value, cx + Inches(0.1), Inches(4.8), col_w - Inches(0.2), Inches(0.7),
+             18, bold=True, color=val_color)
+        _txt(s2, label, cx + Inches(0.1), Inches(5.5), col_w - Inches(0.2), Inches(0.4),
+             10, color=_LIGHT_BLUE)
+
+    # ── Slide 3 — Incident timeline ───────────────────────────────────────────
+    s3 = prs.slides.add_slide(blank)
+    _rect(s3, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s3, "Incident timeline", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s3, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+
+    shown_events = [e for e in timeline if e.get("severity") in ("critical", "high", "medium")][:12]
+    if not shown_events:
+        shown_events = timeline[:12]
+    if shown_events:
+        col_ws = [Inches(2.5), Inches(1.0), Inches(3.0), W - M - Inches(7.0)]
+        hdrs   = ["Timestamp", "Severity", "Category", "Description"]
+        row_h  = Inches(0.46)
+        hx = M
+        for h_t, cw_t in zip(hdrs, col_ws):
+            _rect(s3, hx, Inches(1.15), cw_t - Inches(0.05), row_h - Inches(0.04), _MID_NAVY)
+            _txt(s3, h_t, hx + Inches(0.08), Inches(1.2), cw_t - Inches(0.13), row_h,
+                 12, bold=True, color=_WHITE)
+            hx += cw_t
+        for i, ev in enumerate(shown_events[:11]):
+            y  = Inches(1.15) + (i + 1) * row_h
+            bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
+            rx = M
+            vals = [
+                str(ev.get("timestamp", ""))[:24],
+                str(ev.get("severity", "")).upper(),
+                str(ev.get("category", ""))[:25],
+                str(ev.get("description", ""))[:70],
+            ]
+            for val, cw_t in zip(vals, col_ws):
+                _rect(s3, rx, y, cw_t - Inches(0.05), row_h - Inches(0.04), bg)
+                _txt(s3, val, rx + Inches(0.08), y + Inches(0.06),
+                     cw_t - Inches(0.13), row_h, 10, color=_TEXT_DARK)
+                rx += cw_t
+    else:
+        _txt(s3, "No threat events in timeline.", M, Inches(2.0), W - 2*M, Inches(1.0),
+             16, color=_TEXT_MID)
+
+    # ── Slide 4 — Key evidence ────────────────────────────────────────────────
+    s4 = prs.slides.add_slide(blank)
+    _rect(s4, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s4, "Key evidence", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s4, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+
+    module_hits = [
+        ("DNS threats",    data.get("has_dns",      False)),
+        ("HTTP threats",   data.get("has_http",     False)),
+        ("TLS inspection", data.get("has_tls",      False)),
+        ("Cert inspection",data.get("has_cert",     False)),
+        ("ICMP threats",   data.get("has_icmp",     False)),
+        ("TCP threats",    data.get("has_tcp",      False)),
+        ("Suricata IDS",   data.get("has_suricata", False)),
+        ("YARA matches",   data.get("has_yara",     False)),
+        ("CTI enrichment", data.get("has_fan_ip",   False)),
+        ("ARP threats",    data.get("has_arp",      False)),
+    ]
+    row_h = Inches(0.65)
+    for i, (label, hit) in enumerate(module_hits[:8]):
+        y  = Inches(1.25) + i * row_h
+        bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
+        _rect(s4, M, y, Inches(3.5), row_h - Inches(0.06), bg)
+        _rect(s4, M + Inches(3.5), y, W - M - Inches(3.5) - M, row_h - Inches(0.06), bg)
+        mark_color = _GREEN if hit else _TEXT_MID
+        mark = "Triggered" if hit else "No findings"
+        _txt(s4, label, M + Inches(0.1), y + Inches(0.08), Inches(3.3), row_h,
+             13, bold=True, color=_TEXT_DARK)
+        _txt(s4, mark, M + Inches(3.6), y + Inches(0.08), W - M - Inches(4.1), row_h,
+             12, color=mark_color)
+
+    # ── Slide 5 — Recommendations ─────────────────────────────────────────────
+    s5 = prs.slides.add_slide(blank)
+    _rect(s5, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s5, "Recommendations", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s5, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    row_h = Inches(0.72)
+    for i, rec in enumerate(recs[:7]):
+        y = Inches(1.2) + i * row_h
+        _rect(s5, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
+        _txt(s5, str(i + 1), M + Inches(0.1), y + Inches(0.1),
+             Inches(0.3), row_h, 16, bold=True, color=_WHITE, align=PP_ALIGN.CENTER)
+        import re as _re
+        rec_clean = _re.sub(r"\*\*(.*?)\*\*", r"\1", rec[:120])
+        _txt(s5, rec_clean, M + Inches(0.6), y + Inches(0.1),
+             W - M - Inches(1.0), row_h, 13, color=_TEXT_DARK)
+
+    prs.save(str(output_path))
+    print(f"[fan] PPTX saved: {output_path}")
+
+
+def _build_fan_docx(
+    stem: str,
+    case_id: str,
+    generated_cet: str,
+    overall_sev: str,
+    timeline: list[dict],
+    iocs: list[dict],
+    recs: list[str],
+    data: dict,
+    output_path: Path,
+) -> None:
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError:
+        print("[fan] WARNING: python-docx not installed — skipping DOCX. pip3 install python-docx")
+        return
+
+    import re as _re
+
+    doc = Document()
+    styles = doc.styles
+    pcap_name = f"{stem}.pcap"
+
+    # ── Page setup ────────────────────────────────────────────────────────────
+    for section in doc.sections:
+        section.top_margin      = Inches(1.0)
+        section.bottom_margin   = Inches(1.0)
+        section.left_margin     = Inches(1.2)
+        section.right_margin    = Inches(1.2)
+        section.header_distance = Inches(0.4)
+        section.footer_distance = Inches(0.4)
+
+    _set_doc_font(doc, "Arial")
+    doc.styles["Normal"].paragraph_format.space_after  = Pt(5)
+    doc.styles["Normal"].paragraph_format.space_before = Pt(0)
+    for _i in range(1, 5):
+        try:
+            _hs = doc.styles[f"Heading {_i}"]
+            _hs.paragraph_format.space_before = Pt(14 if _i == 1 else 10)
+            _hs.paragraph_format.space_after  = Pt(4)
+            _hs.font.name = "Arial"
+        except Exception:
+            pass
+
+    def _heading(text: str, level: int) -> None:
+        p = doc.add_heading(text, level=level)
+        if p.runs:
+            p.runs[0].font.color.rgb = RGBColor(0x0f, 0x17, 0x2a)
+            p.runs[0].font.name = "Arial"
+
+    def _para(text: str, bold: bool = False, italic: bool = False) -> None:
+        p = doc.add_paragraph()
+        run = p.add_run(text)
+        run.bold      = bold
+        run.italic    = italic
+        run.font.name = "Arial"
+
+    def _note(text: str) -> None:
+        p = (doc.add_paragraph(style="Intense Quote")
+             if "Intense Quote" in [s.name for s in styles]
+             else doc.add_paragraph())
+        run = p.add_run(text)
+        run.italic = True
+        run.font.name = "Arial"
+        run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+
+    def _code(text: str) -> None:
+        sn = "No Spacing" if "No Spacing" in [s.name for s in styles] else "Normal"
+        p  = doc.add_paragraph(style=sn)
+        r  = p.add_run(text)
+        r.font.name  = "Courier New"
+        r.font.size  = Pt(9)
+        r.font.color.rgb = RGBColor(0x1e, 0x3a, 0x5f)
+
+    def _table_2col(rows: list[tuple[str, str]], header: bool = True) -> None:
+        start = 1 if header else 0
+        tbl = doc.add_table(rows=len(rows) + start, cols=2)
+        tbl.style = "Table Grid"
+        if header:
+            for i, h in enumerate(["Field", "Value"]):
+                c = tbl.rows[0].cells[i]
+                c.text = h
+                c.paragraphs[0].runs[0].font.bold = True
+                c.paragraphs[0].runs[0].font.name = "Arial"
+        for i, (k, v) in enumerate(rows):
+            r = tbl.rows[i + start]
+            r.cells[0].text = k
+            r.cells[1].text = v
+            for j in range(2):
+                for run in r.cells[j].paragraphs[0].runs:
+                    run.font.name = "Arial"
+
+    # ── Header, footer, watermark ─────────────────────────────────────────────
+    for section in doc.sections:
+        _add_header_footer(section, case_id)
+        _add_watermark(section)
+
+    # ── Cover ──────────────────────────────────────────────────────────────────
+    title = doc.add_heading("FAN — Network forensics report", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if title.runs:
+        title.runs[0].font.name = "Arial"
+
+    sub = doc.add_paragraph()
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = sub.add_run("Forensics Agent Network  |  Fan Get Fame Fast")
+    r.font.size  = Pt(14)
+    r.font.name  = "Arial"
+    r.font.color.rgb = RGBColor(0x1d, 0x4e, 0xd8)
+
+    _table_2col([
+        ("Case ID",      case_id),
+        ("PCAP file",    pcap_name),
+        ("Module",       "FAN — Forensics Agent Network"),
+        ("Analysts",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Generated",    generated_cet),
+        ("Analysis tools", "tshark · Suricata · YARA · 22 protocol detectors"),
+    ])
+    doc.add_page_break()
+
+    # ── Part A — Investigation methodology ───────────────────────────────────
+    _heading("Part A — Investigation methodology", 1)
+    doc.add_paragraph()
+
+    _heading("A.1  Evidence acquisition and integrity", 2)
+    _para(
+        f"The PCAP file {pcap_name!r} was acquired as a read-only artifact. "
+        "All analysis tools open the file in read-only mode. The PCAP is never modified. "
+        "The SHA-256 hash of the PCAP is recorded at analysis start and verified at "
+        "report generation time to confirm evidence integrity throughout the pipeline."
+    )
+    doc.add_paragraph()
+    _para(
+        "Analysis output is written to separate working directories (analysis/) and "
+        "archived in the investigations vault on completion. The PCAP itself is never "
+        "stored in the working directory — only the analysis outputs."
+    )
+    doc.add_paragraph()
+
+    _heading("A.2  Tool suite", 2)
+    _table_2col([
+        ("tshark",              "Wireshark CLI — packet decoding and flow extraction"),
+        ("Suricata IDS",        "Signature-based network intrusion detection"),
+        ("YARA",                "Pattern matching against PCAP payload bytes"),
+        ("DNS threat detector", "DNS anomaly and threat analysis"),
+        ("HTTP threat detector","HTTP/HTTPS anomaly and threat analysis"),
+        ("TLS inspector",       "TLS session and certificate analysis"),
+        ("Certificate inspector","X.509 certificate chain analysis"),
+        ("ICMP detector",       "ICMP tunneling, flood, and anomaly detection"),
+        ("TCP detector",        "TCP scan, RST flood, and C2 pattern detection"),
+        ("ARP detector",        "ARP spoofing and poisoning detection"),
+        ("+ 12 protocol detectors", "NTP, DHCP, mDNS, NBNS, LLMNR, QUIC, SNMP, STUN, SSDP, UDP, NetBIOS, file hashes"),
+    ])
+    doc.add_paragraph()
+
+    _heading("A.3  Analysis pipeline", 2)
+    _para(
+        f"PCAP: {pcap_name}  →  22 protocol threat detectors  →  "
+        "Suricata IDS + YARA scanning  →  CTI enrichment  →  "
+        "report generation  →  investigations vault upload"
+    )
+    doc.add_paragraph()
+    doc.add_page_break()
+
+    # ── Part B — Artifact extraction catalog ─────────────────────────────────
+    _heading("Part B — Analysis module catalog", 1)
+    _note("Each module below ran against the PCAP and produced the listed outputs.")
+    doc.add_paragraph()
+
+    modules_catalog = [
+        ("B.1",  "DNS threat analysis",       "has_dns",      "dns_threats/",
+         "Detects DNS tunneling, DGA domains, DNS exfiltration, and typosquatting."),
+        ("B.2",  "HTTP/HTTPS threat analysis", "has_http",     "http_threats/",
+         "Identifies C2 beacons, malicious downloads, and suspicious User-Agent strings."),
+        ("B.3",  "TLS session inspection",    "has_tls",      "tls_inspector/",
+         "Analyzes TLS versions, cipher suites, and SNI patterns for weaknesses."),
+        ("B.4",  "Certificate inspection",    "has_cert",     "cert_inspector/",
+         "Validates X.509 certificate chains, expiry, and self-signed certs."),
+        ("B.5",  "ICMP threat detection",     "has_icmp",     "icmp_threats/",
+         "Detects ICMP tunneling, flood patterns, and oversized ICMP packets."),
+        ("B.6",  "TCP threat detection",      "has_tcp",      "tcp_threats/",
+         "Identifies port scans, SYN floods, and RST injection patterns."),
+        ("B.7",  "ARP threat detection",      "has_arp",      "arp_threats/",
+         "Detects ARP spoofing, ARP poisoning, and gratuitous ARP anomalies."),
+        ("B.8",  "UDP threat detection",      "has_udp",      "udp_threats/",
+         "Identifies UDP flood patterns and anomalous UDP traffic."),
+        ("B.9",  "Suricata IDS",              "has_suricata", "suricata/",
+         "Signature-based detection against the Suricata ruleset (ET/Open)."),
+        ("B.10", "YARA pattern matching",     "has_yara",     "yara_pcap/",
+         "Custom YARA rules matched against PCAP payload bytes."),
+        ("B.11", "CTI enrichment",            "has_fan_ip",   "fan_ip/",
+         "IPs and FQDNs cross-referenced against OpenCTI threat intelligence."),
+    ]
+
+    for ref, name, has_key, path, desc in modules_catalog:
+        ran = data.get(has_key, False)
+        _heading(f"{ref}  {name}", 2)
+        _para("Status", bold=True)
+        _para("Triggered — findings available." if ran else "No findings — analysis complete, no threats detected.")
+        doc.add_paragraph()
+        _para("Description", bold=True)
+        _para(desc)
+        doc.add_paragraph()
+        _para("Output path", bold=True)
+        _code(f"analysis/{path}{stem}/")
+        doc.add_paragraph()
+
+    doc.add_page_break()
+
+    # ── Part C — Findings ──────────────────────────────────────────────────────
+    _heading("Part C — Findings", 1)
+    doc.add_page_break()
+
+    # C.1 Management summary
+    _heading("C.1  Management summary", 2)
+    _note("Audience: CISO, Legal, Internal Audit — no technical identifiers.")
+    unique_ips   = len(data.get("unique_ips", []))
+    unique_fqdns = len(data.get("unique_fqdns", []))
+    _para(
+        f"Network forensic analysis of the captured traffic identified {unique_ips} unique "
+        f"IP addresses and {unique_fqdns} unique domain names. "
+        f"Overall severity: {overall_sev.upper()}. "
+        f"{len(iocs)} indicator(s) of compromise extracted. "
+        "The timeline of threat events has been reconstructed and is available for "
+        "cross-reference with storage and memory forensics findings."
+    )
+    doc.add_paragraph()
+
+    # C.2 IOCs
+    _heading("C.2  Indicators of compromise", 2)
+    _note("All IOC values defanged. Claude: enhance and elaborate when necessary.")
+    if iocs:
+        col_hdrs = ["Type", "Value", "Severity", "Context"]
+        tbl = doc.add_table(rows=len(iocs) + 1, cols=len(col_hdrs))
+        tbl.style = "Table Grid"
+        for i, h in enumerate(col_hdrs):
+            c = tbl.rows[0].cells[i]
+            c.text = h
+            if c.paragraphs[0].runs:
+                c.paragraphs[0].runs[0].font.bold = True
+                c.paragraphs[0].runs[0].font.name = "Arial"
+        for i, ioc in enumerate(iocs):
+            vals = [
+                str(ioc.get("type", "")),
+                str(ioc.get("value", "")),
+                str(ioc.get("severity", "")),
+                str(ioc.get("context", "")),
+            ]
+            for j, val in enumerate(vals):
+                c = tbl.rows[i + 1].cells[j]
+                c.text = val
+                for run in c.paragraphs[0].runs:
+                    run.font.name = "Arial"
+    else:
+        _para("No malicious indicators of compromise identified from network analysis.")
+    doc.add_paragraph()
+
+    # C.3 Recommendations
+    _heading("C.3  Recommendations", 2)
+    _note("Claude: enhance and elaborate when necessary.")
+    for i, rec in enumerate(recs, 1):
+        rec_clean = _re.sub(r"\*\*(.*?)\*\*", r"\1", rec)
+        p = doc.add_paragraph(style="List Number")
+        run = p.add_run(rec_clean)
+        run.font.name = "Arial"
+    doc.add_page_break()
+
+    # ── Appendix A — 4-column ─────────────────────────────────────────────────
+    _heading("Appendix A — Analysis source files", 1)
+    _note("SHA-256 hashes computed at report generation time.")
+
+    artifact_files: list[tuple[Path, str]] = []
+    if data.get("has_pcap"):
+        d = ANALYSIS_DIR / "pcap" / stem
+        artifact_files += [
+            (d / "netflow.csv",      "PCAP netflow (tshark)"),
+            (d / "unique_ips.txt",   "Unique IP addresses"),
+            (d / "unique_fqdns.txt", "Unique FQDNs"),
+        ]
+    for has_key, subdir, label in [
+        ("has_dns",      "dns_threats",    "DNS threats JSON"),
+        ("has_http",     "http_threats",   "HTTP threats JSON"),
+        ("has_tls",      "tls_inspector",  "TLS sessions JSON"),
+        ("has_cert",     "cert_inspector", "Certificate findings JSON"),
+        ("has_icmp",     "icmp_threats",   "ICMP threats JSON"),
+        ("has_tcp",      "tcp_threats",    "TCP threats JSON"),
+        ("has_arp",      "arp_threats",    "ARP threats JSON"),
+        ("has_suricata", "suricata",       "Suricata alerts JSON"),
+        ("has_yara",     "yara_pcap",      "YARA matches JSON"),
+        ("has_fan_ip",   "fan_ip",         "CTI enrichment CSV"),
+    ]:
+        if data.get(has_key):
+            d = ANALYSIS_DIR / subdir / stem
+            fname = f"{subdir.split('_')[0]}_{subdir.split('_')[1] if '_' in subdir else 'results'}.json"
+            fp = d / fname
+            if not fp.exists():
+                fps = list(d.glob("*.json"))
+                fp = fps[0] if fps else d
+            artifact_files.append((fp, label))
+
+    tbl = doc.add_table(rows=len(artifact_files) + 1, cols=4)
+    tbl.style = "Table Grid"
+    for i, h in enumerate(["Filename", "Description", "Generated (CET)", "SHA-256 (first 32)"]):
+        c = tbl.rows[0].cells[i]
+        c.text = h
+        if c.paragraphs[0].runs:
+            c.paragraphs[0].runs[0].font.bold = True
+            c.paragraphs[0].runs[0].font.name = "Arial"
+    for i, (fp, desc) in enumerate(artifact_files):
+        mtime, sha256 = _compute_file_metadata(fp)
+        vals = [fp.name, desc, mtime, sha256[:32] if sha256 != "N/A" else "N/A"]
+        for j, val in enumerate(vals):
+            c = tbl.rows[i + 1].cells[j]
+            c.text = val
+            for run in c.paragraphs[0].runs:
+                run.font.name = "Arial"
+
+    _remove_blank_paragraphs(doc)
+    doc.save(str(output_path))
+    print(f"[fan] DOCX saved: {output_path}")
+
+
 # ── PDF conversion ─────────────────────────────────────────────────────────────
 
 def convert_to_pdf(
@@ -2645,7 +3329,7 @@ def generate_report(
     output_dir: Path | None = None,
     base_dir: Path | None = None,
     report_version: int = 1,
-) -> tuple[Path, Path | None]:
+) -> dict[str, Path | None]:
     global ANALYSIS_DIR
     if base_dir:
         ANALYSIS_DIR = base_dir
@@ -2683,6 +3367,7 @@ def generate_report(
     print(f"[report] Available sources: {', '.join(avail) or 'none'}")
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    generated_cet = datetime.now(_CET).strftime("%d-%b-%Y %H:%M CET")
     overall_sev = _overall_severity(data)
     first_ts, last_ts, duration = _capture_window(data)
 
@@ -2745,8 +3430,35 @@ def generate_report(
         print("[report] PDF conversion failed. Install: pip3 install markdown weasyprint", file=sys.stderr)
         pdf_path = None
 
+    # PPTX
+    pptx_path = out_dir / f"{stem}_fan_presentation.pptx"
+    try:
+        _build_fan_pptx(
+            stem, case_id, generated_cet, overall_sev,
+            timeline, iocs, recs, data, pptx_path,
+        )
+    except Exception as exc:
+        print(f"[report] PPTX generation failed: {exc}", file=sys.stderr)
+        pptx_path = None
+
+    # DOCX
+    docx_path = out_dir / f"{stem}_fan_report.docx"
+    try:
+        _build_fan_docx(
+            stem, case_id, generated_cet, overall_sev,
+            timeline, iocs, recs, data, docx_path,
+        )
+    except Exception as exc:
+        print(f"[report] DOCX generation failed: {exc}", file=sys.stderr)
+        docx_path = None
+
     print(f"[report] Done.")
-    return md_path, pdf_path
+    return {
+        "md":   md_path,
+        "pdf":  pdf_path,
+        "pptx": pptx_path if pptx_path and pptx_path.exists() else None,
+        "docx": docx_path if docx_path and docx_path.exists() else None,
+    }
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -2772,8 +3484,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    args = _build_parser().parse_args()
-    out  = Path(args.output_dir) if args.output_dir else None
-    base = Path(args.base_dir)   if args.base_dir   else None
-    generate_report(stem=args.stem, case_id=args.case_id, output_dir=out,
-                    base_dir=base, report_version=args.report_version)
+    args  = _build_parser().parse_args()
+    out   = Path(args.output_dir) if args.output_dir else None
+    base  = Path(args.base_dir)   if args.base_dir   else None
+    paths = generate_report(stem=args.stem, case_id=args.case_id, output_dir=out,
+                             base_dir=base, report_version=args.report_version)
+    print("[report] Report suite complete:")
+    for fmt, p in paths.items():
+        if p:
+            print(f"  {fmt.upper():4s}  {p}")

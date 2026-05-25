@@ -551,19 +551,22 @@ def _build_docx(
         section.left_margin   = Inches(1.2)
         section.right_margin  = Inches(1.2)
 
+    def _xml_safe(text: str) -> str:
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(text))
+
     def _h(text, level):
-        p = doc.add_heading(text, level=level)
+        p = doc.add_heading(_xml_safe(text), level=level)
         p.runs[0].font.color.rgb = RGBColor(0x0f, 0x17, 0x2a)
 
     def _p(text, bold=False, italic=False):
         p = doc.add_paragraph()
-        run = p.add_run(text)
+        run = p.add_run(_xml_safe(text))
         run.bold   = bold
         run.italic = italic
 
     def _note(text):
         p = doc.add_paragraph()
-        run = p.add_run(text)
+        run = p.add_run(_xml_safe(text))
         run.italic = True
         run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
 

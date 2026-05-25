@@ -36,6 +36,8 @@ EXPORTS_DIR="$PROJECT_ROOT/exports"
 REPORTS_DIR="$PROJECT_ROOT/reports"
 EWF_MOUNT="/mnt/ewf"
 FS_MOUNT="/mnt/windows_mount"
+NBD_DEV=""
+NBD_CONNECTED=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -102,6 +104,47 @@ mkdir -p \
     "$EXPORTS_DIR/autopsy" \
     "$REPORTS_DIR"
 
+# ── Helper functions ──────────────────────────────────────────────────────────
+_cleanup_local_artifacts() {
+    echo "[fast] Removing local analysis artifacts..."
+    sudo find "$ANALYSIS_DIR" -mindepth 1 ! -name '.fast_session.json' -delete 2>/dev/null || true
+    sudo find "$EXPORTS_DIR"  -mindepth 1 -delete 2>/dev/null || true
+    echo "[fast] Local artifacts removed."
+}
+
+_upload_reports() {
+    local cid="$1"
+    local stem="${cid//[[:space:]]/_}"
+    local md="$REPORTS_DIR/${stem}_fast_report.md"
+    [[ ! -f "$md" ]] && { echo "[fast] No reports found for case $cid — skipping upload."; return 0; }
+    local args="--case-id $cid --md $md"
+    [[ -f "$REPORTS_DIR/${stem}_fast_report.pdf"        ]] && args+=" --pdf  $REPORTS_DIR/${stem}_fast_report.pdf"
+    [[ -f "$REPORTS_DIR/${stem}_fast_presentation.pptx" ]] && args+=" --pptx $REPORTS_DIR/${stem}_fast_presentation.pptx"
+    [[ -f "$REPORTS_DIR/${stem}_fast_report.docx"       ]] && args+=" --docx $REPORTS_DIR/${stem}_fast_report.docx"
+    python3 "$PROJECT_ROOT/lib/investigations_upload.py" $args \
+        || echo "[fast] WARNING: Upload for case $cid failed."
+}
+
+# ── Session guard: upload + clean when switching evidence ─────────────────────
+SESSION_FILE="$ANALYSIS_DIR/.fast_session.json"
+
+if [[ -f "$SESSION_FILE" ]]; then
+    PREV_IMAGE="$(python3 -c "import json; print(json.load(open('$SESSION_FILE')).get('disk_image',''))" 2>/dev/null || true)"
+    PREV_CASE="$(python3  -c "import json; print(json.load(open('$SESSION_FILE')).get('case_id',''))"   2>/dev/null || true)"
+    if [[ -n "$PREV_IMAGE" && "$PREV_IMAGE" != "$DISK_IMAGE" ]]; then
+        echo "[fast] Evidence switch detected (previous: $(basename "$PREV_IMAGE"))."
+        if [[ $SKIP_UPLOAD -eq 0 ]]; then
+            echo "[fast] Uploading artifacts from previous investigation (case: $PREV_CASE)..."
+            _upload_reports "$PREV_CASE"
+        fi
+        _cleanup_local_artifacts
+    fi
+fi
+
+printf '{"case_id":"%s","hostname":"%s","disk_image":"%s","started":"%s"}\n' \
+    "$CASE_ID" "$HOSTNAME_ARG" "$DISK_IMAGE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "$SESSION_FILE"
+
 # ── Image verification ────────────────────────────────────────────────────────
 IMAGE_EXT="${DISK_IMAGE##*.}"
 IMAGE_EXT_LOWER="${IMAGE_EXT,,}"
@@ -126,6 +169,25 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         echo "[fast] Mounting E01 via ewfmount..."
         sudo ewfmount "$DISK_IMAGE" "$EWF_MOUNT"/ || { echo "[fast] WARNING: ewfmount failed"; SKIP_MOUNT=1; }
         RAW_DEVICE="$EWF_MOUNT/ewf1"
+    elif [[ "$IMAGE_EXT_LOWER" =~ ^(vdi|vmdk|qcow2|vhd|vhdx)$ ]]; then
+        echo "[fast] VM image ($IMAGE_EXT_LOWER) — exposing via qemu-nbd..."
+        sudo modprobe nbd max_part=8 2>/dev/null || true
+        for _nbd in /dev/nbd{0..15}; do
+            _sz="$(lsblk -n -o SIZE "$_nbd" 2>/dev/null | tr -d ' ')"
+            if [[ "$_sz" == "" || "$_sz" == "0B" || "$_sz" == "0" ]]; then
+                NBD_DEV="$_nbd"; break
+            fi
+        done
+        if [[ -z "$NBD_DEV" ]]; then
+            echo "[fast] ERROR: No free NBD device — is qemu-utils installed?" >&2
+            exit 1
+        fi
+        sudo qemu-nbd --connect="$NBD_DEV" "$DISK_IMAGE"
+        NBD_CONNECTED=1
+        sleep 2
+        sudo partprobe "$NBD_DEV" 2>/dev/null || true
+        echo "[fast] Exposed as $NBD_DEV"
+        RAW_DEVICE="$NBD_DEV"
     else
         RAW_DEVICE="$DISK_IMAGE"
     fi
@@ -258,7 +320,8 @@ fi
 IMAGE_SIZE=$(stat -c%s "$DISK_IMAGE" 2>/dev/null || echo "0")
 if [[ "$IMAGE_SIZE" -lt 21474836480 ]]; then
     echo "[fast] Running bulk_extractor..."
-    sudo bulk_extractor -o "$EXPORTS_DIR/carved/" -j 4 \
+    rm -rf "$EXPORTS_DIR/carved" && mkdir -p "$EXPORTS_DIR/carved"
+    sudo bulk_extractor -o "$EXPORTS_DIR/carved" -j 4 \
         "$RAW_FOR_TSK" 2>/dev/null || \
         echo "[fast] WARNING: bulk_extractor failed — continuing."
 else
@@ -273,7 +336,9 @@ for candidate in \
     /usr/share/autopsy/bin/autopsy \
     /usr/local/bin/autopsy \
     "$(command -v autopsy 2>/dev/null)"; do
-    [[ -x "$candidate" ]] && { AUTOPSY_BIN="$candidate"; break; }
+    # Require Java-based Autopsy 4.x (supports --createCase); skip Perl v2.x
+    [[ -x "$candidate" ]] && "$candidate" --help 2>&1 | grep -q -- "--createCase" \
+        && { AUTOPSY_BIN="$candidate"; break; }
 done
 
 AUTOPSY_OUT="$EXPORTS_DIR/autopsy"
@@ -325,6 +390,11 @@ if [[ $MOUNTED_FS -eq 1 ]]; then
 fi
 if [[ "$IMAGE_EXT_LOWER" == "e01" ]] || [[ "$IMAGE_EXT_LOWER" == "ewf" ]]; then
     sudo umount "$EWF_MOUNT" 2>/dev/null || true
+fi
+if [[ $NBD_CONNECTED -eq 1 ]]; then
+    echo "[fast] Disconnecting qemu-nbd ($NBD_DEV)..."
+    sudo qemu-nbd --disconnect "$NBD_DEV" 2>/dev/null || true
+    NBD_CONNECTED=0
 fi
 
 # ── Report generation ─────────────────────────────────────────────────────────
@@ -396,6 +466,12 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
 else
     echo "[fast] Upload skipped (--no-upload)."
 fi
+
+# ── Clean up local artifacts ───────────────────────────────────────────────────
+echo "[fast] Cleaning up local artifacts (preserved in investigations vault)..."
+_cleanup_local_artifacts
+rm -f "$SESSION_FILE"
+echo "[fast] Local cleanup complete."
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

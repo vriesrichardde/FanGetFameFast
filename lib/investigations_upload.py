@@ -26,9 +26,16 @@ SSH_HOST       = os.environ.get("INVESTIGATIONS_SSH_HOST", "sansforensics@ubuntu
 REMOTE_ROOT    = os.environ.get("INVESTIGATIONS_ROOT",     "/home/sansforensics/cases")
 
 
+_SSH_OPTS = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", f"UserKnownHostsFile={os.path.expanduser('~richard/.ssh/known_hosts')}",
+    "-i", os.path.expanduser("~richard/.ssh/id_ed25519"),
+]
+
+
 def _ssh_mkdir(remote_dir: str) -> None:
     subprocess.run(
-        ["ssh", SSH_HOST, f"mkdir -p {remote_dir}"],
+        ["ssh", *_SSH_OPTS, SSH_HOST, f"mkdir -p {remote_dir}"],
         check=True,
         capture_output=True,
     )
@@ -36,7 +43,7 @@ def _ssh_mkdir(remote_dir: str) -> None:
 
 def _scp_upload(local_path: Path, remote_path: str) -> None:
     subprocess.run(
-        ["scp", str(local_path), f"{SSH_HOST}:{remote_path}"],
+        ["scp", *_SSH_OPTS, str(local_path), f"{SSH_HOST}:{remote_path}"],
         check=True,
         capture_output=True,
     )
