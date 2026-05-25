@@ -1,5 +1,5 @@
 {
-  "name": "FanGetFameFast Claude Code",
+  "name": "FanGetFameFast Claude Code (ARM64)",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."

@@ -34,3 +34,13 @@ datasketch>=1.6.0
 
 # Graphify visualisation
 graphifyy>=0.7.0
+
+# Memory forensics (FAME)
+volatility3>=2.0.0
+
+# TLS / certificate inspection (FAN)
+sslyze>=5.0.0
+
+# MemProcFS physical memory analysis (FAME — optional, x86-64 only)
+# May not install on arm64; post-create.sh skips gracefully on failure.
+memprocfs>=5.0.0

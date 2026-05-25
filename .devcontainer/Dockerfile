@@ -31,6 +31,49 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         yara \
         # Suricata rule manager (suricata itself is installed via post-create.sh)
         suricata-update \
+        # The Sleuth Kit — disk image analysis (FAST module)
+        sleuthkit \
+        autopsy \
+        # EWF (EnCase) image tools (FAST module)
+        ewf-tools \
+        libewf-dev \
+        libfuse2 \
+        # VM disk image access via NBD (FAST module)
+        qemu-utils \
+        # File recovery and carving (FAST module)
+        # bulk_extractor is not in apt — built from source in post-create.sh
+        testdisk \
+        foremost \
+        scalpel \
+        binwalk \
+        # Build dependencies for suricata + bulk_extractor source builds (post-create.sh)
+        libpcre2-dev \
+        libyaml-dev \
+        libjansson-dev \
+        libmagic-dev \
+        libnet1-dev \
+        libpcap-dev \
+        liblz4-dev \
+        libcap-ng-dev \
+        libcbor-dev \
+        libhiredis-dev \
+        libevent-dev \
+        libexpat1-dev \
+        libboost-dev \
+        libre2-dev \
+        autoconf \
+        automake \
+        libtool \
+        flex \
+        rustc \
+        cargo \
+        # Disk partitioning tools (FAST module)
+        parted \
+        kmod \
+        # Network / OSINT tools (FAN module)
+        whois \
+        # Document conversion
+        pandoc \
         # WeasyPrint PDF rendering — runtime libraries
         libcairo2 \
         libcairo2-dev \
