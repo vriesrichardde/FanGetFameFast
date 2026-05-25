@@ -1,10 +1,11 @@
 # FanGetFameFast — User guide
 
-**Version:** 3.2 · May 2026  
-**Platform:** Ubuntu 24.04 LTS (x86-64)  
+**Version:** 3.3 · May 2026
+**Platform:** Ubuntu 24.04 LTS (x86-64)
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 **Classification:** Internal
 
-> **New installation?** See the [Deployment Guide](DEPLOYMENT_GUIDE.md) for step-by-step production setup.  
+> **New installation?** See the [Deployment Guide](DEPLOYMENT_GUIDE.md) for step-by-step production setup.
 > **Integrating or extending Fan Get Fame Fast?** See the [Technical Reference](TECHNICAL_REFERENCE.md).
 
 ---
@@ -25,7 +26,7 @@
 12. [MCP servers](#12-mcp-servers)
 13. [Reporting](#13-reporting)
 14. [Configuration reference](#14-configuration-reference)
-15. [Self-tests](#15-self-tests)
+15. [Self-tests and verification](#15-self-tests-and-verification)
 16. [Evidence integrity rules](#16-evidence-integrity-rules)
 17. [License and disclaimer](#17-license-and-disclaimer)
 
@@ -35,23 +36,23 @@
 
 Every serious incident leaves traces in three places: the network, memory, and disk. A senior analyst can work each one individually. Nobody can correlate all three fast enough to matter during an active incident.
 
-Fan Get Fame Fast solves that. Three forensic modules — **FAN** (network), **FAME** (memory), and **FAST** (storage) — are coordinated by Claude, which decides which module to run, in what order, and when to pivot across disciplines. The analyst asks. The platform finds.
+Fan Get Fame Fast solves that. Three forensic modules (FAN for network, FAME for memory, FAST for storage) are coordinated by Claude, which decides which module to run, in what order, and when to pivot across disciplines. The analyst asks. The platform finds.
 
 **Three entry points:**
 
 ```bash
-./scripts/analyze_pcap.sh  /path/to/capture.pcap      # FAN
-./scripts/fame_analyze.sh  /path/to/image.mem         # FAME
-./scripts/fast_analyze.sh  /path/to/image.E01         # FAST
+./scripts/analyze_pcap.sh  /path/to/capture.pcap      # FAN — network forensics
+./scripts/fame_analyze.sh  /path/to/image.mem         # FAME — memory forensics
+./scripts/fast_analyze.sh  /path/to/image.E01         # FAST — disk forensics
 ```
 
-**FAN** runs 22 protocol threat-detection modules, Suricata IDS, YARA, and IOC enrichment, then generates a report. Typical runtime: 8–15 minutes per GB of captured traffic.
+**FAN** runs 22 protocol threat-detection modules, Suricata IDS, YARA, and IOC enrichment against a PCAP file, then generates a report. Typical runtime: 8–15 minutes per GB of captured traffic.
 
-**FAME** runs Volatility 3 plugins, Memory Baseliner, AutoTimeliner super-timeline, and EVTXtract event recovery. Output: Markdown + PDF + PPTX + DOCX.
+**FAME** runs Volatility 3 plugins, Memory Baseliner, AutoTimeliner super-timeline, EVTXtract event recovery, and MemProcFS physical memory analysis. Output: Markdown + PDF + PPTX + DOCX.
 
 **FAST** runs TSK (fls, fsstat, icat, mactime), bulk_extractor carving, and Autopsy headless ingest, then extracts EVTX, registry hives, prefetch, MFT, SRUM, and browser history. Output: Markdown + PDF + PPTX + DOCX.
 
-When two or more modules have run against the same case ID, the platform produces a combined unified report that correlates findings across all three disciplines.
+When two or more modules have run against the same case ID, the platform produces a combined unified report that correlates findings across disciplines.
 
 ---
 
@@ -65,25 +66,33 @@ cd /path/to/FanGetFameFast
 # 1. Install system and Python dependencies
 bash scripts/install_dependencies.sh
 
-# 2. Create folder structure and MCP configuration
+# 2. Configure passwordless sudo for suricata-update (required for non-interactive pipelines)
+sudo bash scripts/setup_sudoers.sh
+
+# 3. Create folder structure and MCP configuration
 bash scripts/setup_folder_structure.sh
 
-# 3. Set API credentials
+# 4. Set API credentials
 cp scripts/set_env_template.sh ~/.soc_env
 nano ~/.soc_env            # fill in PERPLEXITY_API_KEY, OPENCTI_URL, OPENCTI_API_KEY
 echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env
 
-# 4. Verify
+# 5. Set up SSH key access to the investigations vault (ubuntudesktop)
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""    # skip if you already have this key
+ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+
+# 6. Verify
 ./scripts/test_solution.sh
+./scripts/test_mcp_servers.sh
 ```
 
-Full details: [Deployment Guide](DEPLOYMENT_GUIDE.md).
+Full setup details: [Deployment Guide](DEPLOYMENT_GUIDE.md).
 
 ### Analyze network traffic
 
 ```bash
-cd /home/richard/Documents/FanGetFameFast
+cd /path/to/FanGetFameFast
 
 # Interactive — prompts for case ID
 ./scripts/analyze_pcap.sh /path/to/capture.pcap
@@ -100,6 +109,8 @@ The finished report goes to `/home/sansforensics/cases/FAN-2026-001/reports/` on
 
 FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger. Every investigation starts with an explicit analyst command.
 
+### Starting an investigation
+
 ```bash
 # Interactive — prompts for case ID
 ./scripts/analyze_pcap.sh /path/to/capture.pcap
@@ -107,23 +118,30 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 # Non-interactive with case ID
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2026-001
 
-# With case description
+# With case description (stored in vault)
 ./scripts/analyze_pcap.sh /path/to/capture.pcap \
     --case-id FAN-2026-001 \
     --description "Suspected C2 beacon on DESKTOP-42"
 
-# Skip vault writes
+# Skip vault writes (useful for test runs against sanitized PCAPs)
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --no-vault
+
+# Skip upload to investigations vault (runs analysis locally only)
+./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2026-001 --no-upload
 ```
 
 ### Pipeline steps
 
-1. All 22 detection modules run, writing WIP output to `./analysis/<module>/<stem>/`
-2. An incident report (Markdown + PDF) is generated in `./analysis/_reports/<stem>/`
-3. A management PowerPoint briefing (PPTX) is generated in `./analysis/_reports/<stem>/`
-4. All artifacts — MD, PDF, PPTX, and all module outputs — are packaged into a single timestamped ZIP: `<case_id>_<YYYYMMDD-HHMMSS>.zip`
-5. The ZIP goes to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop
-6. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
+1. All 22 detection modules run sequentially, writing WIP output to `./analysis/<module>/<stem>/`
+2. Suricata IDS scans using ET Open rules and any rules in `rules/suricata/local.rules`
+3. YARA scans all `.yar` files compiled from `rules/yara/`
+4. IP and FQDN extraction runs; each indicator is enriched via vault lookup then Perplexity on a cache miss
+5. An incident report (Markdown + PDF) is generated in `./analysis/_reports/<stem>/`
+6. A management PowerPoint briefing (PPTX) is generated in `./analysis/_reports/<stem>/`
+7. All artifacts (MD, PDF, PPTX, and all module outputs) are packaged into a single timestamped ZIP
+8. The ZIP goes to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
+9. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
+10. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
 
 ### Output files per investigation
 
@@ -132,17 +150,29 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 | `<stem>_incident_report.md` | Analyst | Full technical findings, all protocol sections |
 | `<stem>_incident_report.pdf` | Analyst / Legal | Styled PDF of the technical report |
 | `<stem>_management_briefing.pptx` | CISO / Management | 7-slide PowerPoint: executive summary, threat landscape, IDS alerts, IOCs, recommendations, module coverage |
-| `<case_id>_<timestamp>.zip` | Archive | All of the above + raw module JSON/CSV outputs |
+| `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above + raw module JSON/CSV outputs |
 
 ### Analysis folder
 
-`./analysis/` holds temporary outputs while a PCAP is being processed. Do not store anything there that you need to keep. Once the ZIP is packaged and uploaded, the directory is cleared automatically.
+`./analysis/` holds temporary outputs while a PCAP is being processed. Do not store anything there that you need to keep. Once the ZIP is packaged and uploaded, the directory is cleared automatically. If an investigation is interrupted, the WIP files remain in `./analysis/` until the next successful run or manual cleanup.
+
+### Extract IP and FQDN only
+
+`pcap_analyze.sh` is a lightweight alternative to the full pipeline. It extracts netflow, unique IPs, and FQDNs from a PCAP without running all 22 detection modules.
+
+```bash
+./scripts/pcap_analyze.sh /path/to/capture.pcap [--case-id <id>] [--output-dir <dir>]
+```
+
+Output goes to `./analysis/pcap/<pcap_stem>/`: `netflow.csv`, `unique_ips.txt`, `unique_fqdns.txt`, `report.md`. This script is also invoked internally by the `/fan-extract-ip-fqdn` Claude skill.
 
 ---
 
 ## 4. Memory forensics (FAME)
 
-FAME is a manual memory forensics pipeline. Every investigation starts explicitly.
+FAME is a manual memory forensics pipeline built on Volatility 3 and Memory Baseliner. Every investigation starts explicitly.
+
+### Starting an investigation
 
 ```bash
 # Interactive — prompts for case ID
@@ -151,20 +181,28 @@ FAME is a manual memory forensics pipeline. Every investigation starts explicitl
 # Non-interactive
 ./scripts/fame_analyze.sh /path/to/image.mem --case-id FAME-2026-001 --hostname SERVER1234
 
-# Skip vault uploads
+# Skip vault writes
+./scripts/fame_analyze.sh /path/to/image.mem --case-id FAME-2026-001 --no-vault
+
+# Skip upload to investigations vault (analyze locally, do not upload)
 ./scripts/fame_analyze.sh /path/to/image.mem --case-id FAME-2026-001 --no-upload
 ```
 
+The `--hostname` argument is used in the report header. If omitted, FAME attempts to derive the hostname from the image filename stem.
+
 ### What runs
 
-| Stage | What it does |
-|-------|-------------|
-| **Volatility 3** | pslist, psscan, pstree, cmdline, netstat, netscan, malfind, svcscan, modules, modscan, filescan, userassist, hivelist, info |
-| **Memory timeline** | `vol.py timeliner` builds a bodyfile; `mactime` converts it to a sorted MACB timeline |
-| **Memory Baseliner** | Compares processes, drivers, and services against a known-good baseline JSON |
-| **AutoTimeliner** | Correlates multiple Volatility plugin outputs into a single super-timeline CSV (optional) |
-| **EVTXtract** | Recovers Windows Event Log records from raw memory pages — catches events from fragmented or deleted EVTX files (optional) |
-| **Linux strings fallback** | When no ISF symbols are available for a Linux image, extracts ASCII and Unicode strings and greps for auth/syslog patterns |
+| Stage | Tool | What it does |
+|-------|------|-------------|
+| **Volatility 3** | `vol.py` | Runs pslist, psscan, pstree, cmdline, netstat, netscan, malfind, svcscan, modules, modscan, filescan, userassist, hivelist, info against the memory image |
+| **YARA memory scan** | `yara` | Scans the memory image against all rules in `rules/yara/` |
+| **Memory timeline** | `vol.py timeliner` + `mactime` | Builds a bodyfile and converts it to a sorted MACB timeline |
+| **Memory Baseliner** | `baseline.py` | Compares processes, drivers, and services against a known-good baseline JSON; flags deviations |
+| **MemProcFS** | `memprocfs` (Python) | Provides physical memory access via LeechCore as a second analysis pathway; for VirtualBox ELF core dumps, extracts the CR3/DTB from the VBCPU PT_NOTE segment (optional) |
+| **AutoTimeliner** | `autotimeliner.py` | Correlates multiple Volatility plugin outputs into a single super-timeline CSV (optional) |
+| **EVTXtract** | `evtxtract.py` | Recovers Windows Event Log records from raw memory pages — useful when EVTX files are fragmented across pages (optional) |
+| **Linux strings fallback** | `strings` + grep | When no ISF symbols are available for a Linux image, extracts ASCII and Unicode strings and greps for auth/syslog patterns |
+| **Rekall** | — | Abandoned by Google in 2021 (last release v1.7.2.post1, October 2019). Requires Python ≤ 3.7. Not available. Volatility 3 provides equivalent coverage. |
 
 ### Output files
 
@@ -174,6 +212,7 @@ FAME is a manual memory forensics pipeline. Every investigation starts explicitl
 | `<stem>_fame_report.pdf` | Styled PDF |
 | `<stem>_fame_presentation.pptx` | 8-slide PowerPoint briefing |
 | `<stem>_fame_report.docx` | Word document |
+| `analysis/memory/memprocfs/` | MemProcFS artifacts: physical banners, attack strings, IOC matches (if MemProcFS ran) |
 | `analysis/memory/autotimeliner/supertimeline.csv` | Super-timeline (if AutoTimeliner ran) |
 | `analysis/memory/evtxtract/recovered_events.xml` | Recovered EVTX records (if EVTXtract ran) |
 | `<stem>_combined_report.*` | Cross-module report (generated when FAN or FAST report exists for this case ID) |
@@ -181,22 +220,29 @@ FAME is a manual memory forensics pipeline. Every investigation starts explicitl
 ### Installing optional tools
 
 ```bash
-# AutoTimeliner
+# MemProcFS — physical memory access via LeechCore
+pip3 install memprocfs --break-system-packages
+
+# AutoTimeliner — Volatility-backed MACB super-timeline
 git clone https://github.com/andreafortuna/autotimeliner /opt/autotimeliner
 pip3 install -r /opt/autotimeliner/requirements.txt
+# AutoTimeliner requires Volatility 3 to be importable:
+export PYTHONPATH="/opt/volatility3-2.20.0:$PYTHONPATH"   # add to ~/.soc_env
 
-# EVTXtract
+# EVTXtract — EVTX record recovery from raw binary data
 git clone https://github.com/williballenthin/EVTXtract /opt/EVTXtract
 pip3 install -r /opt/EVTXtract/requirements.txt
 ```
 
-When either tool is absent, that step is skipped with a log entry and the pipeline continues.
+When any optional tool is absent, that stage is skipped with a log entry and the pipeline continues.
 
 ---
 
 ## 5. Disk forensics (FAST)
 
 FAST is a manual disk-image forensics pipeline built on The Sleuth Kit, bulk_extractor, and Autopsy.
+
+### Starting an investigation
 
 ```bash
 # Interactive — prompts for case ID
@@ -205,27 +251,33 @@ FAST is a manual disk-image forensics pipeline built on The Sleuth Kit, bulk_ext
 # Non-interactive
 ./scripts/fast_analyze.sh /path/to/image.E01 --case-id FAST-2026-001 --hostname SERVER1234
 
-# Skip filesystem mount (TSK-only mode)
+# Skip filesystem mount (TSK-only mode — use when ewfmount or NBD is unavailable)
 ./scripts/fast_analyze.sh /path/to/image.E01 --case-id FAST-2026-001 --no-mount
+
+# Skip vault writes
+./scripts/fast_analyze.sh /path/to/image.E01 --case-id FAST-2026-001 --no-vault
+
+# Skip upload to investigations vault
+./scripts/fast_analyze.sh /path/to/image.E01 --case-id FAST-2026-001 --no-upload
 ```
 
 Supported image formats: E01/EWF, VMDK, raw (.dd, .img), and any format TSK recognizes.
 
 ### What runs
 
-| Stage | What it does |
-|-------|-------------|
-| **Image verification** | `ewfinfo` + `ewfverify` for E01; `img_stat` for raw images |
-| **Partition map** | `mmls` — identifies all partitions and their start sectors |
-| **Filesystem stats** | `fsstat` — filesystem type, cluster size, volume serial number |
-| **File listing** | `fls -r -p` — full recursive file/directory listing with metadata |
-| **MACB bodyfile** | `fls -m` — generates bodyfile for mactime processing |
-| **Filesystem timeline** | `mactime` — converts bodyfile to sorted MACB timeline (TXT + CSV) |
-| **Inode listing** | `ils` — lists allocated and orphan inodes |
-| **Artifact extraction** | Copies EVTX logs, registry hives, prefetch, SRUM, browser history, Recycle Bin, and scheduled tasks from the mounted filesystem |
-| **MFT + USN journal** | `icat` — extracts `$MFT` (inode 0) and `$J` (USN change journal) |
-| **File carving** | `bulk_extractor` — carves emails, URLs, credit cards, registry keys from raw image (skipped for images > 20 GB) |
-| **Autopsy** | Headless ingest: file-type mismatch, hash lookup, recent activity, EXIF, keyword index (optional) |
+| Stage | Tool | What it does |
+|-------|------|-------------|
+| **Image verification** | `ewfinfo` + `ewfverify` | For E01 images: validates integrity and reports image metadata. For raw images, `img_stat` is used instead |
+| **Partition map** | `mmls` | Identifies all partitions and their start sectors |
+| **Filesystem stats** | `fsstat` | Reports filesystem type, cluster size, volume serial number, and allocated/unallocated block counts |
+| **File listing** | `fls -r -p` | Produces a full recursive file/directory listing with inode, name, type, and timestamps |
+| **MACB bodyfile** | `fls -m` | Generates a bodyfile for mactime processing |
+| **Filesystem timeline** | `mactime` | Converts the bodyfile to a sorted MACB timeline (modified, accessed, changed, born) as TXT and CSV |
+| **Inode listing** | `ils` | Lists allocated and orphan inodes; orphan inodes indicate deleted-but-recoverable files |
+| **Artifact extraction** | `cp` from mount | Copies EVTX logs, registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT), prefetch, SRUM database, browser history, Recycle Bin, and scheduled tasks from the mounted filesystem |
+| **MFT + USN journal** | `icat` | Extracts `$MFT` (inode 0) and `$J` (USN change journal) directly from the image |
+| **File carving** | `bulk_extractor` | Carves emails, URLs, credit card numbers, and registry keys from the raw image. Skipped for images larger than 20 GB |
+| **Autopsy** | `autopsy --nogui` | Headless ingest: file-type mismatch detection, hash lookup against NSRL, recent activity, EXIF, keyword index (optional) |
 
 ### Output files
 
@@ -236,59 +288,73 @@ Supported image formats: E01/EWF, VMDK, raw (.dd, .img), and any format TSK reco
 | `<stem>_fast_presentation.pptx` | 8-slide PowerPoint briefing |
 | `<stem>_fast_report.docx` | Word document |
 | `exports/fs_timeline.csv` | Full filesystem MACB timeline |
+| `exports/evtx/` | Extracted Windows Event Log files (.evtx) |
+| `exports/registry/` | Registry hives: SYSTEM, SOFTWARE, SAM, NTUSER.DAT |
+| `exports/prefetch/` | Prefetch files (.pf) |
+| `exports/mft/` | `$MFT` and `$J` (USN change journal) |
+| `exports/srum/` | SRUM database (SRUDB.dat) |
+| `exports/browser/` | Browser history files |
+| `exports/carved/` | bulk_extractor carving output |
 | `exports/autopsy/` | Autopsy case + exported artifacts (if Autopsy ran) |
 | `<stem>_combined_report.*` | Cross-module report (generated when FAN or FAME report exists for this case ID) |
 
 ### Installing Autopsy
 
 ```bash
-# From apt (if available)
+# From apt (Ubuntu 22.04/24.04 — may not be current)
 sudo apt-get install -y autopsy
 
-# Or install the upstream .deb
+# Or install the upstream .deb (recommended — keeps Autopsy current)
+# Download the latest .deb from https://www.autopsy.com/download/
 sudo dpkg -i autopsy-4.x.x-amd64.deb
-sudo apt-get install -f
+sudo apt-get install -f    # resolve any dependency gaps
+
+# Verify
+autopsy --version          # must be 4.17 or later for --nogui support
 ```
 
-When `autopsy` is not on `$PATH`, that step is skipped and a `AUTOPSY_NOT_RUN.txt` marker is written to `./exports/autopsy/`.
+When `autopsy` is absent from `$PATH`, `fast_analyze.sh` skips the Autopsy step and writes `AUTOPSY_NOT_RUN.txt` to `./exports/autopsy/`. The rest of the pipeline continues.
 
 ---
 
 ## 6. Detection modules (FAN)
 
-22 modules run sequentially. Each has a shell wrapper in `scripts/` and a Python library in `lib/`.
+22 modules run sequentially during a FAN investigation. Each has a shell wrapper in `scripts/` and a Python library in `lib/`. Any module can also run standalone against a PCAP.
 
 | Module | Detection categories |
 |--------|---------------------|
-| **DNS** | DGA, beaconing, exfiltration, fast flux, amplification, NXDomain flood, typosquatting, spoofing, zone transfer, unauthorized servers, unusual types |
-| **HTTP/S** | Suspicious UA, unusual methods, scanning status codes, suspicious URI, large upload, cookie anomaly, host header anomaly, beaconing, unusual server headers, suspicious referer, deprecated TLS |
-| **TLS session** | Suspicious JA4/JA3, weak cipher, deprecated TLS, non-standard port, cipher diversity scan |
-| **TLS certificate** | Self-signed, expired, not-yet-valid, short/long validity, wildcard, SNI mismatch, weak signature |
+| **DNS** | DGA, beaconing, exfiltration, fast flux, amplification, NXDomain flood, typosquatting, spoofing, zone transfer, unauthorized servers, unusual query types |
+| **HTTP/S** | Suspicious user-agent, unusual methods, scanning status codes, suspicious URI patterns, large upload, cookie anomaly, host header anomaly, beaconing, unusual server headers, suspicious referer, deprecated TLS |
+| **TLS session** | Suspicious JA4/JA3 fingerprints, weak cipher suites, deprecated TLS versions, non-standard port usage, cipher diversity scanning |
+| **TLS certificate** | Self-signed, expired, not-yet-valid, short/long validity period, wildcard misuse, SNI mismatch, weak signature algorithm |
 | **ARP** | Cache poisoning, gratuitous ARP flood, ARP flood, ARP scan, proxy anomaly |
-| **TCP** | SYN flood, port scan, RST flood, stealth scan, session hijacking, half-open flood |
-| **UDP** | Flood, reflection/amplification, port scan, fragmentation, IP spoofing |
-| **ICMP** | Flood, Ping of Death, fragmentation, tunneling, Smurf, redirect, sweep, unreachable flood, recon, exfiltration |
+| **TCP** | SYN flood, port scan, RST flood, stealth scan (FIN/XMAS/NULL), session hijacking indicators, half-open connection flood |
+| **UDP** | Flood, reflection/amplification, port scan, IP fragmentation abuse, IP spoofing indicators |
+| **ICMP** | Flood, Ping of Death, fragmentation, tunneling, Smurf attack, redirect abuse, sweep, unreachable flood, recon, covert exfiltration |
 | **NTP** | Amplification, flood, Kiss-of-Death, monlist abuse, spoofed response, time manipulation, recon |
 | **DHCP** | Starvation, rogue server, spoofing, release/decline flood, relay anomaly, message injection |
-| **mDNS** | Amplification, information leakage, spoofing/cache poisoning, outside local segment, flood |
-| **QUIC** | Amplification/DDoS, 0-RTT replay, version forgery, pre-handshake exhaustion, non-standard port |
-| **SNMP** | Default credentials, MitM, DoS flood, reconnaissance, malicious SET, large data transfer |
-| **NBNS** | Spoofing/poisoning, credential theft, SMB relay, enumeration, DoS, WPAD poisoning |
-| **LLMNR** | Spoofing/poisoning, credential theft, SMB relay, reconnaissance |
-| **STUN** | Amplification DDoS, info leakage, firewall traversal, service abuse |
-| **SSDP/UPnP** | Amplification DDoS, device exposure, network manipulation, vulnerable UPnP |
-| **NetBIOS** | Poisoning, NTLM hash theft, NTLM relay, enumeration, recon, null session, DDoS, malware propagation |
-| **File hashes** | Extracts HTTP/SMB/TFTP/IMF/DICOM files; MD5+SHA256; Perplexity OSINT |
-| **Suricata IDS** | ET Open rules + local.rules |
-| **YARA** | PE, entropy, network, malware rules + community rules |
-| **IP/FQDN lookup** | FQDN/IP correlation, DNS resolution, OSINT enrichment |
+| **mDNS** | Amplification, information leakage, spoofing/cache poisoning, traffic outside local segment, flood |
+| **QUIC** | Amplification/DDoS, 0-RTT replay attacks, version forgery, pre-handshake resource exhaustion, non-standard port |
+| **SNMP** | Default community strings, man-in-the-middle, DoS flood, reconnaissance, malicious SET operations, large data transfer |
+| **NBNS** | NetBIOS Name Service spoofing/poisoning, credential theft, SMB relay setup, enumeration, DoS, WPAD poisoning |
+| **LLMNR** | Link-Local Multicast Name Resolution spoofing/poisoning, credential theft relay, SMB relay, reconnaissance |
+| **STUN** | Session Traversal Utilities for NAT — amplification DDoS, information leakage, firewall traversal abuse, service abuse |
+| **SSDP/UPnP** | Simple Service Discovery Protocol — amplification DDoS, device exposure, network manipulation, vulnerable UPnP device detection |
+| **NetBIOS** | Poisoning, NTLM hash theft, NTLM relay, enumeration, recon, null session, DDoS, malware propagation indicators |
+| **File hashes** | Extracts files transferred over HTTP, SMB, TFTP, IMF, and DICOM; computes MD5 + SHA256; enriches hashes via Perplexity OSINT |
+| **Suricata IDS** | ET Open ruleset + any rules in `rules/suricata/local.rules` |
+| **YARA** | All `.yar` files in `rules/yara/`: PE structure, entropy anomaly, network patterns, malware family signatures, community rules |
+| **IP/FQDN lookup** | FQDN/IP correlation, DNS resolution, vault lookup, Perplexity OSINT enrichment |
 
 Run any module standalone:
 
 ```bash
 ./scripts/fan_dns_threats.sh  /path/to/capture.pcap
 ./scripts/fan_http_threats.sh /path/to/capture.pcap
+./scripts/fan_tls_inspector.sh /path/to/capture.pcap --case-id FAN-2026-001
 ```
+
+All modules write output to `./analysis/<module_name>/<pcap_stem>/` by default.
 
 ---
 
@@ -296,18 +362,20 @@ Run any module standalone:
 
 ### Suricata
 
+Suricata processes the PCAP using its `pcap-file` mode. It does not require a live interface.
+
 ```bash
-# Update ET Open rules
+# Update ET Open rules (requires internet access)
 ./scripts/update_suricata_rules.sh
 
-# ET Open only (no extra dependencies)
+# ET Open only (no extra signing/PPA dependencies)
 ./scripts/update_suricata_rules.sh --et-only
 
-# Add custom rules
+# Add custom detection rules
 nano rules/suricata/local.rules
 ```
 
-Install Suricata once:
+Install Suricata once (if not installed by `install_dependencies.sh`):
 
 ```bash
 sudo add-apt-repository ppa:oisf/suricata-stable
@@ -317,43 +385,60 @@ sudo apt-get update && sudo apt-get install suricata
 ### YARA
 
 ```bash
-# Run YARA scan standalone
+# Run YARA scan standalone against a PCAP
 ./scripts/fan_yara_pcap.sh /path/to/capture.pcap
 
 # Sweep a disk mount or memory image
-./scripts/yara_sweep.sh --target /mnt/windows_mount/ --case-id FAN-2026-001
+./scripts/yara_sweep.sh --target /mnt/windows_mount/ --case-id FAST-2026-001
 ./scripts/yara_sweep.sh --target /path/to/memory.img --strings --threads 4
 ```
 
-Drop `.yar` files into `./rules/yara/`. They are compiled and loaded automatically at scan time.
+Drop `.yar` files into `./rules/yara/`. They are compiled and loaded automatically at scan time. The FAME pipeline also scans memory images against all rules in `./rules/yara/` during the memory analysis stage.
 
 ---
 
 ## 8. Claude skills
 
-Open Claude Code in the project directory and type the skill name.
+Open Claude Code in the project directory and type the skill name preceded by `/`.
 
 | Skill | Command | What it does |
 |-------|---------|-------------|
-| CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Checks all IPs and FQDNs extracted from the PCAP against OpenCTI; writes `opencti_lookup.md` |
-| FAN IP lookup | `/fan-ip-lookup` | FQDN/IP enrichment + OSINT via Perplexity with 7-day vault cache |
-| FAN report | `/fan-report` | Generates MD + PDF incident report from all module outputs |
-| FAN extract IP+FQDN | `/fan-extract-ip-fqdn` | Extracts netflow, unique IPs, and FQDNs from a PCAP |
-| Perplexity lookup | `/perplexity-lookup` | Live threat intel for an unknown artifact |
-| Obsidian query | `/obsidian-query` | Queries the vault before an investigation |
-| Obsidian record | `/obsidian-record` | Records findings into the vault and pushes to OpenCTI |
-| Markdown to PDF | `/md-to-pdf` | Converts any Markdown file to a styled PDF |
-| Remove case | `/remove-case` | Removes a case from the investigations vault |
+| CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Checks all IPs and FQDNs extracted from the PCAP against OpenCTI; writes `opencti_lookup.md` to the case folder |
+| FAN IP lookup | `/fan-ip-lookup` | FQDN/IP enrichment + OSINT via Perplexity; results cached in the vault for 7 days |
+| FAN report | `/fan-report` | Generates MD + PDF incident report from all module outputs under `./analysis/` |
+| FAN extract IP+FQDN | `/fan-extract-ip-fqdn` | Extracts netflow, unique IPs, and FQDNs from a PCAP (lightweight, no full module pipeline) |
+| Memory forensics | `/fame` | Full FAME pipeline: Volatility 3 + Memory Baseliner + report generation + upload |
+| Storage forensics | `/fast` | Full FAST pipeline: TSK + bulk_extractor + Autopsy + report generation + upload |
+| Perplexity lookup | `/perplexity-lookup` | Live threat intel for an unknown artifact (IOC, CVE, malware family, threat actor) |
+| Obsidian query | `/obsidian-query` | Queries the vault for known context before starting an investigation |
+| Obsidian record | `/obsidian-record` | Records confirmed findings into the vault and pushes them to OpenCTI |
+| Markdown to PDF | `/md-to-pdf` | Converts any Markdown file to a styled PDF with cover page and pagination |
+| Remove case | `/remove-case` | Removes a case directory from the investigations vault |
 
-Individual detection module skills (`/fan-dns-threats`, `/fan-http-threats`, etc.) run one module at a time.
+Individual detection module skills (`/fan-dns-threats`, `/fan-http-threats`, `/fan-tls-inspector`, etc.) run one module at a time against the current PCAP.
 
 ---
 
 ## 9. Obsidian vault — knowledge graph
 
-The vault at `./vault/` is the platform's institutional memory: TTPs, IOCs, threat actors, malware families, risks, and case histories accumulate here across investigations.
+The vault at `./vault/` is the platform's institutional memory. TTPs, IOCs, threat actors, malware families, risks, and case histories accumulate here across investigations. It is a plain-Markdown directory. Every note is a `.md` file readable without any special tooling.
 
-### Writing
+### Vault folder layout
+
+```
+vault/
+  IOCs/           One note per indicator (IP, domain, hash, URL, email, filename)
+  TTPs/           One note per MITRE ATT&CK (sub)technique
+  ThreatActors/   Threat group profiles
+  Malware/        Malware family profiles
+  Concepts/       Generic cybersecurity concepts
+  Risks/          Risk assessments per case/asset
+  Cases/          Post-investigation summaries
+  Templates/      Note schemas — do not modify manually
+  Dashboard.md    Auto-maintained index
+```
+
+### Writing to the vault
 
 ```python
 from lib.knowledge_extractor import open_case, record_ioc, record_ttp, close_case
@@ -366,9 +451,9 @@ record_ttp("T1071.001", "Web Protocols", "HTTPS POST every 60s.", "FAN-2026-001"
 close_case("FAN-2026-001", "C2 confirmed. Host isolated.")
 ```
 
-All `record_*` calls are idempotent. Calling again updates the existing note rather than creating a duplicate. Each call also pushes the finding to OpenCTI via `opencti_create_indicator`.
+All `record_*` calls are idempotent. Calling the same function again with the same indicator updates the existing note rather than creating a duplicate. Each call also pushes the finding to OpenCTI via `opencti_create_indicator`.
 
-### Querying
+### Querying the vault
 
 ```bash
 ./scripts/vault_context.sh search <keyword>
@@ -376,13 +461,13 @@ All `record_*` calls are idempotent. Calling again updates the existing note rat
 ./scripts/vault_context.sh ttp T1059
 ```
 
-IOC values in the vault are defanged: `192[.]168[.]1[.]1`, `evil[.]com`, `hxxps://...`
+IOC values in the vault are defanged: `192[.]168[.]1[.]1`, `evil[.]com`, `hxxps://...`. The `record_ioc` function defangs values automatically before writing. Never store live IPs or domains in plain text in the vault.
 
 ---
 
 ## 10. Live threat intelligence (Perplexity.ai)
 
-When the vault has no answer for an artifact, Perplexity provides real-time web-sourced intelligence.
+When the vault has no answer for an artifact, Perplexity provides real-time web-sourced intelligence. Decision order: vault first, Perplexity on a cache miss, confirmed findings recorded back to vault.
 
 ```bash
 ./scripts/perplexity_search.sh ioc     203.0.113.42
@@ -390,14 +475,16 @@ When the vault has no answer for an artifact, Perplexity provides real-time web-
 ./scripts/perplexity_search.sh ttp     T1071.001
 ./scripts/perplexity_search.sh cve     CVE-2024-1234
 ./scripts/perplexity_search.sh actor   APT29
+./scripts/perplexity_search.sh tool    mimikatz
+./scripts/perplexity_search.sh search  "LSASS dump detection evasion"
 
-# Save result to vault
+# Save result to vault automatically
 ./scripts/perplexity_search.sh malware "Cobalt Strike" --save-vault
 ```
 
-Decision order: vault first, Perplexity on a cache miss, confirmed findings recorded back to vault.
+**Privacy rule:** never include live case hostnames, usernames, or internal IPs in Perplexity queries. Only pass defanged or anonymized values.
 
-Privacy rule: never include live case hostnames, usernames, or internal IPs in Perplexity queries.
+Requires `PERPLEXITY_API_KEY` in `~/.soc_env`.
 
 ---
 
@@ -414,25 +501,59 @@ export OPENCTI_URL="http://localhost:8080"
 export OPENCTI_API_KEY="your-api-token-here"
 ```
 
-Get your token at Settings → API access in the OpenCTI web UI.
+Get your token at **Settings → API access** in the OpenCTI web UI. The API key must belong to a dedicated service account in OpenCTI, not a personal user account.
 
-Score thresholds: CONFIRMED_MALICIOUS (≥ 75), SUSPICIOUS (40–74), INFORMATIONAL (< 40), NOT_FOUND.
+Score thresholds:
+
+| Score | Label |
+|-------|-------|
+| ≥ 75 | CONFIRMED_MALICIOUS |
+| 40–74 | SUSPICIOUS |
+| < 40 | INFORMATIONAL |
+| — | NOT_FOUND |
 
 ---
 
 ## 12. MCP servers
 
-| MCP server | Root | Tools |
-|------------|------|-------|
-| `evidence` | `/home/sansforensics/evidence` on `ubuntudesktop` (SSH, read-only) | `evidence_find_pcaps`, `evidence_read_file`, `evidence_get_file_info`, `evidence_list_directory` |
-| `investigations` | `/home/sansforensics/cases` on `ubuntudesktop` (SSH, read-write) | `investigations_list_cases`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_directory` |
-| `opencti` | OpenCTI instance | `opencti_search_ioc`, `opencti_search_stix`, `opencti_create_indicator` |
+Fan Get Fame Fast uses three Model Context Protocol (MCP) servers. They run as local Python processes started by Claude Code, communicate over stdio using JSON-RPC 2.0, and are registered in `.claude/settings.json`. They are the bridge between Claude and the evidence vault, investigation reports, and OpenCTI.
 
-Registered in `.claude/settings.json` with absolute paths. Re-run `setup_folder_structure.sh` to regenerate this file if you move the project or change the evidence/cases paths.
+| MCP server | Root | Access | Tools |
+|------------|------|--------|-------|
+| `evidence` | `~/evidence` (local) | Read-only | `evidence_find_pcaps`, `evidence_read_file`, `evidence_get_file_info`, `evidence_list_directory` |
+| `investigations` | `~/cases` (local) | Read-write | `investigations_list_cases`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_directory` |
+| `opencti` | OpenCTI instance | Read-write | `opencti_search_ioc`, `opencti_search_stix`, `opencti_create_indicator` |
 
-Credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from environment variables, not from `settings.json`.
+The evidence and investigations roots are set in `.claude/settings.json` via the `env` block. Re-run `setup_folder_structure.sh` to regenerate this file if you move the project or change the evidence/cases paths.
 
-`lib/investigations_upload.py` uses the investigations MCP server to store reports after each investigation completes.
+Credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from environment variables sourced via `~/.soc_env`, not from `settings.json`.
+
+### SSH key setup for report upload
+
+`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the investigations vault on ubuntudesktop. It reads the SSH private key from `~/.ssh/id_ed25519`. The key must be authorized on the remote host before any investigation can complete:
+
+```bash
+# Generate a key if you do not have one
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+
+# Authorize it on ubuntudesktop
+ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+
+# Test
+ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo OK"
+```
+
+Without this, the final upload step fails and the finished report stays in `./analysis/_reports/<stem>/` rather than being moved to the investigations vault.
+
+### Verifying MCP servers
+
+```bash
+./scripts/test_mcp_servers.sh
+# Or test individual servers
+./scripts/test_mcp_servers.sh --evidence-only
+./scripts/test_mcp_servers.sh --investigations-only
+./scripts/test_mcp_servers.sh --opencti-only
+```
 
 Full MCP API reference: [Technical Reference — MCP server API](TECHNICAL_REFERENCE.md#5-mcp-server-api).
 
@@ -449,6 +570,7 @@ Full MCP API reference: [Technical Reference — MCP server API](TECHNICAL_REFER
 | Markdown | `<stem>_incident_report.md` |
 | PDF | `<stem>_incident_report.pdf` |
 | PowerPoint | `<stem>_management_briefing.pptx` |
+| Archive | `<case_id>_<YYYYMMDD-HHMMSS>.zip` (all artifacts) |
 
 **FAME** — generated by `fame_analyze.sh`:
 
@@ -477,9 +599,31 @@ Full MCP API reference: [Technical Reference — MCP server API](TECHNICAL_REFER
 | PowerPoint | `<stem>_combined_presentation.pptx` |
 | Word | `<stem>_combined_report.docx` |
 
-All FAN files plus raw module outputs are zipped into `<case_id>_<YYYYMMDD-HHMMSS>.zip` and uploaded to `/home/sansforensics/cases/<case_id>/` on ubuntudesktop.
+### Management PowerPoint slide structure
 
-To generate reports manually:
+The PPTX briefing targets CISO and management. Technical identifiers (IPs, ports, process names) are replaced with business-language descriptions.
+
+| Slide | Content |
+|-------|---------|
+| 1 | Cover — case ID, date, classification |
+| 2 | Executive summary — severity, traffic/memory/disk scope, key findings |
+| 3 | Threat landscape — triggered threat categories with severity levels |
+| 4 | Security alerts — Suricata IDS and YARA results in plain language |
+| 5 | Indicators of compromise — defanged IOC list |
+| 6 | Recommended actions — up to 8 prioritized action items |
+| 7 | Investigation coverage — status of all detection modules that ran |
+
+### Report language conventions
+
+Every finding in the technical body names its evidence source explicitly. Examples:
+
+- "As observed in the PCAP file, host 192.168.1.5 initiated an outbound TCP connection to 203.0.113.42 on port 4444 at 13:05 CET."
+- "Volatility 3 malfind identified injected code in PID 1234 (explorer.exe)."
+- "The filesystem timeline shows file creation at 14:32 CET on 03-May-2026, consistent with staging activity."
+
+The management summary section uses no technical identifiers. Business causality only.
+
+### Generating reports manually
 
 ```bash
 # Full incident report (MD + PDF)
@@ -488,13 +632,13 @@ To generate reports manually:
     --case-id FAN-2026-001 \
     --output-dir ./analysis/_reports/<stem>/
 
-# Management PowerPoint only
-python3 lib/generate_pptx_report.py \
+# PowerPoint presentation (FAN)
+./scripts/generate_pcap_presentation.sh \
     --stem <pcap-stem> \
     --case-id FAN-2026-001 \
     --output-dir ./analysis/_reports/<stem>/
 
-# Package and upload
+# Package all artifacts into a ZIP
 python3 lib/case_packager.py \
     --case-id FAN-2026-001 \
     --stem <pcap-stem> \
@@ -502,25 +646,13 @@ python3 lib/case_packager.py \
     --upload
 ```
 
-### Management PowerPoint slide structure
-
-| Slide | Content |
-|-------|---------|
-| 1 | Cover — case ID, date, classification |
-| 2 | Executive summary — severity, traffic scope, key findings |
-| 3 | Threat landscape — triggered threat categories with severity |
-| 4 | Security alerts — Suricata IDS and YARA results |
-| 5 | Indicators of compromise — defanged IOCs |
-| 6 | Recommended actions — up to 8 prioritized action items |
-| 7 | Investigation coverage — status of all 23 detection modules |
-
 ### Markdown to PDF
 
 ```bash
 ./scripts/md_to_pdf.sh /path/to/report.md /path/to/output.pdf
 ```
 
-The PDF includes a styled cover page, header stripe, and "Page X of Y" pagination.
+The PDF includes a styled cover page, running header stripe, and "Page X of Y" pagination. Requires WeasyPrint (installed by `install_dependencies.sh`).
 
 ---
 
@@ -528,50 +660,87 @@ The PDF includes a styled cover page, header stripe, and "Page X of Y" paginatio
 
 ### Environment variables
 
+All variables are set in `~/.soc_env` (template: `scripts/set_env_template.sh`) and sourced from `~/.bashrc`.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PERPLEXITY_API_KEY` | Yes | Perplexity.ai API key |
-| `OPENCTI_URL` | Yes (for OpenCTI) | OpenCTI instance URL |
-| `OPENCTI_API_KEY` | Yes (for OpenCTI) | OpenCTI API token |
+| `PERPLEXITY_API_KEY` | Yes | Perplexity.ai API key (`pplx-...`) |
+| `OPENCTI_URL` | Yes (for OpenCTI) | OpenCTI instance URL, e.g. `http://localhost:8080` |
+| `OPENCTI_API_KEY` | Yes (for OpenCTI) | OpenCTI API token from Settings → API access |
 | `INVESTIGATIONS_SSH_HOST` | No | SSH target for investigations vault (default: `sansforensics@ubuntudesktop`) |
-| `INVESTIGATIONS_ROOT` | No | Remote path for case output (default: `/home/sansforensics/cases`) |
+| `INVESTIGATIONS_ROOT` | No | Remote root path for case output (default: `/home/sansforensics/cases`) |
+| `EVIDENCE_ROOT` | No | Override local evidence root (default: `~/evidence`) |
+| `PYTHONPATH` | No (for AutoTimeliner) | Must include path to Volatility 3 source, e.g. `/opt/volatility3-2.20.0` |
 
-Set in `~/.soc_env` (template: `scripts/set_env_template.sh`), sourced from `~/.bashrc`.
+For Microsoft Sentinel integration (optional):
+
+| Variable | Description |
+|----------|-------------|
+| `SENTINEL_TENANT_ID` | Azure Active Directory tenant GUID |
+| `SENTINEL_CLIENT_ID` | App registration (service principal) client GUID |
+| `SENTINEL_CLIENT_SECRET` | App registration secret |
+| `SENTINEL_SUBSCRIPTION_ID` | Azure subscription GUID |
+| `SENTINEL_RESOURCE_GROUP` | Resource group name containing the workspace |
+| `SENTINEL_WORKSPACE_NAME` | Log Analytics workspace name |
+| `SENTINEL_WORKSPACE_ID` | Log Analytics workspace GUID |
 
 ### Key paths
 
 | Path | Purpose |
 |------|---------|
-| `/home/sansforensics/evidence/` on `ubuntudesktop` | PCAP drop zone (accessed via SSH) |
-| `/home/sansforensics/cases/<case_id>/reports/` on `ubuntudesktop` | Uploaded incident reports |
-| `./analysis/` | WIP only — emptied after each investigation |
-| `./vault/` | Obsidian knowledge graph |
-| `./rules/suricata/` | Suricata rule files |
-| `./rules/yara/` | YARA rule files |
-| `.claude/settings.json` | MCP server configuration, permissions |
+| `~/evidence/` | PCAP and evidence drop zone (evidence MCP server root) |
+| `~/cases/<case_id>/reports/` | Uploaded investigation reports (investigations MCP server root) |
+| `./analysis/` | WIP only — emptied automatically after each completed investigation |
+| `./vault/` | Obsidian knowledge graph (TTPs, IOCs, cases, threat actors) |
+| `./rules/suricata/` | Suricata rule files (ET Open + `local.rules`) |
+| `./rules/yara/` | YARA rule files (`.yar` files compiled at scan time) |
+| `./exports/` | Extracted artifacts per investigation (EVTX, registry, prefetch, MFT, SRUM) |
+| `./reports/` | Manual report exports |
+| `.claude/settings.json` | MCP server configuration and permission allowlist |
+| `~/.soc_env` | API credentials (never commit to version control) |
+| `~/.ssh/id_ed25519` | SSH private key used by `investigations_upload.py` for SCP uploads |
 
 ---
 
-## 15. Self-tests
+## 15. Self-tests and verification
+
+### Vault library round-trips
 
 ```bash
-# Vault library round-trips
-python3 lib/obsidian_bridge.py
-python3 lib/knowledge_extractor.py --test
-python3 lib/vault_query.py --search powershell
+source .venv/bin/activate
+python3 lib/obsidian_bridge.py                     # write/read/search round-trip
+python3 lib/knowledge_extractor.py --test          # all record types + Dashboard refresh
+python3 lib/vault_query.py --search powershell     # full-text vault search
 ```
+
+### MCP server verification
+
+```bash
+./scripts/test_mcp_servers.sh                      # all three servers
+./scripts/test_mcp_servers.sh --evidence-only      # evidence server only
+./scripts/test_mcp_servers.sh --opencti-only       # OpenCTI server only
+```
+
+### End-to-end pipeline smoke test
+
+```bash
+./scripts/test_solution.sh                         # generates a minimal test PCAP, runs full pipeline
+./scripts/test_solution.sh /path/to/sample.pcap    # with a real PCAP
+```
+
+All checks report `[PASS]` on a healthy installation. The smoke test exits 0 on success.
 
 ---
 
 ## 16. Evidence integrity rules
 
-1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory.
-2. Analysis WIP goes to `./analysis/` only. It is deleted automatically after each investigation.
-3. Finalized reports go to the investigations vault (`/home/sansforensics/cases/` on ubuntudesktop) via SSH/SCP.
-4. All timestamps are UTC internally. Reports use the timezone of the incident location (UTC if unknown).
-5. IOC values stored in the vault are defanged. Never store live IPs or domains in plain text.
+1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. Those paths are read-only by platform policy.
+2. Analysis WIP goes to `./analysis/` only. It is deleted automatically after each investigation completes.
+3. Finalized reports go to the investigations vault (`~/cases/<case_id>/reports/` via SSH/SCP).
+4. All timestamps are UTC internally. Reports use the timezone of the incident location (UTC if unknown, stated explicitly).
+5. IOC values stored in the vault are defanged. Never store live IPs or domains in plain text in any vault note.
 6. External API calls (Perplexity) receive only defanged, anonymized values. No raw evidence paths, internal hostnames, or personal data.
-7. Report versioning is automatic. Do not edit report files manually after upload.
+7. Report versioning is automatic. Do not edit report files manually after upload to the investigations vault.
 
 ---
 
@@ -579,9 +748,9 @@ python3 lib/vault_query.py --search powershell
 
 | Document | Purpose |
 |----------|---------|
-| [Deployment guide](DEPLOYMENT_GUIDE.md) | Production server setup, Autopsy/AutoTimeliner/EVTXtract install, hardening, backup, upgrade |
-| [Technical reference](TECHNICAL_REFERENCE.md) | Architecture, FAME/FAST pipelines, library API, MCP API, vault schema |
-| [CLAUDE.md](../CLAUDE.md) | Project philosophy, constraints, report voice |
+| [Deployment guide](DEPLOYMENT_GUIDE.md) | Production server setup, SSH key configuration, sudoers setup, Autopsy/AutoTimeliner/EVTXtract/MemProcFS install, hardening, backup, upgrade |
+| [Technical reference](TECHNICAL_REFERENCE.md) | Architecture, all pipeline data flows, full Python library API, MCP API, vault schema, dependency map |
+| [CLAUDE.md](../CLAUDE.md) | Project philosophy, agentic coordinator behavior, report voice registers, evidence constraints |
 
 ---
 
@@ -600,4 +769,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · May 2026 — v3.2*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — May 2026 — v3.3*

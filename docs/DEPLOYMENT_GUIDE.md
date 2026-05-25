@@ -1,7 +1,8 @@
 # FanGetFameFast — Production deployment guide
 
-**Version:** 1.1 · May 2026  
-**Platform:** Ubuntu 24.04 LTS (x86-64)  
+**Version:** 1.2 · May 2026
+**Platform:** Ubuntu 24.04 LTS (x86-64)
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 **Classification:** Internal — SOC Operations
 
 ---
@@ -12,16 +13,18 @@
 2. [Service account setup](#2-service-account-setup)
 3. [Install the codebase](#3-install-the-codebase)
 4. [Install system dependencies](#4-install-system-dependencies)
-5. [Create the folder structure](#5-create-the-folder-structure)
-6. [Configure API credentials](#6-configure-api-credentials)
-7. [Configure MCP servers](#7-configure-mcp-servers)
-8. [Verify the installation](#8-verify-the-installation)
-9. [First investigation](#9-first-investigation)
-10. [Security hardening](#10-security-hardening)
-11. [Backup and recovery](#11-backup-and-recovery)
-12. [Upgrading](#12-upgrading)
-13. [Troubleshooting](#13-troubleshooting)
-14. [License and disclaimer](#14-license-and-disclaimer)
+5. [Configure passwordless sudo](#5-configure-passwordless-sudo)
+6. [Create the folder structure](#6-create-the-folder-structure)
+7. [Configure API credentials](#7-configure-api-credentials)
+8. [Configure MCP servers](#8-configure-mcp-servers)
+9. [Set up SSH key access to the investigations vault](#9-set-up-ssh-key-access-to-the-investigations-vault)
+10. [Verify the installation](#10-verify-the-installation)
+11. [First investigation](#11-first-investigation)
+12. [Security hardening](#12-security-hardening)
+13. [Backup and recovery](#13-backup-and-recovery)
+14. [Upgrading](#14-upgrading)
+15. [Troubleshooting](#15-troubleshooting)
+16. [License and disclaimer](#16-license-and-disclaimer)
 
 ---
 
@@ -46,35 +49,40 @@
 | Disk | 500 GB SSD + 2 TB HDD (evidence storage) |
 | OS | Ubuntu 24.04 LTS (x86-64) |
 
+Memory-intensive stages: Volatility 3 malfind requires approximately 2× the memory image size in available RAM. A 4 GB memory image needs at least 8 GB free. Autopsy headless ingest requires at least 2 GB heap (`-Xmx2g`).
+
 ### Required external access
 
 | Destination | Protocol | Purpose |
 |-------------|----------|---------|
-| `api.perplexity.ai` | HTTPS/443 | Live threat intel |
-| `rules.emergingthreats.net` | HTTPS/443 | Suricata ET Open rules |
-| `packages.microsoft.com` | HTTPS/443 | .NET runtime |
+| `api.perplexity.ai` | HTTPS/443 | Live threat intelligence lookups |
+| `rules.emergingthreats.net` | HTTPS/443 | Suricata ET Open rule updates |
+| `packages.microsoft.com` | HTTPS/443 | .NET Runtime (required by EZ Tools) |
 | `ppa.launchpad.net` | HTTPS/443 | Suricata PPA |
-| `pypi.org` | HTTPS/443 | Python packages |
+| `pypi.org` | HTTPS/443 | Python package installation |
 | Your OpenCTI instance | HTTP/HTTPS | CTI lookups (local or remote) |
 
 ---
 
 ## 2. Service account setup
 
-Run as a dedicated service account, not as root.
+Run as a dedicated service account, not as root. The account needs to be in the `wireshark` group so that tshark can read network interfaces and PCAP files without root privileges.
 
 ```bash
 # Create the service account
-sudo useradd --create-home --shell /bin/bash --groups wireshark soc-analyst
+sudo useradd --create-home --shell /bin/bash soc-analyst
 
-# If the wireshark group does not exist yet, the install script creates it.
-# Re-run the usermod command after running install_dependencies.sh in that case.
+# Add to the wireshark group (if the group already exists)
+sudo usermod -aG wireshark soc-analyst
+
+# If the wireshark group does not exist yet, install_dependencies.sh creates it.
+# Re-run the usermod command after running install_dependencies.sh.
 
 # Switch to the service account for all remaining steps
 sudo su - soc-analyst
 ```
 
-If you are deploying on an existing account, the installer adds it to the `wireshark` group. A logout/login is required for that group change to take effect.
+A logout/login (or `newgrp wireshark`) is required for group membership changes to take effect. tshark silently fails to read PCAPs until this is done.
 
 ---
 
@@ -84,15 +92,16 @@ If you are deploying on an existing account, the installer adds it to the `wires
 # Choose your installation directory
 INSTALL_DIR="$HOME/Documents/FanGetFameFast"
 
-# Clone or copy the repository
+# Clone from the repository
 git clone <repo-url> "$INSTALL_DIR"
-# Or copy from a portable archive:
-# tar -xzf FanGetFameFast.tar.gz -C "$HOME/Documents/"
+
+# Or copy from a portable archive
+tar -xzf FanGetFameFast.tar.gz -C "$HOME/Documents/"
 
 cd "$INSTALL_DIR"
 ```
 
-The project must live in a user-writable directory. `/opt/` works if ownership is set correctly.
+The project must live in a user-writable directory. `/opt/` works if the directory is owned by the service account. `/root/` does not work with the wireshark group restriction.
 
 ---
 
@@ -107,7 +116,7 @@ bash scripts/install_dependencies.sh
 # Skip optional components
 bash scripts/install_dependencies.sh --skip-suricata   # no IDS
 bash scripts/install_dependencies.sh --skip-yara        # no YARA
-bash scripts/install_dependencies.sh --skip-dotnet      # no EZ Tools
+bash scripts/install_dependencies.sh --skip-dotnet      # no EZ Tools (.NET runtime)
 ```
 
 All steps check existing state before acting, so the script is safe to re-run.
@@ -116,72 +125,110 @@ All steps check existing state before acting, so the script is safe to re-run.
 
 | Component | Source | Notes |
 |-----------|--------|-------|
-| tshark / wireshark-common | apt | PCAP parsing |
-| Suricata | PPA: oisf/suricata-stable | IDS engine |
-| YARA 4.5+ | apt or compiled from source | Signature scanning |
-| .NET Runtime 6/8 | Microsoft APT | EZ Tools (FAST module prereq) |
-| Python 3.10+ venv | system | Isolated package environment |
-| Python packages | pip / requirements.txt | See `requirements.txt` |
-| Claude Code CLI | npm | Agentic coordinator UI |
-| Suricata ET Open rules | download | Initial ruleset |
-| Font packages | apt | PDF report rendering |
-| Autopsy | manual / apt | Disk forensics GUI + headless ingest (FAST module) |
-| AutoTimeliner | git clone | Memory super-timeline builder (FAME module) |
-| EVTXtract | git clone | EVTX recovery from raw binary / memory (FAME module) |
+| tshark / wireshark-common | apt | PCAP parsing; all 22 FAN detection modules depend on it |
+| Suricata | PPA: oisf/suricata-stable | IDS engine for FAN Suricata module |
+| YARA 4.5+ | apt or compiled from source | Signature scanning for FAN YARA module and FAME memory scans |
+| .NET Runtime 6/8 | Microsoft APT repository | EZ Tools (FAST module prerequisite) |
+| Python 3.10+ venv | system Python | Isolated package environment at `.venv/` |
+| Python packages | pip from `requirements.txt` | All analysis and report generation libraries |
+| Claude Code CLI | npm / Anthropic installer | Agentic coordinator |
+| Suricata ET Open rules | download | Initial ruleset for FAN investigations |
+| Font packages | apt | Required for PDF report rendering (WeasyPrint / Cairo) |
+| sleuthkit | apt | TSK tools (fls, fsstat, mmls, ils, icat, mactime) — FAST module |
+| ewf-tools / libewf-dev | apt | E01/EWF image handling — FAST module |
+| bulk-extractor | apt | File carving from disk images — FAST module |
+| Volatility 3 | pip or git clone | Memory analysis framework — FAME module |
+| Memory Baseliner | git clone | Process/driver/service baseline comparison — FAME module |
 
 ### Optional — Autopsy (FAST module)
 
-Autopsy adds file-type mismatch detection, hash lookup, recent activity parsing, EXIF extraction, and a keyword index on top of the TSK layer.
+Autopsy runs in headless (`--nogui`) mode during FAST investigations. It adds file-type mismatch detection, hash lookup against NSRL, recent activity parsing, EXIF extraction, and keyword indexing on top of the TSK layer.
 
 ```bash
-# Ubuntu 24.04 — install from apt (if available in your repo)
+# Ubuntu 24.04 — install from apt if available
 sudo apt-get install -y autopsy
 
-# Or install the upstream .deb (recommended — keeps autopsy current)
-# 1. Download the latest .deb from https://www.autopsy.com/download/
-# 2. Install
+# Or install the upstream .deb (recommended — keeps Autopsy current)
+# 1. Download the latest release from https://www.autopsy.com/download/
 sudo dpkg -i autopsy-4.x.x-amd64.deb
-sudo apt-get install -f    # fix any dependency gaps
+sudo apt-get install -f    # resolve any missing dependencies
 
-# Verify
+# Verify — must be 4.17 or later for --nogui support
 autopsy --version
 ```
 
 When `autopsy` is absent from `$PATH`, `fast_analyze.sh` skips the Autopsy step and writes `AUTOPSY_NOT_RUN.txt` to `./exports/autopsy/`. The rest of the FAST pipeline runs normally.
 
+### Optional — MemProcFS (FAME module)
+
+MemProcFS provides physical memory access via the LeechCore driver as an independent second analysis pathway alongside Volatility 3. It is particularly useful for VirtualBox ELF core dumps: it extracts the CR3 (Directory Table Base) from the VBCPU PT_NOTE segment and uses it to initialize physical memory analysis.
+
+```bash
+pip3 install memprocfs --break-system-packages
+```
+
+When the `memprocfs` Python package is not importable, `fame_analyze.sh` skips the MemProcFS stage and continues.
+
 ### Optional — AutoTimeliner (FAME module)
 
-AutoTimeliner builds a Volatility-backed MACB super-timeline from a memory image, correlating output from timeliner, pslist, pstree, netstat, and filescan into a single bodyfile.
+AutoTimeliner builds a Volatility-backed MACB super-timeline from a memory image. It correlates output from the timeliner, pslist, pstree, netstat, and filescan plugins into a single bodyfile.
 
 ```bash
 git clone https://github.com/andreafortuna/autotimeliner /opt/autotimeliner
 pip3 install -r /opt/autotimeliner/requirements.txt
 ```
 
+AutoTimeliner requires Volatility 3 to be importable as a Python module. Add the following to `~/.soc_env`:
+
+```bash
+export PYTHONPATH="/opt/volatility3-2.20.0:$PYTHONPATH"
+```
+
 When absent, `fame_analyze.sh` skips the super-timeline step and continues.
 
 ### Optional — EVTXtract (FAME module)
 
-EVTXtract recovers intact Windows Event Log records from raw binary data by scanning for EVTX record magic bytes and validating checksums. It works on memory images where `filescan` locates `.evtx` files but the records are fragmented across pages.
+EVTXtract recovers intact Windows Event Log records from raw binary data by scanning for EVTX record magic bytes and validating checksums. It works on memory images where `filescan` locates `.evtx` files but the records are fragmented across memory pages.
 
 ```bash
 git clone https://github.com/williballenthin/EVTXtract /opt/EVTXtract
 pip3 install -r /opt/EVTXtract/requirements.txt
 ```
 
-When absent, `fame_analyze.sh` skips event recovery and continues.
+When absent, `fame_analyze.sh` skips the event recovery step and continues.
 
 ### Post-install — apply group membership
 
+The wireshark group change does not take effect in the current shell:
+
 ```bash
-# Without rebooting
-newgrp wireshark
+newgrp wireshark    # applies in current shell without logging out
 # Or log out and back in
 ```
 
 ---
 
-## 5. Create the folder structure
+## 5. Configure passwordless sudo
+
+`analyze_pcap.sh` calls `suricata-update` at the start of every FAN investigation. It runs without a TTY (no terminal prompt available), so sudo must not ask for a password. `setup_sudoers.sh` writes a validated sudoers drop-in that grants the current user passwordless access to the exact binaries that need it — no broader privileges are granted.
+
+```bash
+cd "$INSTALL_DIR"
+sudo bash scripts/setup_sudoers.sh
+```
+
+The script writes to `/etc/sudoers.d/fangetfamefast`. It resolves the binary paths at install time and validates the resulting sudoers file with `visudo -c` before writing. If validation fails, nothing is written.
+
+To verify it worked:
+
+```bash
+sudo -n suricata-update --no-reload 2>&1 | head -5
+# Should not prompt for a password
+```
+
+---
+
+## 6. Create the folder structure
 
 ```bash
 cd "$INSTALL_DIR"
@@ -189,7 +236,7 @@ cd "$INSTALL_DIR"
 # Default layout (~/evidence and ~/cases)
 bash scripts/setup_folder_structure.sh
 
-# Custom paths (e.g. separate HDD for evidence)
+# Custom paths (e.g. a separate HDD for evidence storage)
 bash scripts/setup_folder_structure.sh \
     --evidence-dir /mnt/evidence \
     --cases-dir /mnt/cases
@@ -198,42 +245,45 @@ bash scripts/setup_folder_structure.sh \
 The script creates:
 
 ```
-~/evidence/                   # PCAP drop zone (evidence MCP server root)
-~/cases/                      # Investigation reports (investigations MCP server root)
+~/evidence/                         PCAP drop zone (evidence MCP server root)
+~/cases/                            Investigation reports (investigations MCP server root)
 $INSTALL_DIR/
-  analysis/                   # WIP only; cleared after each investigation
-    memory/                   # FAME: Volatility 3 outputs, AutoTimeliner, EVTXtract
-    storage/                  # FAST: TSK outputs, mmls, fsstat, bodyfile
-  reports/                    # Manual report exports
-  rules/suricata/             # Suricata rule files
-  rules/yara/                 # YARA rule files
-  vault/                      # Obsidian knowledge graph
-  vault/Templates/            # Note schemas
-  vault/Dashboard.md          # Auto-maintained index
-  playbooks/                  # Response playbooks
-  exports/                    # Data exports per investigation
-    evtx/                     # Extracted Windows Event Logs
-    registry/                 # Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT)
-    prefetch/                 # Prefetch files
-    mft/                      # $MFT and $J (USN journal)
-    srum/                     # SRUM database
-    browser/                  # Browser history
-    carved/                   # bulk_extractor carving output
-    autopsy/                  # Autopsy case and exported artifacts (FAST)
-  .claude/settings.json       # MCP server configuration (auto-generated)
+  analysis/                         WIP only; cleared after each investigation
+    memory/                         FAME: Volatility 3 outputs, Memory Baseliner
+      memprocfs/                    FAME: MemProcFS artifacts (if installed)
+      autotimeliner/                FAME: AutoTimeliner super-timeline (if installed)
+      evtxtract/                    FAME: recovered EVTX records (if installed)
+    storage/                        FAST: TSK outputs, mmls, fsstat, bodyfile
+  exports/
+    evtx/                           FAST: extracted Windows Event Log files
+    registry/                       FAST: registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT)
+    prefetch/                       FAST: prefetch files
+    mft/                            FAST: $MFT and $J (USN change journal)
+    srum/                           FAST: SRUM database
+    browser/                        FAST: browser history files
+    carved/                         FAST: bulk_extractor carving output
+    autopsy/                        FAST: Autopsy case and exported artifacts
+  reports/                          Manual report exports
+  rules/suricata/                   Suricata rule files (ET Open + local.rules)
+  rules/yara/                       YARA rule files (.yar)
+  vault/                            Obsidian knowledge graph
+    Templates/                      Note schemas — do not modify manually
+    Dashboard.md                    Auto-maintained case/IOC/TTP index
+  playbooks/                        Response playbooks
+  .claude/settings.json             MCP server configuration (auto-generated)
 ```
 
-The generated `settings.json` contains absolute paths pointing to the exact directories chosen. No manual editing is needed unless you change the paths after setup.
+The generated `settings.json` contains absolute paths. No manual editing is needed unless you change the paths after setup.
 
 ---
 
-## 6. Configure API credentials
+## 7. Configure API credentials
 
 ```bash
 # Copy the template
 cp scripts/set_env_template.sh ~/.soc_env
 
-# Edit with real values
+# Fill in the values
 nano ~/.soc_env
 ```
 
@@ -247,7 +297,7 @@ For OpenCTI integration (optional but recommended):
 
 ```bash
 export OPENCTI_URL="http://your-opencti-host:8080"
-export OPENCTI_API_KEY="your-api-token"
+export OPENCTI_API_KEY="your-api-token"   # from Settings → API access in OpenCTI
 ```
 
 For Microsoft Sentinel integration (optional):
@@ -262,14 +312,20 @@ export SENTINEL_WORKSPACE_NAME="law-sentinel"
 export SENTINEL_WORKSPACE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-Load in the current shell and persist:
+For AutoTimeliner (if installed):
+
+```bash
+export PYTHONPATH="/opt/volatility3-2.20.0:$PYTHONPATH"
+```
+
+Load in the current shell and persist across sessions:
 
 ```bash
 source ~/.soc_env
 echo 'source ~/.soc_env' >> ~/.bashrc
 ```
 
-`~/.soc_env` must be `chmod 600`. The install script does not touch it:
+Set restrictive permissions on the credentials file immediately. The install script does not touch it:
 
 ```bash
 chmod 600 ~/.soc_env
@@ -277,9 +333,9 @@ chmod 600 ~/.soc_env
 
 ---
 
-## 7. Configure MCP servers
+## 8. Configure MCP servers
 
-`setup_folder_structure.sh` writes `.claude/settings.json` with the correct absolute paths. Verify it looks right:
+`setup_folder_structure.sh` writes `.claude/settings.json` automatically. Verify the generated file:
 
 ```bash
 cat .claude/settings.json
@@ -309,11 +365,39 @@ Expected structure:
 }
 ```
 
-The MCP servers read their root paths from the `env` block. OpenCTI credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from the shell environment sourced via `~/.soc_env`.
+The MCP servers read their root paths from the `env` block at startup. Paths must be absolute — tilde expansion does not work in JSON. OpenCTI credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) are not stored here; they come from the shell environment sourced via `~/.soc_env`.
+
+If you move the project directory, re-run `setup_folder_structure.sh` to regenerate `settings.json` with the new paths.
 
 ---
 
-## 8. Verify the installation
+## 9. Set up SSH key access to the investigations vault
+
+`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the investigations vault on ubuntudesktop. It uses the private key at `~/.ssh/id_ed25519`. This key must exist and be authorized on the remote host before investigations can complete.
+
+```bash
+# Generate the key if you do not already have one
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+
+# Authorize it on ubuntudesktop
+ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+
+# Test passwordless access
+ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo SSH OK"
+# Should print "SSH OK" without a password prompt
+```
+
+If `~/.ssh/known_hosts` does not yet have an entry for ubuntudesktop, add it:
+
+```bash
+ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
+```
+
+Without this setup, the final upload step of every investigation fails. The finished report stays in `./analysis/_reports/<stem>/` and `./analysis/` is not cleared.
+
+---
+
+## 10. Verify the installation
 
 ```bash
 cd "$INSTALL_DIR"
@@ -324,7 +408,10 @@ python3 lib/obsidian_bridge.py
 python3 lib/knowledge_extractor.py --test
 python3 lib/vault_query.py --search powershell
 
-# End-to-end pipeline smoke test (generates a minimal test PCAP)
+# MCP server verification (tests each server with a JSON-RPC initialize request)
+./scripts/test_mcp_servers.sh
+
+# End-to-end pipeline smoke test (generates a minimal test PCAP, runs full FAN pipeline)
 ./scripts/test_solution.sh
 
 # With a real PCAP
@@ -344,9 +431,11 @@ Expected output tail:
 End-to-end pipeline: PASS
 ```
 
+If any check reports `[FAIL]`, see [Section 15 — Troubleshooting](#15-troubleshooting).
+
 ---
 
-## 9. First investigation
+## 11. First investigation
 
 ```bash
 cd "$INSTALL_DIR"
@@ -358,17 +447,20 @@ cd "$INSTALL_DIR"
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2026-001
 ```
 
-The report lands in `~/cases/FAN-2026-001/reports/` once the investigation completes. All WIP files in `./analysis/` are deleted automatically.
+The report lands in `~/cases/FAN-2026-001/reports/` on ubuntudesktop once the investigation completes. All WIP files in `./analysis/` are deleted automatically.
 
 ---
 
-## 10. Security hardening
+## 12. Security hardening
 
 ### File permissions
 
 ```bash
 # Restrict credentials file
 chmod 600 ~/.soc_env
+
+# Restrict SSH private key (required by ssh; it refuses to use world-readable keys)
+chmod 600 ~/.ssh/id_ed25519
 
 # Restrict case and evidence directories
 chmod 750 ~/evidence ~/cases
@@ -381,27 +473,30 @@ chmod 750 "$INSTALL_DIR"
 
 - Allow only outbound HTTPS to the services listed in [Section 1](#1-server-requirements).
 - Do not expose the evidence and investigations directories over a network share without authentication.
-- If OpenCTI runs on the same host, bind it to `127.0.0.1` only.
+- If OpenCTI runs on the same host, bind it to `127.0.0.1` only (`--port 8080 --host 127.0.0.1` in the OpenCTI configuration).
 
 ### Credentials hygiene
 
-- Never commit `~/.soc_env` to version control.
+- Never commit `~/.soc_env` to version control. Add it to `.gitignore` explicitly.
 - Rotate API keys quarterly or when a team member leaves.
-- The `OPENCTI_API_KEY` should belong to a dedicated service account in OpenCTI, not a personal user account.
+- The `OPENCTI_API_KEY` must belong to a dedicated service account in OpenCTI, not a personal user account. Personal accounts can be disabled; a service account persists independently.
+
+### Sudoers scope
+
+`setup_sudoers.sh` grants NOPASSWD access only to the specific binaries that require it (currently `suricata-update`). It does not grant unrestricted sudo. Review `/etc/sudoers.d/fangetfamefast` after install to confirm the scope.
 
 ### Suricata rule updates
 
-Emerging Threats rules change frequently. Automate weekly updates:
+Emerging Threats rules change frequently. Automate weekly updates via cron:
 
 ```bash
 # Add to crontab (weekly, Sunday 02:00)
-echo "0 2 * * 0 $INSTALL_DIR/scripts/update_suricata_rules.sh --et-only >> /var/log/suricata_update.log 2>&1" \
-    | crontab -
+(crontab -l 2>/dev/null; echo "0 2 * * 0 $INSTALL_DIR/scripts/update_suricata_rules.sh --et-only >> /var/log/suricata_update.log 2>&1") | crontab -
 ```
 
 ---
 
-## 11. Backup and recovery
+## 13. Backup and recovery
 
 ### What to back up
 
@@ -409,15 +504,15 @@ echo "0 2 * * 0 $INSTALL_DIR/scripts/update_suricata_rules.sh --et-only >> /var/
 |------|-----------|-------|
 | `~/cases/` | Daily | Investigation reports — primary deliverable |
 | `$INSTALL_DIR/vault/` | Daily | Obsidian knowledge graph — accumulated TTPs, IOCs, threat actors |
-| `$INSTALL_DIR/rules/suricata/local.rules` | On change | Custom detection rules |
-| `$INSTALL_DIR/rules/yara/` | On change | YARA rules |
-| `~/.soc_env` | On change | Encrypted backup only (contains secrets) |
+| `$INSTALL_DIR/rules/suricata/local.rules` | On change | Custom detection rules (ET Open rules are re-downloadable) |
+| `$INSTALL_DIR/rules/yara/` | On change | Custom YARA rules |
+| `~/.soc_env` | On change | Encrypted backup only — contains API keys and credentials |
 
 ### What not to back up
 
 - `$INSTALL_DIR/analysis/` — always empty after a completed investigation
 - `$INSTALL_DIR/.venv/` — reproducible from `requirements.txt`
-- Downloaded ET Open rules — re-downloadable
+- Downloaded ET Open rules — re-downloadable at any time
 
 ### Minimal backup script
 
@@ -434,7 +529,7 @@ rsync -a "$HOME/cases/"    "$BACKUP_ROOT/cases/"
 ### Recovery
 
 ```bash
-# Restore project
+# Restore project files
 rsync -a /mnt/backup/2026-05-01/project/ "$INSTALL_DIR/"
 
 # Restore cases
@@ -449,7 +544,7 @@ pip install -r requirements.txt
 
 ---
 
-## 12. Upgrading
+## 14. Upgrading
 
 ```bash
 cd "$INSTALL_DIR"
@@ -457,7 +552,7 @@ cd "$INSTALL_DIR"
 # Pull latest code
 git pull
 
-# Re-run dependency installer (idempotent)
+# Re-run dependency installer (all steps are idempotent)
 bash scripts/install_dependencies.sh
 
 # Update Python packages
@@ -468,23 +563,21 @@ deactivate
 # Update Suricata rules
 ./scripts/update_suricata_rules.sh --et-only
 
-# Run smoke test to confirm
+# Run smoke test to confirm nothing broke
 ./scripts/test_solution.sh
 ```
 
-Vault template changes in a new release are additive. The setup script adds new templates without overwriting existing notes.
+Vault template changes in a new release are additive. The setup script adds new templates without overwriting existing notes. New investigation records remain compatible with old vault notes.
 
 ---
 
-## 13. Troubleshooting
+## 15. Troubleshooting
 
 ### tshark fails with permission denied
 
-```
-Running as user "root" and group "root"
-```
+Symptom: `Running as user "root" and group "root"` or silent empty output.
 
-The current user is not in the `wireshark` group, or the group change has not taken effect.
+The current user is not in the `wireshark` group, or the group change has not taken effect in the current shell.
 
 ```bash
 sudo usermod -aG wireshark "$(whoami)"
@@ -493,9 +586,7 @@ newgrp wireshark   # or log out and back in
 
 ### PDF generation fails (WeasyPrint)
 
-```
-OSError: no library called "cairo" was found
-```
+Symptom: `OSError: no library called "cairo" was found`
 
 ```bash
 sudo apt-get install -y libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
@@ -516,6 +607,15 @@ curl -Lo /tmp/et-open.rules.tar.gz \
 tar -xzf /tmp/et-open.rules.tar.gz -C rules/suricata/
 ```
 
+### suricata-update prompts for a password during the pipeline
+
+`setup_sudoers.sh` has not been run, or the binary path it captured no longer matches the installed binary.
+
+```bash
+sudo bash scripts/setup_sudoers.sh
+sudo -n suricata-update --no-reload   # should succeed without a prompt
+```
+
 ### Perplexity API returns 401
 
 `PERPLEXITY_API_KEY` is not set or is incorrect.
@@ -534,11 +634,30 @@ source ~/.soc_env
 claude
 ```
 
-Verify connectivity:
+Verify OpenCTI connectivity independently:
 
 ```bash
 curl -s -H "Authorization: Bearer $OPENCTI_API_KEY" \
     "$OPENCTI_URL/graphql" -d '{"query":"{me{name}}"}' | jq .
+```
+
+### Report upload fails (SSH/SCP error)
+
+The SSH key at `~/.ssh/id_ed25519` is not authorized on ubuntudesktop, or the `known_hosts` file does not have an entry for ubuntudesktop.
+
+```bash
+ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
+ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo OK"
+```
+
+If the investigation was interrupted after analysis but before upload, the report files are still in `./analysis/_reports/<stem>/`. Re-run the upload manually:
+
+```bash
+python3 lib/investigations_upload.py \
+    --case-id FAN-2026-001 \
+    --md  ./analysis/_reports/<stem>/<stem>_incident_report.md \
+    --pdf ./analysis/_reports/<stem>/<stem>_incident_report.pdf
 ```
 
 ### MCP absolute paths break after moving the project
@@ -554,10 +673,10 @@ bash scripts/setup_folder_structure.sh
 Check `./exports/autopsy/autopsy.log`. Common causes:
 
 - Java not installed: `sudo apt-get install -y default-jre`
-- Autopsy < 4.17 does not support `--nogui`. Upgrade to a current version.
-- Insufficient memory: Autopsy needs at least 2 GB heap. Add `-Xmx2g` to the Autopsy launcher script.
+- Autopsy < 4.17 does not support `--nogui`. Upgrade to a current release.
+- Insufficient heap: Autopsy needs at least 2 GB. Edit the Autopsy launcher script and add `-Xmx2g` to the JVM arguments.
 
-If headless mode is unavailable, run Autopsy manually, save the case to `./exports/autopsy/case/`, and the report generator picks up the exported CSVs.
+If headless mode is unavailable, run Autopsy manually, save the case to `./exports/autopsy/case/`, and the FAST report generator picks up the exported CSVs.
 
 ### AutoTimeliner fails with "No module named 'volatility3'"
 
@@ -567,19 +686,29 @@ AutoTimeliner requires Volatility 3 to be importable as a Python module:
 export PYTHONPATH="/opt/volatility3-2.20.0:$PYTHONPATH"
 ```
 
-Add that line to `~/.soc_env`.
+Add that line to `~/.soc_env` so it persists across sessions.
 
 ### EVTXtract produces an empty XML file
 
-The memory image may contain no intact EVTX log records. This is expected for heavily fragmented images or Linux memory dumps. Check the log:
+The memory image may contain no intact EVTX log records. This is expected for heavily fragmented images or Linux memory dumps. Check the EVTXtract log:
 
 ```bash
 cat ./analysis/memory/evtxtract/evtxtract.log
 ```
 
+### MemProcFS fails to initialize
+
+MemProcFS requires the LeechCore driver to be loadable. On headless servers without `/dev/mem` access, it may fail to initialize. Check:
+
+```bash
+python3 -c "import memprocfs; print('OK')"
+```
+
+If the import succeeds but initialization fails, the error details appear in `./analysis/memory/memprocfs/memprocfs_error.json`. When MemProcFS cannot initialize, `fame_memprocfs.py` records the failure and returns without raising an exception; the FAME pipeline continues.
+
 ---
 
-## 14. License and disclaimer
+## 16. License and disclaimer
 
 Fan Get Fame Fast is released under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for the full terms.
 
@@ -589,4 +718,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · May 2026*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — May 2026 — v1.2*
