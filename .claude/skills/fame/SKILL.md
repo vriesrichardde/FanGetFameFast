@@ -25,6 +25,87 @@ raw tool output.
 
 ---
 
+## Research Notes
+
+Every FAME investigation produces a **research notes file** (`./reports/<case_id>_research_notes.md`)
+alongside the formal report. The notes are a timestamped, step-by-step investigative log that lets
+any analyst follow the complete workflow, rationale, and findings from start to finish.
+
+**Three calls to make during every investigation:**
+
+### 1 — At investigation start (before running any plugins)
+
+```bash
+python3 lib/research_notes.py init \
+  --case-id <case_id> \
+  --module fame \
+  --evidence /path/to/image.mem \
+  --hostname <hostname>
+```
+
+### 2 — After reading and interpreting each plugin / tool output
+
+Call `step` once per analysis action, immediately after Claude has read and understood the output:
+
+```bash
+python3 lib/research_notes.py step \
+  --case-id <case_id> \
+  --title "Process List (windows.pslist)" \
+  --action "vol -f image.mem windows.pslist → ./analysis/memory/pslist.txt" \
+  --why "pslist walks the EPROCESS doubly-linked list to enumerate active processes — mandatory first step for Windows triage" \
+  --outcome "87 processes found. lsass.exe running from C:\\Temp\\ — anomalous path, flagged for follow-up" \
+  [--raw "first 10 lines of pslist output if significant"]
+```
+
+**Steps that each require a `step` call (in order):**
+
+| Step | Title | Why (use this verbatim) |
+|------|-------|-------------------------|
+| Image type detection | `Image Type Detection` | Must determine OS type before selecting Volatility plugin chain |
+| psscan | `Hidden Process Scan (windows.psscan)` | Pool scan finds hidden and already-exited processes not visible in pslist |
+| pslist | `Active Process List (windows.pslist)` | Walks EPROCESS doubly-linked list — baseline view of running processes; compare with psscan for hidden entries |
+| pstree | `Process Tree (windows.pstree)` | Reveals parent-child relationships — unexpected parents (e.g. Word spawning cmd.exe) indicate injection or macro execution |
+| cmdline | `Command Line Arguments (windows.cmdline)` | Shows exact arguments passed to each process — reveals obfuscated commands, encoded payloads, or unusual flags |
+| netstat / netscan | `Network Connections (windows.netstat + netscan)` | Lists active and recently closed TCP/UDP connections — pivots to C2 IPs and lateral movement targets |
+| malfind | `Code Injection Detection (windows.malfind)` | Identifies memory regions with executable code and no backing file — primary indicator of process injection (T1055) |
+| svcscan | `Service Scan (windows.svcscan)` | Enumerates services including those not in the registry — finds persistence via malicious service installation |
+| modules / modscan | `Loaded Kernel Modules (windows.modules + modscan)` | Lists loaded drivers; modscan catches unlinked/hidden drivers — reveals rootkit activity |
+| filescan | `File Handles (windows.filescan)` | Scans pool for FILE_OBJECT structures — finds file handles for deleted or hidden files |
+| hivelist / userassist | `Registry Artifacts (windows.hivelist + userassist)` | Hive locations confirm registry integrity; UserAssist reveals recently executed programs (T1112) |
+| Memory Baseliner | `Baseline Comparison (Memory Baseliner)` | Compares running processes/drivers/services against a known-good baseline — anomalies indicate compromise |
+| YARA scan | `YARA Rule Scan` | Applies signature rules to memory — direct detection of known malware families and shellcode patterns |
+| OpenCTI enrichment | `Threat Intelligence Enrichment (OpenCTI)` | Correlates extracted IOCs (IPs, hashes) against known threat actors and campaigns |
+| Cross-module check | `Cross-module Correlation (FAN / FAST)` | Checks whether FAN or FAST reports exist for this case — surfaces kill-chain connections across network, memory, and disk |
+
+For **Linux images** using the strings-based fallback, use these titles instead:
+`Strings Extraction`, `Syslog Pattern Hunt`, `Network IOC String Hunt`, `Banner Detection (banners.Banners)`.
+
+**Use `--raw` only when the output contains significant findings** (suspicious process paths,
+external IP connections, injected memory regions, YARA matches, baseline deviations).
+For clean / expected output, omit `--raw` and summarise in `--outcome`.
+
+### 3 — Before upload (after formal report is generated)
+
+```bash
+python3 lib/research_notes.py finalize \
+  --case-id <case_id> \
+  --summary "One-paragraph summary: key findings, main pivot point, MITRE techniques confirmed, and conclusion."
+```
+
+Then include the notes file in the upload call:
+
+```bash
+python3 lib/investigations_upload.py \
+  --case-id <case_id> \
+  --md ./reports/<case_id>_fame_report.md \
+  --pdf ./reports/<case_id>_fame_report.pdf \
+  --pptx ./reports/<case_id>_fame_presentation.pptx \
+  --docx ./reports/<case_id>_fame_report.docx \
+  --notes ./reports/<case_id>_research_notes.md
+```
+
+---
+
 ## Invocation
 
 ```bash

@@ -26,6 +26,91 @@ raw tool output.
 
 ---
 
+## Research Notes
+
+Every FAST investigation produces a **research notes file** (`./reports/<case_id>_research_notes.md`)
+alongside the formal report. The notes are a timestamped, step-by-step investigative log that lets
+any analyst follow the complete workflow, rationale, and findings from start to finish.
+
+**Three calls to make during every investigation:**
+
+### 1 — At investigation start (before running any tools)
+
+```bash
+python3 lib/research_notes.py init \
+  --case-id <case_id> \
+  --module fast \
+  --evidence /path/to/image.E01 \
+  --hostname <hostname>
+```
+
+### 2 — After reading and interpreting each tool output
+
+Call `step` once per analysis action, immediately after Claude has read and understood the output:
+
+```bash
+python3 lib/research_notes.py step \
+  --case-id <case_id> \
+  --title "Image Verification (ewfverify)" \
+  --action "ewfverify /path/to/image.E01 → ./analysis/storage/ewfverify.txt" \
+  --why "Hash verification confirms evidence integrity — required before any findings can be cited in legal proceedings" \
+  --outcome "MD5 and SHA1 hashes verified successfully. No corruption detected." \
+  [--raw "verification output if it shows errors or unexpected checksums"]
+```
+
+**Steps that each require a `step` call (in order):**
+
+| Step | Title | Why (use this verbatim) |
+|------|-------|-------------------------|
+| Image verification | `Image Verification (ewfinfo + ewfverify)` | Hash verification confirms evidence integrity — required before findings can be cited in legal or regulatory proceedings |
+| Image mount | `Image Mount (ewfmount / qemu-nbd)` | Read-only mount makes the image accessible for TSK tools without risk of modification |
+| Partition inspection | `Partition Table (mmls)` | Identifies partition boundaries and start sectors needed to calculate filesystem byte offset |
+| Filesystem mount | `Filesystem Mount (read-only)` | Provides direct file system access for artifact extraction; norecovery flag preserves forensic state |
+| File listing | `File Listing (fls)` | Recursive listing including deleted entries (marked `*`) — foundation for all subsequent artifact identification |
+| Bodyfile generation | `Bodyfile (fls -m)` | MAC-time bodyfile is the input for mactime timeline generation — captures every file system timestamp |
+| Timeline | `Filesystem Timeline (mactime)` | Chronological view of all file system activity — primary tool for event sequencing and anomaly detection |
+| Filesystem stats | `Filesystem Metadata (fsstat)` | Captures volume label, creation date, cluster size, and last mount time — contextualises the file system state |
+| Inode listing | `Inode Listing (ils)` | Lists all inodes including orphaned (unlinked) ones — finds files that have been deleted but whose data blocks remain |
+| Event logs | `Event Log Extraction (EVTX)` | Windows event logs contain authentication, process creation, and service events — primary source for Windows activity reconstruction |
+| Registry hives | `Registry Extraction (SYSTEM, SOFTWARE, SAM, NTUSER.DAT)` | Registry hives contain persistence keys, user activity, network configuration, and installed software history |
+| Prefetch | `Prefetch Extraction` | Prefetch files record executable run counts and timestamps — confirms program execution even after deletion (T1070.004) |
+| MFT | `MFT Extraction (icat inode 0)` | The Master File Table records every file's metadata — complete even for deleted entries; analysed by tools like MFTECmd |
+| USN Journal | `USN Journal Extraction (icat inode 11)` | Change journal records file create/delete/rename/modify events — fills gaps in the filesystem timeline |
+| SRUM | `SRUM Extraction (SRUDB.dat)` | System Resource Usage Monitor records per-application network and CPU usage — confirms process execution with timestamps |
+| Browser history | `Browser History Extraction` | Chrome / Edge history files reveal web activity, downloads, and search queries relevant to initial access or exfiltration |
+| Scheduled tasks | `Scheduled Task Extraction` | Scheduled task XML files reveal persistence mechanisms and their trigger conditions (T1053.005) |
+| Recycle Bin | `Recycle Bin Extraction` | Deleted file metadata in `$Recycle.Bin` records original path and deletion time — evidence of file removal (T1070.004) |
+| Amcache | `Amcache Extraction` | Amcache.hve records SHA1 hashes and first-execution times for every binary run — confirms execution of files that no longer exist on disk |
+| File carving | `File Carving (bulk_extractor)` | Signature-based carving of unallocated space recovers deleted files, emails, URLs, and credentials not visible in the active file system |
+| OpenCTI enrichment | `Threat Intelligence Enrichment (OpenCTI)` | Correlates carved URLs, file hashes, and domains against known threat actors and malware campaigns |
+| Cross-module check | `Cross-module Correlation (FAN / FAME)` | Checks whether FAN or FAME reports exist for this case — surfaces kill-chain connections across network, memory, and disk |
+
+**Use `--raw` only when the output contains significant findings** (deleted executables, suspicious
+registry keys, carved C2 URLs, EVTX gaps, unusual scheduled tasks). For clean / expected output,
+omit `--raw` and summarise in `--outcome`.
+
+### 3 — Before upload (after formal report is generated)
+
+```bash
+python3 lib/research_notes.py finalize \
+  --case-id <case_id> \
+  --summary "One-paragraph summary: key findings, main pivot point, MITRE techniques confirmed, and conclusion."
+```
+
+Then include the notes file in the upload call:
+
+```bash
+python3 lib/investigations_upload.py \
+  --case-id <case_id> \
+  --md ./reports/<case_id>_fast_report.md \
+  --pdf ./reports/<case_id>_fast_report.pdf \
+  --pptx ./reports/<case_id>_fast_presentation.pptx \
+  --docx ./reports/<case_id>_fast_report.docx \
+  --notes ./reports/<case_id>_research_notes.md
+```
+
+---
+
 ## Invocation
 
 ```bash

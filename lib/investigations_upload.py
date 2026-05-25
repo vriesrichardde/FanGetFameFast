@@ -56,6 +56,7 @@ def upload(
     pptx_path: Path | None = None,
     docx_path: Path | None = None,
     zip_path: Path | None = None,
+    notes_path: Path | None = None,
 ) -> None:
     remote_dir = f"{REMOTE_ROOT}/{case_id}/reports"
     _ssh_mkdir(remote_dir)
@@ -79,6 +80,9 @@ def upload(
     if zip_path and zip_path.exists():
         _up(zip_path, "Artefact ZIP")
 
+    if notes_path and notes_path.exists():
+        _up(notes_path, "Research notes")
+
     print(f"[upload] Done — {SSH_HOST}:{remote_dir}/")
 
 
@@ -90,6 +94,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pptx",                   metavar="FILE",  help="Local PowerPoint path (optional)")
     p.add_argument("--docx",                   metavar="FILE",  help="Local Word document path (optional)")
     p.add_argument("--zip",                    metavar="FILE",  help="Local artefact ZIP path (optional)")
+    p.add_argument("--notes",                  metavar="FILE",  help="Local research notes Markdown path (optional)")
     return p
 
 
@@ -103,10 +108,11 @@ if __name__ == "__main__":
         upload(
             args.case_id,
             md,
-            pdf_path  = Path(args.pdf)  if args.pdf  else None,
-            pptx_path = Path(args.pptx) if args.pptx else None,
-            docx_path = Path(args.docx) if args.docx else None,
-            zip_path  = Path(args.zip)  if args.zip  else None,
+            pdf_path   = Path(args.pdf)   if args.pdf   else None,
+            pptx_path  = Path(args.pptx)  if args.pptx  else None,
+            docx_path  = Path(args.docx)  if args.docx  else None,
+            zip_path   = Path(args.zip)   if args.zip   else None,
+            notes_path = Path(args.notes) if args.notes else None,
         )
     except subprocess.CalledProcessError as exc:
         print(f"[upload] ERROR: SSH/SCP failed: {exc.stderr.decode(errors='replace')}", file=sys.stderr)
