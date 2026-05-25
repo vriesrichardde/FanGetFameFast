@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Authors
 
-Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 
 ## Solution name & philosophy
 

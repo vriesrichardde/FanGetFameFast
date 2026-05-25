@@ -41,4 +41,4 @@ See [LICENSE](LICENSE) for the dual-license notice.
 
 ---
 
-*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin*
+*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin*

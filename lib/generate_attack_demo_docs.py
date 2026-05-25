@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 """
 generate_attack_demo_docs.py — PowerPoint + Word document generator for the
 AI-based attack demonstration performed on 24-May-2026 against Metasploitable.
@@ -391,7 +391,7 @@ def build_pptx(output_path: Path):
         ("Attacker",      "KALI Linux (VirtualBox, NAT)"),
         ("Environment",   "Controlled lab — VirtualBox on UbuntuDesktop"),
         ("Case ID",       CASE_ID),
-        ("Authors",       "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin"),
+        ("Authors",       "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
     ]
     for i, (k, v) in enumerate(meta):
         y = 3.25 + i * 0.37
@@ -1008,7 +1008,7 @@ def build_docx(output_path: Path):
         ("Environment",    "Controlled lab — both machines are VirtualBox VMs"),
         ("Case ID",        CASE_ID),
         ("Classification", "CONFIDENTIAL — controlled lab environment"),
-        ("Authors",        "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin"),
+        ("Authors",        "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
     ])
     doc.add_page_break()
     _add_toc(doc)

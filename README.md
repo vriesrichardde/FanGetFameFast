@@ -4,7 +4,7 @@
 
 Fan Get Fame Fast is an agentic forensic investigation platform that combines three modules — **FAN** (network forensics), **FAME** (memory forensics), and **FAST** (storage forensics) — and an AI coordinator that drives cross-module correlation. A suspicious network connection triggers FAN to ask FAME which process owned that socket, and FAST which file on disk launched it. The analyst asks; the platform finds.
 
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin  
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin  
 **Platform:** Ubuntu 24.04 LTS (x86-64)  
 **License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)
 
@@ -254,4 +254,4 @@ python3 lib/vault_query.py --search powershell
 
 Fan Get Fame Fast is dual-licensed under your choice of the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)) or the **MIT License** ([LICENSE-MIT](LICENSE-MIT)). See [LICENSE](LICENSE) for the dual-license notice.
 
-*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin*
+*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin*

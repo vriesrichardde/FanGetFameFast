@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 """
 md_to_pdf.py — Convert any Markdown file to a styled PDF.
 
@@ -317,7 +317,7 @@ def build_html(
     title: str = "DFIR Analysis Report",
     subtitle: str = "",
     case_id: str = "",
-    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin",
+    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
     date_str: str = "",
     logo_data_uri: str = "",
 ) -> str:
@@ -415,7 +415,7 @@ def convert(
     title: str = "",
     subtitle: str = "",
     case_id: str = "",
-    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin",
+    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
     date_str: str = "",
     logo_path: Path | None = None,
 ) -> Path:
@@ -478,7 +478,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title",       metavar="TITLE",       default="",            help="Report title (default: inferred from filename)")
     p.add_argument("--subtitle",    metavar="SUBTITLE",    default="",            help="Cover page subtitle")
     p.add_argument("--case-id",     metavar="ID",          default="",            help="Case ID shown on cover and page header")
-    p.add_argument("--prepared-by", metavar="NAME",        default="Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin", help="Prepared-by field on cover")
+    p.add_argument("--prepared-by", metavar="NAME",        default="Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin", help="Prepared-by field on cover")
     p.add_argument("--date",        metavar="YYYY-MM-DD",  default="",            help="Report date (default: today UTC)")
     p.add_argument("--logo",        metavar="SVG",         default="",            help="Path to SVG logo file to embed on cover and page header")
     return p

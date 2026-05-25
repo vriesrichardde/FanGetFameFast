@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 """
 generate_pcap_report.py — PCAP Incident Report Generator
 
@@ -1415,7 +1415,7 @@ def sec_header(stem: str, case_id: str, overall_sev: str, now: str,
         f"| Report Version | v{report_version} |",
         f"| Overall Severity | {badge} |",
         f"| Report Generated | {now} |",
-        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin |",
+        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |",
         f"| Capture Start | {first_ts or '—'} |",
         f"| Capture End | {last_ts or '—'} |",
         f"| Capture Duration | {_format_duration(duration) if duration else '—'} |",

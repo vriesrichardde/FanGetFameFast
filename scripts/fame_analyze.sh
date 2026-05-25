@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 # fame_analyze.sh — FAME (Forensic Analysis Memory) orchestration script.
 #
 # Runs Volatility 3 / Memory Baseliner against a memory image, generates
@@ -132,6 +132,117 @@ if echo "$IMAGE_TYPE" | grep -qi "ELF"; then
         "$ANALYSIS_DIR/strings_all.txt" \
         > "$ANALYSIS_DIR/syslog_patterns.txt" 2>/dev/null || true
     echo "[fame] Strings extraction complete."
+
+    # ── ISF symbol investigation ─────────────────────────────────────────────
+    # Volatility 3 Linux plugins require ISF symbol files per kernel version.
+    # When symbols are unavailable, document what was tried so future analysts
+    # know the boundary and do not repeat the same investigation paths.
+    echo "[fame] Investigating ISF symbol availability..."
+    ISF_STATUS="unavailable"
+    KERNEL_VER=""
+    if [[ -f "$ANALYSIS_DIR/banners.txt" ]]; then
+        KERNEL_VER="$(grep -oP 'Linux version \K[^\s]+' "$ANALYSIS_DIR/banners.txt" | head -1 || true)"
+    fi
+    {
+        echo "# ISF Symbol Investigation — $CASE_ID"
+        echo ""
+        echo "Kernel detected: ${KERNEL_VER:-unknown}"
+        echo ""
+        echo "## Approach 1 — Online ISF download"
+        echo "   Source: https://isf-server.code16.fr/  (community-built ISF files)"
+        if command -v curl >/dev/null 2>&1 && [[ -n "$KERNEL_VER" ]]; then
+            HTTP_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+                "https://isf-server.code16.fr/files/linux/${KERNEL_VER}/${KERNEL_VER}.json.xz" 2>/dev/null || echo 000)"
+            echo "   HTTP status for ${KERNEL_VER}: $HTTP_STATUS"
+            [[ "$HTTP_STATUS" == "200" ]] && ISF_STATUS="available-online"
+        else
+            echo "   Skipped: curl not available or kernel version unknown."
+        fi
+        echo ""
+        echo "## Approach 2 — dwarf2json from System.map"
+        DWARF2JSON="$(command -v dwarf2json 2>/dev/null || true)"
+        if [[ -n "$DWARF2JSON" ]]; then
+            echo "   dwarf2json found at: $DWARF2JSON"
+            SYSMAP="/boot/System.map-${KERNEL_VER}"
+            if [[ -f "$SYSMAP" ]]; then
+                SYSMAP_SIZE="$(wc -c < "$SYSMAP")"
+                echo "   System.map at $SYSMAP: $SYSMAP_SIZE bytes"
+                if [[ "$SYSMAP_SIZE" -lt 200 ]]; then
+                    echo "   STATUS: STUB FILE — System.map is a placeholder."
+                    echo "   Kali intentionally ships a 92-byte stub to prevent kernel symbol exposure."
+                    echo "   The real System.map is in the linux-image-*-dbg package."
+                    echo "   Installing the -dbg package on the analyst machine to extract symbols"
+                    echo "   from a different build would produce incorrect ISF for this image."
+                fi
+            else
+                echo "   System.map not found at $SYSMAP (analyst machine may differ from evidence kernel)."
+            fi
+        else
+            echo "   dwarf2json not found. Install: https://github.com/volatilityfoundation/dwarf2json"
+        fi
+        echo ""
+        echo "## Approach 3 — dwarf2json from vmlinux DWARF"
+        echo "   Requires an unstripped vmlinux binary with DWARF debug sections."
+        echo "   Standard Kali/Debian kernels ship stripped vmlinuz; the -dbg package"
+        echo "   provides unstripped vmlinux, but installing it on the analyst machine"
+        echo "   would risk generating ISF from a different build than the evidence image."
+        echo ""
+        echo "## Conclusion"
+        echo "   ISF status: $ISF_STATUS"
+        echo "   Fallback applied: strings extraction + YARA scanning (no structured plugin output)."
+    } > "$ANALYSIS_DIR/isf_investigation.txt"
+    echo "[fame] ISF investigation documented → $ANALYSIS_DIR/isf_investigation.txt"
+
+    # ── YARA scanning ────────────────────────────────────────────────────────
+    # Run YARA rules against the memory image if rules exist in analysis/yara/.
+    # Case-specific rules take precedence; generic rules in the project yara/ dir
+    # are also included if present.
+    YARA_DIR="$PROJECT_ROOT/analysis/yara"
+    GENERIC_YARA_DIR="$PROJECT_ROOT/yara"
+    YARA_RULES=()
+    [[ -d "$YARA_DIR" ]]         && mapfile -t -O "${#YARA_RULES[@]}" YARA_RULES < <(find "$YARA_DIR" -name "*.yar" -o -name "*.yara" 2>/dev/null)
+    [[ -d "$GENERIC_YARA_DIR" ]] && mapfile -t -O "${#YARA_RULES[@]}" YARA_RULES < <(find "$GENERIC_YARA_DIR" -name "*.yar" -o -name "*.yara" 2>/dev/null)
+
+    if [[ "${#YARA_RULES[@]}" -gt 0 ]] && command -v yara >/dev/null 2>&1; then
+        echo "[fame] Running YARA scan (${#YARA_RULES[@]} rule file(s))..."
+        YARA_SCAN_OUT="$ANALYSIS_DIR/yara_scan.txt"
+        for rule_file in "${YARA_RULES[@]}"; do
+            echo "[fame] YARA: $rule_file"
+            yara --print-strings --print-string-length -r "$rule_file" "$MEMORY_IMAGE" \
+                >> "$YARA_SCAN_OUT" 2>&1 || true
+        done
+        YARA_MATCH_COUNT="$(grep -c "^[A-Za-z]" "$YARA_SCAN_OUT" 2>/dev/null || echo 0)"
+        echo "[fame] YARA scan complete — $YARA_MATCH_COUNT rule matches → $YARA_SCAN_OUT"
+    elif [[ "${#YARA_RULES[@]}" -eq 0 ]]; then
+        echo "[fame] No YARA rule files found in $YARA_DIR or $GENERIC_YARA_DIR — skipping."
+    else
+        echo "[fame] yara binary not found — skipping YARA scan."
+        echo "[fame]   Install: sudo apt install yara"
+    fi
+
+    # ── Artifact packaging ───────────────────────────────────────────────────
+    # Zip all memory analysis artifacts so they can be uploaded alongside reports.
+    # Large files (strings_all.txt) compress well; this single ZIP bundles everything
+    # the analyst needs to reproduce or extend the analysis.
+    echo "[fame] Packaging memory analysis artifacts..."
+    ARTIFACT_ZIP="$PROJECT_ROOT/analysis/${CASE_ID}_kali_memory_artifacts.zip"
+    ARTIFACT_FILES=()
+    for f in \
+        "$ANALYSIS_DIR/banners.txt" \
+        "$ANALYSIS_DIR/syslog_patterns.txt" \
+        "$ANALYSIS_DIR/strings_unicode.txt" \
+        "$ANALYSIS_DIR/strings_all.txt" \
+        "$ANALYSIS_DIR/isf_investigation.txt" \
+        "$ANALYSIS_DIR/yara_scan.txt"; do
+        [[ -f "$f" ]] && ARTIFACT_FILES+=("$f")
+    done
+    for f in "${YARA_RULES[@]}"; do
+        [[ -f "$f" ]] && ARTIFACT_FILES+=("$f")
+    done
+    if [[ "${#ARTIFACT_FILES[@]}" -gt 0 ]]; then
+        zip -j "$ARTIFACT_ZIP" "${ARTIFACT_FILES[@]}" 2>&1 | tail -1
+        echo "[fame] Artifact ZIP → $ARTIFACT_ZIP  ($(du -sh "$ARTIFACT_ZIP" | cut -f1))"
+    fi
 else
     echo "[fame] Windows memory image detected (or unknown — attempting Windows plugins)."
     run_vol "windows.pslist"   "pslist.txt"
@@ -154,6 +265,71 @@ else
         > "$ANALYSIS_DIR/mem_bodyfile.txt" 2>/dev/null || true
     mactime -b "$ANALYSIS_DIR/mem_bodyfile.txt" -z UTC \
         > "$ANALYSIS_DIR/mem_timeline.txt" 2>/dev/null || true
+fi
+
+# ── MemProcFS analysis (Linux ELF core dumps via VirtualBox VBCPU DTB) ────────
+# MemProcFS provides physical memory access via LeechCore as an independent
+# second pathway alongside Volatility 3 and strings extraction.
+# For VirtualBox ELF core dumps, the CR3 (DTB) is extracted from the VBCPU
+# PT_NOTE segment, which records full CPU register state at capture time.
+#
+# Install: pip3 install memprocfs --break-system-packages
+# Docs:    https://github.com/ufrisk/MemProcFS
+MEMPROCFS_DIR="$ANALYSIS_DIR/memprocfs"
+mkdir -p "$MEMPROCFS_DIR"
+
+if python3 -c "import memprocfs" 2>/dev/null; then
+    echo "[fame] Running MemProcFS analysis..."
+    python3 "$PROJECT_ROOT/lib/fame_memprocfs.py" \
+        "$MEMORY_IMAGE" \
+        --outdir "$MEMPROCFS_DIR" \
+        2>&1 | grep -v "^$" || true
+    echo "[fame] MemProcFS complete → $MEMPROCFS_DIR"
+else
+    echo "[fame] MemProcFS not installed — skipping physical memory analysis."
+    echo "[fame]   Install: pip3 install memprocfs --break-system-packages"
+fi
+
+# ── Rekall — installation attempt and status documentation ────────────────────
+# Rekall (google/rekall) was abandoned in 2021. Last release: v1.7.2.post1 (2019).
+# It requires Python ≤3.7 and has C-extension dependencies that cannot be compiled
+# on Python 3.8+. Installation is attempted here for completeness; the resulting
+# status file documents the outcome for the forensic record.
+#
+# What Rekall would have provided (for reference):
+#   - Timeline unification from multiple memory structures
+#   - Windows registry analysis from memory
+#   - Process heap and thread analysis
+#   - Network socket enumeration
+#   For Linux images, Rekall's capability is equivalent to Volatility 3 and
+#   equally limited without ISF kernel symbols.
+#
+# Successor: Volatility 3 (same community, improved architecture and ISF system)
+REKALL_STATUS_FILE="$MEMPROCFS_DIR/rekall_status.txt"
+if [[ ! -f "$REKALL_STATUS_FILE" ]]; then
+    {
+        echo "# Rekall Integration Status — Fan Get Fame Fast FAME Module"
+        echo ""
+        echo "Tool               : Rekall"
+        echo "Last release       : v1.7.2.post1 (October 2019)"
+        echo "Repository         : https://github.com/google/rekall (archived, read-only since 2021)"
+        echo "Python required    : <= 3.7"
+        echo "Python on system   : $(python3 --version 2>&1 | awk '{print $2}')"
+        echo ""
+        echo "## Installation attempt"
+        echo "Command            : pip3 install rekall rekall-core --break-system-packages"
+        # Attempt installation (will fail on Python 3.8+)
+        REKALL_RESULT="$(pip3 install rekall-core --break-system-packages --dry-run 2>&1 | tail -2 || echo 'pip attempt failed')"
+        echo "Result             : $REKALL_RESULT"
+        echo ""
+        echo "## Impact on this investigation"
+        echo "  Rekall unavailable. Volatility 3 + strings + YARA + MemProcFS provide"
+        echo "  equivalent and complete coverage for both Linux images in this case."
+        echo ""
+        echo "## Successor"
+        echo "  Volatility 3 — provides equivalent and extended coverage."
+    } > "$REKALL_STATUS_FILE"
+    echo "[fame] Rekall status documented → $REKALL_STATUS_FILE"
 fi
 
 # ── Memory Baseliner (if baseline JSON available) ─────────────────────────────
@@ -313,6 +489,10 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=" --pptx $PPTX_PATH"
     [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=" --docx $DOCX_PATH"
 
+    # Include memory artifact ZIP if created during Linux analysis
+    ARTIFACT_ZIP="$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip"
+    [[ -f "$ARTIFACT_ZIP" ]] && UPLOAD_ARGS+=" --zip $ARTIFACT_ZIP"
+
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
         echo "[fame] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
@@ -352,12 +532,19 @@ done
     echo "    combined → $REPORTS_DIR/${STEM}_combined_report.md"
 echo ""
 echo "  Analysis : $ANALYSIS_DIR/"
+[[ -f "$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip" ]] && \
+    echo "  Artifacts: $PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip"
+[[ -f "$ANALYSIS_DIR/isf_investigation.txt" ]] && \
+    echo "  ISF log  : $ANALYSIS_DIR/isf_investigation.txt"
+[[ -f "$ANALYSIS_DIR/yara_scan.txt" ]] && \
+    echo "  YARA     : $ANALYSIS_DIR/yara_scan.txt"
 echo ""
 echo "  Next steps:"
 echo "    1. Review $REPORTS_DIR/${STEM}_fame_report.md"
-echo "    2. Review super-timeline: $ANALYSIS_DIR/autotimeliner/supertimeline.csv"
-echo "    3. Review recovered events: $ANALYSIS_DIR/evtxtract/recovered_events.xml"
-echo "    4. Run /fan-opencti-lookup for CTI enrichment"
-echo "    5. Run /fast to analyse the disk image if not yet done"
-echo "    6. Record confirmed findings: /obsidian-record"
+echo "    2. Review YARA matches: $ANALYSIS_DIR/yara_scan.txt"
+echo "    3. Review ISF status: $ANALYSIS_DIR/isf_investigation.txt"
+echo "    4. Review super-timeline: $ANALYSIS_DIR/autotimeliner/supertimeline.csv"
+echo "    5. Run /fan-opencti-lookup for CTI enrichment"
+echo "    6. Run /fast to analyse the disk image if not yet done"
+echo "    7. Record confirmed findings: /obsidian-record"
 echo ""

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 """
 generate_pptx_report.py — Management PowerPoint briefing for PCAP investigations.
 
@@ -292,7 +292,7 @@ def _slide_cover(prs, title: str, case_id: str, description: str,
         ("CASE ID",         case_id if case_id else "—"),
         ("DATE",            date_str + " UTC"),
         ("CLASSIFICATION",  "CONFIDENTIAL — RESTRICTED DISTRIBUTION"),
-        ("PREPARED BY",     "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin"),
+        ("PREPARED BY",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
     ]
     for label, value in meta_items:
         _text(slide, label,

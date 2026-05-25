@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 """
 generate_fast_report.py — FAST (Forensic Analysis Storage) report generator.
 
@@ -630,7 +630,7 @@ def _build_pptx(
     _rect(s, Inches(3), Inches(3.8), W - Inches(6), Inches(0.04), _BLUE)
     _txt(s, f"Case: {case_id}  |  Host: {hostname}  |  {generated_utc[:10]}",
          M, Inches(4.1), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Martinsen-Janssen · Suzanne Maquelin",
+    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
          M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s, "CONFIDENTIAL — FOR AUTHORISED PERSONNEL ONLY",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
