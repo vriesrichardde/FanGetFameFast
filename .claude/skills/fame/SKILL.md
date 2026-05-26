@@ -106,7 +106,16 @@ python3 lib/investigations_upload.py \
   --pdf ./reports/<case_id>_fame_report.pdf \
   --pptx ./reports/<case_id>_fame_presentation.pptx \
   --docx ./reports/<case_id>_fame_report.docx \
-  --notes ./reports/<case_id>_research_notes.md
+  --notes ./reports/<case_id>_research_notes.md \
+  --interactive
+```
+
+`--interactive` prompts for SSH host, identity file, and remote root (all pre-filled with defaults from environment variables), then asks for confirmation before transferring. Press Enter to accept each default; answer **n** at the confirmation prompt to skip the upload and keep reports in `./reports/` only.
+
+To skip upload entirely without any prompts (offline / no VM):
+
+```bash
+python3 lib/investigations_upload.py ... --no-upload
 ```
 
 ---
@@ -359,10 +368,13 @@ Use `--no-vault` to suppress vault writes (offline environments).
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| `vol: command not found` | `/home/vscode/.local/bin` not in PATH | Prepend `export PATH="$HOME/.local/bin:$PATH"` to every Bash command, or invoke via full path `/home/vscode/.local/bin/vol` |
 | `windows.pslist` empty output | Image is a Linux dump | Use `linux.pslist` plugin instead |
+| `windows.pslist` empty AND image is confirmed Windows | DKOM (T1014) — EPROCESS doubly-linked list unlinked by rootkit or kernel driver | Use `psscan` (pool scan) as the authoritative process list for the entire investigation; `netscan`, `modscan`, and `psxview` still work; `pslist`, `pstree`, `cmdline`, `svcscan`, `filescan`, and `malfind` will all return empty |
+| `windows.vadyarascan` not found / shows generic `vol` help | `yara-python` Python package not installed — plugin loads silently only when the binding is present | `pip install yara-python` (or rebuild the devcontainer — it is now in `requirements.txt`); fallback: run the standalone `yara` CLI directly against the image file |
+| Re-running the generator after manual Markdown edits | Expected — generator always rebuilds MD from raw analysis files | No action needed: if `<case_id>_fame_report.md` already exists the new auto-generated content is written to `<case_id>_fame_report_generated.md` instead, preserving the primary file. Review the draft and promote manually if desired. |
 | ISF symbol error / hanging | No symbol file for this kernel | Use `--offline` flag; fall back to strings extraction |
 | `malfind` filled with JIT hits | .NET or Java process | Triage hits manually; ignore regions backed by clr.dll or jvm.dll |
-| pptx or docx not generated | Missing python package | `pip3 install python-pptx python-docx` |
 | Upload SSH error | ubuntudesktop unreachable | Check `ping ubuntudesktop`; use `--no-upload` to skip |
 | Memory Baseliner flags everything | Wrong baseline JSON | Verify baseline was taken from a matching OS/patch level |
 

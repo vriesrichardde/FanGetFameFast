@@ -1658,7 +1658,10 @@ def generate(
     """
     Generate the full FAME report suite (Markdown, PDF, PPTX, DOCX).
 
-    Returns dict with keys: md, pdf, pptx, docx — each a Path (or None if skipped).
+    Returns dict with keys: md, md_draft, pdf, pptx, docx — each a Path (or None).
+    If the primary Markdown report already exists (analyst may have enhanced it),
+    the new auto-generated content is written to <case_id>_fame_report_generated.md
+    and md_draft points to that file; md always points to the primary report path.
     """
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "memory")
     output_dir   = output_dir   or (PROJECT_ROOT / "reports")
@@ -1674,8 +1677,20 @@ def generate(
         generated_utc, opencti_findings, fan_summary, fast_summary,
     )
     md_path = output_dir / f"{stem}_fame_report.md"
-    md_path.write_text(md_text)
-    print(f"[fame] Markdown saved: {md_path}")
+    md_draft_path: Path | None = None
+
+    if md_path.exists():
+        # Analyst may have enhanced the primary report — write new auto-generated
+        # content to a draft file so they can review and promote it if desired.
+        md_draft_path = output_dir / f"{stem}_fame_report_generated.md"
+        md_draft_path.write_text(md_text)
+        pdf_source = md_draft_path
+        print(f"[fame] Existing report preserved: {md_path}")
+        print(f"[fame] New auto-generated draft:  {md_draft_path}")
+    else:
+        md_path.write_text(md_text)
+        pdf_source = md_path
+        print(f"[fame] Markdown saved: {md_path}")
 
     # ── PDF ───────────────────────────────────────────────────────────────────
     pdf_path: Path | None = None
@@ -1683,7 +1698,7 @@ def generate(
         sys.path.insert(0, str(PROJECT_ROOT / "lib"))
         from md_to_pdf import convert as md2pdf
         pdf_path = output_dir / f"{stem}_fame_report.pdf"
-        md2pdf(md_path, pdf_path)
+        md2pdf(pdf_source, pdf_path)
         print(f"[fame] PDF saved: {pdf_path}")
     except Exception as exc:
         print(f"[fame] WARNING: PDF generation failed: {exc}")
@@ -1703,10 +1718,11 @@ def generate(
     )
 
     return {
-        "md":   md_path,
-        "pdf":  pdf_path,
-        "pptx": pptx_path if pptx_path.exists() else None,
-        "docx": docx_path if docx_path.exists() else None,
+        "md":       md_path,
+        "md_draft": md_draft_path,
+        "pdf":      pdf_path,
+        "pptx":     pptx_path if pptx_path.exists() else None,
+        "docx":     docx_path if docx_path.exists() else None,
     }
 
 

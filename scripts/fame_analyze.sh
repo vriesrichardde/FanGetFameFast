@@ -87,6 +87,17 @@ echo "  Case ID  : $CASE_ID"
 echo "  Hostname : $HOSTNAME_ARG"
 echo ""
 
+# ── Vault bootstrap + case opening ───────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/init_vault.py" 2>/dev/null || true
+if [[ $NO_VAULT -eq 0 ]]; then
+    python3 - <<PYEOF 2>/dev/null || echo "[fame] WARNING: Could not open vault case."
+import sys; sys.path.insert(0, "$PROJECT_ROOT/lib")
+from knowledge_extractor import open_case
+open_case("$CASE_ID", "FAME memory forensics investigation of $HOSTNAME_ARG — image: $(basename "$MEMORY_IMAGE")", severity="medium")
+print("[fame] Vault case opened: $CASE_ID")
+PYEOF
+fi
+
 # ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p \
     "$ANALYSIS_DIR" \
@@ -513,6 +524,26 @@ else
     echo "[fame] Upload skipped (--no-upload)."
 fi
 
+# ── Vault recording ───────────────────────────────────────────────────────────
+# Parse the finalised report Markdown (analyst may have edited it) and write
+# confirmed TTPs, IOCs, and risks to the Obsidian vault.  The research notes
+# Investigation Summary becomes the case-closing text.
+if [[ $NO_VAULT -eq 0 ]]; then
+    MD_PATH="$REPORTS_DIR/${STEM}_fame_report.md"
+    NOTES_PATH="$REPORTS_DIR/${STEM}_research_notes.md"
+    if [[ -f "$MD_PATH" ]]; then
+        echo "[fame] Writing confirmed findings to vault..."
+        python3 "$PROJECT_ROOT/lib/vault_writer.py" \
+            --module fame \
+            --report "$MD_PATH" \
+            ${NOTES_PATH:+--notes "$NOTES_PATH"} \
+            --reports-dir "$REPORTS_DIR" \
+            || echo "[fame] WARNING: Vault write failed — check lib/vault_writer.py"
+    else
+        echo "[fame] WARNING: Report not found for vault write: $MD_PATH"
+    fi
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -546,5 +577,7 @@ echo "    3. Review ISF status: $ANALYSIS_DIR/isf_investigation.txt"
 echo "    4. Review super-timeline: $ANALYSIS_DIR/autotimeliner/supertimeline.csv"
 echo "    5. Run /fan-opencti-lookup for CTI enrichment"
 echo "    6. Run /fast to analyse the disk image if not yet done"
-echo "    7. Record confirmed findings: /obsidian-record"
+echo "    7. Vault findings were written automatically — review: ./vault/Dashboard.md"
+echo "       To re-run vault write after editing the report:"
+echo "       python3 lib/vault_writer.py --module fame --case-id $CASE_ID"
 echo ""

@@ -37,6 +37,7 @@ graphifyy>=0.7.0
 
 # Memory forensics (FAME)
 volatility3>=2.0.0
+yara-python>=4.3.0
 
 # TLS / certificate inspection (FAN)
 sslyze>=5.0.0
