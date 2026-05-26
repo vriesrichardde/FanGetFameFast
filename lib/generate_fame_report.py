@@ -96,6 +96,17 @@ def _load_analysis(analysis_dir: Path) -> dict[str, Any]:
         "isf_investigation":  _read_text(analysis_dir / "isf_investigation.txt"),
         "yara_scan":          _read_text(analysis_dir / "yara_scan.txt"),
     }
+    # Merge individual YARA output files (yara_common_malware.txt, yara_pe_analysis.txt, …)
+    # when the consolidated yara_scan.txt is absent (CLI-based YARA runs write separate files)
+    if not data["yara_scan"]:
+        _yara_parts = [
+            _read_text(fname)
+            for fname in sorted(analysis_dir.glob("yara_*.txt"))
+            if fname.name != "yara_scan.txt"
+        ]
+        _yara_parts = [p for p in _yara_parts if p.strip()]
+        if _yara_parts:
+            data["yara_scan"] = "\n\n".join(_yara_parts)
     # Load MemProcFS JSON results
     memprocfs_dir = analysis_dir / "memprocfs"
     memprocfs_results: dict[str, Any] = {}
@@ -152,6 +163,261 @@ def _read_csv(path: Path) -> list[dict]:
 
 def _available_plugins(data: dict[str, Any]) -> list[str]:
     return [k for k, v in data.items() if v and k not in ("proc_baseline", "drv_baseline", "svc_baseline")]
+
+
+# ── Confidence & Gaps helpers ──────────────────────────────────────────────────
+
+def _is_dkom_active(data: dict[str, Any]) -> bool:
+    pslist = data.get("pslist", "")
+    psscan = data.get("psscan", "")
+    # Process rows always start with a numeric PID; header/progress lines do not
+    pslist_procs = [l for l in pslist.splitlines() if l.strip() and l.strip()[0].isdigit()]
+    psscan_procs = [l for l in psscan.splitlines() if l.strip() and l.strip()[0].isdigit()]
+    return not pslist_procs and bool(psscan_procs)
+
+
+_DKOM_AFFECTED = {"pstree", "cmdline", "svcscan", "malfind", "filescan", "hivelist"}
+
+_EXPECTED_PLUGINS: list[tuple[str, str, str]] = [
+    ("Image Type Detection",          "banners",      "OS type unknown — cannot select correct plugin chain"),
+    ("Hidden Process Scan (psscan)",  "psscan",       "Critical — authoritative process list when DKOM active"),
+    ("Active Process List (pslist)",  "pslist",       "EPROCESS walk; empty output confirms DKOM (T1014) active"),
+    ("Process Tree (pstree)",         "pstree",       "Parent-child relationships unavailable"),
+    ("Command Lines (cmdline)",       "cmdline",      "Process command arguments unverifiable"),
+    ("Network Connections (netscan)", "netscan",      "C2 connection pivot source"),
+    ("Kernel Modules (modscan)",      "modscan",      "Rootkit driver detection"),
+    ("Services (svcscan)",            "svcscan",      "Service-based persistence partially blind"),
+    ("Registry (hivelist)",           "hivelist",     "Registry-based persistence unverifiable"),
+    ("Code Injection (malfind)",      "malfind",      "Process injection evidence unavailable"),
+    ("File Handles (filescan)",       "filescan",     "Open file handle enumeration unavailable"),
+    ("YARA Scan",                     "yara_scan",    "Malware signature detection unavailable"),
+    ("Baseline Comparison",           "proc_baseline","Memory Baseliner requires baseline.json"),
+]
+
+
+def _compute_plugin_completeness(data: dict[str, Any], dkom: bool) -> list[dict]:
+    rows = []
+    for label, key, missing_note in _EXPECTED_PLUGINS:
+        val = data.get(key)
+        has_data = bool(val) if not isinstance(val, list) else bool(val)
+
+        if key == "pslist":
+            proc_lines = [l for l in (val or "").splitlines()
+                          if l.strip() and l.strip()[0].isdigit()]
+            if not proc_lines and dkom:
+                rows.append({"step": label, "status": "Empty result",
+                             "notes": "DKOM active — EPROCESS list unlinked by rootkit; not authoritative"})
+                continue
+
+        if dkom and key in _DKOM_AFFECTED:
+            rows.append({"step": label, "status": "Skipped — DKOM active", "notes": missing_note})
+            continue
+
+        if key == "banners" and not has_data:
+            if data.get("windows_info"):
+                rows.append({"step": label, "status": "Complete", "notes": "via windows_info"})
+                continue
+
+        if key == "proc_baseline":
+            rows.append({"step": label, "status": "Complete" if has_data else "Not run",
+                         "notes": "" if has_data else missing_note})
+            continue
+
+        rows.append({"step": label, "status": "Complete" if has_data else "Not run",
+                     "notes": "" if has_data else missing_note})
+    return rows
+
+
+def _detect_gaps(
+    data: dict[str, Any], dkom: bool, case_id: str,
+    reports_dir: Path, opencti_findings: str,
+) -> list[str]:
+    gaps = []
+    if dkom:
+        gaps.append(
+            "**DKOM cascade (T1014):** A rootkit driver suppressed 7 standard Volatility plugins — "
+            "pslist, pstree, cmdline, svcscan, malfind, filescan, and hivelist all returned empty. "
+            "Process-level evidence (command lines, injected regions, service registry entries) is "
+            "unavailable from this image alone. A disk image (FAST) or a secondary memory capture "
+            "with a rootkit-resistant profile would recover this data."
+        )
+    if not data.get("proc_baseline"):
+        gaps.append(
+            "**Memory Baseliner not run:** No known-good baseline was available for comparison. "
+            "Anomalous-but-legitimate processes cannot be distinguished from attacker tooling "
+            "without a baseline from a clean system at the same OS/patch level."
+        )
+    if not data.get("yara_scan"):
+        gaps.append(
+            "**YARA scan not run:** No YARA rules were applied to this image — malware signature "
+            "detection is unavailable. Place `.yar` or `.yara` files in `./yara/` and re-run."
+        )
+    fan_report = reports_dir / f"{case_id}_fan_report.md"
+    if not fan_report.exists():
+        gaps.append(
+            f"**No FAN (network) report for {case_id}:** Extracted C2 IPs have not been confirmed "
+            "in PCAP traffic. A network capture from the same time window would confirm beaconing "
+            "cadence, payload content, and lateral movement targets."
+        )
+    fast_report = reports_dir / f"{case_id}_fast_report.md"
+    if not fast_report.exists():
+        gaps.append(
+            f"**No FAST (storage) report for {case_id}:** Disk-level artifacts — rootkit driver "
+            "presence, browser history, prefetch, MFT entries, and Windows Event Logs — are "
+            "unexamined. The initial infection vector and full persistence mechanism remain unknown."
+        )
+    if not opencti_findings:
+        gaps.append(
+            "**No OpenCTI enrichment:** Extracted IOCs (C2 IPs, process hashes) have not been "
+            "attributed to a known threat actor or campaign. Run `/fan-opencti-lookup` to correlate."
+        )
+    return gaps
+
+
+def _parse_assumptions(case_id: str, reports_dir: Path) -> list[str]:
+    notes_path = reports_dir / f"{case_id}_research_notes.md"
+    if not notes_path.exists():
+        return []
+    assumptions = []
+    for line in notes_path.read_text(encoding="utf-8").splitlines():
+        if "— Assumption:" in line and line.startswith("### ["):
+            text = line.split("— Assumption:", 1)[1].strip()
+            if text:
+                assumptions.append(text)
+        elif "| **Outcome** |" in line and "[ASSUMPTION]" in line:
+            text = line.split("[ASSUMPTION]", 1)[1].strip().rstrip("|").strip()
+            if text:
+                assumptions.append(text)
+    return assumptions
+
+
+def _score_overall_confidence(dkom: bool, data: dict[str, Any]) -> tuple[str, str]:
+    yara_ran = bool(data.get("yara_scan"))
+    baseline_ran = bool(data.get("proc_baseline"))
+    psscan_ran = bool(data.get("psscan"))
+    netscan_ran = bool(data.get("netscan"))
+
+    if not yara_ran and not baseline_ran:
+        return (
+            "LOW",
+            "YARA scan and Memory Baseliner were both unavailable — malware signature detection "
+            "and baseline deviation analysis could not be performed. Key findings rest on "
+            "pool-scan artifacts alone.",
+        )
+    if dkom:
+        return (
+            "MEDIUM",
+            "DKOM (T1014) is active — a rootkit driver unlinked critical process structures from "
+            "the EPROCESS doubly-linked list, suppressing six standard Volatility plugins. "
+            "Pool-scan alternatives (psscan, netscan, modscan) remain authoritative and were used "
+            "as the primary evidence basis. Confidence is MEDIUM because living-off-the-land "
+            "activity and process injection evidence that would normally come from cmdline and "
+            "malfind is absent.",
+        )
+    if psscan_ran and netscan_ran and yara_ran:
+        return (
+            "HIGH",
+            "All critical pool-scan plugins produced results, YARA signatures were applied, "
+            "and no rootkit-induced visibility gaps were detected.",
+        )
+    return (
+        "MEDIUM",
+        "One or more critical analysis steps did not produce results — findings are based on "
+        "available evidence only.",
+    )
+
+
+def _build_followup_investigations(
+    data: dict[str, Any], dkom: bool, case_id: str,
+    reports_dir: Path, opencti_findings: str,
+) -> list[str]:
+    followups = []
+    if not (reports_dir / f"{case_id}_fast_report.md").exists():
+        followups.append(
+            "**[FAST]** Acquire a disk image from the subject host; confirm rootkit driver on "
+            "disk, locate dropper, recover prefetch and MFT entries, and examine Windows Event "
+            "Logs for the initial access vector."
+        )
+    if not (reports_dir / f"{case_id}_fan_report.md").exists():
+        followups.append(
+            "**[FAN]** Capture live traffic or retrieve historical PCAP; confirm C2 beaconing "
+            "to extracted IPs; identify initial delivery mechanism (phishing, drive-by, exploit)."
+        )
+    if not opencti_findings:
+        followups.append(
+            "**[OpenCTI]** Submit extracted C2 IPs and process hashes to OpenCTI; cross-reference "
+            "against known threat actor campaigns and malware families via `/fan-opencti-lookup`."
+        )
+    if dkom:
+        followups.append(
+            "**[Re-image]** If a sandbox is available, detonate the rootkit in isolation to recover "
+            "suppressed process, service, and file-handle artifacts."
+        )
+    if "ESTABLISHED" in data.get("netscan", ""):
+        followups.append(
+            "**[Credential scope]** Rotate all domain credentials accessible from this host; "
+            "check domain controller event logs for lateral movement originating from this machine."
+        )
+    if not followups:
+        followups.append("No specific follow-up investigations identified based on current findings.")
+    return followups
+
+
+def _build_confidence_gaps_section(
+    data: dict[str, Any],
+    case_id: str,
+    reports_dir: Path,
+    opencti_findings: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    a = lines.append
+
+    dkom = _is_dkom_active(data)
+    level, reasoning = _score_overall_confidence(dkom, data)
+    completeness = _compute_plugin_completeness(data, dkom)
+    gaps = _detect_gaps(data, dkom, case_id, reports_dir, opencti_findings)
+    assumptions = _parse_assumptions(case_id, reports_dir)
+    followups = _build_followup_investigations(data, dkom, case_id, reports_dir, opencti_findings)
+
+    a("---")
+    a("")
+    a("## 16. Confidence & gaps")
+    a("")
+    a(f"**Overall investigation confidence: {level}**")
+    a("")
+    a(f"*{reasoning}*")
+    a("")
+    a("### Completeness")
+    a("")
+    a("| Analysis step | Status | Notes |")
+    a("|---|---|---|")
+    for row in completeness:
+        a(f"| {row['step']} | {row['status']} | {row['notes']} |")
+    a("")
+    a("### Data gaps & missing evidence")
+    a("")
+    if gaps:
+        for gap in gaps:
+            a(f"- {gap}")
+    else:
+        a("No significant data gaps identified — all standard analysis steps completed.")
+    a("")
+    a("### Assumptions")
+    a("")
+    if assumptions:
+        for assumption in assumptions:
+            a(f"- {assumption}")
+    else:
+        a("No explicit assumptions recorded. Use `python3 lib/research_notes.py assumption`")
+        a("to document analytical judgements for reviewer transparency.")
+    a("")
+    a("### Recommended follow-up investigations")
+    a("")
+    for followup in followups:
+        a(f"- {followup}")
+    a("")
+
+    return lines
 
 
 # ── Markdown generation ────────────────────────────────────────────────────────
@@ -498,11 +764,15 @@ def _build_markdown(
         a(f"{i}. {rec}")
     a("")
 
+    # ── Confidence & Gaps ─────────────────────────────────────────────────────
+    reports_dir = PROJECT_ROOT / "reports"
+    lines.extend(_build_confidence_gaps_section(data, case_id, reports_dir, opencti_findings))
+
     # ── Volatility Plugin Status ──────────────────────────────────────────────
     if "Volatility 3 Plugin Status" in shutdown_md:
         a("---")
         a("")
-        a("## 16. Volatility 3 plugin status")
+        a("## 17. Volatility 3 plugin status")
         a("")
         in_section = False
         for line in shutdown_md.splitlines():

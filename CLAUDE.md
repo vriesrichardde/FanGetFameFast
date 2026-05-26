@@ -216,7 +216,7 @@ export OPENCTI_URL="http://localhost:8080"
 export OPENCTI_API_KEY="your-api-token-here"
 ```
 
-Set in `~/.soc_env` (copy from `scripts/set_env_template.sh`), then add `source ~/.soc_env` to `~/.bashrc`.
+Set in `~/.soc_env` (copy from `templates/set_env_template.sh`), then add `source ~/.soc_env` to `~/.bashrc`.
 
 Get your API token at **Settings → API access** in the OpenCTI web interface.
 

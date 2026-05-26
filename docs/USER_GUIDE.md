@@ -73,7 +73,7 @@ sudo bash scripts/setup_sudoers.sh
 bash scripts/setup_folder_structure.sh
 
 # 4. Set API credentials
-cp scripts/set_env_template.sh ~/.soc_env
+cp templates/set_env_template.sh ~/.soc_env
 nano ~/.soc_env            # fill in PERPLEXITY_API_KEY, OPENCTI_URL, OPENCTI_API_KEY
 echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env
@@ -660,7 +660,7 @@ The PDF includes a styled cover page, running header stripe, and "Page X of Y" p
 
 ### Environment variables
 
-All variables are set in `~/.soc_env` (template: `scripts/set_env_template.sh`) and sourced from `~/.bashrc`.
+All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`) and sourced from `~/.bashrc`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|

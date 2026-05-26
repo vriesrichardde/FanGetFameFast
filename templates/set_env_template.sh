@@ -4,7 +4,7 @@
 # set_env_template.sh — Environment variable template for SOC tooling
 #
 # USAGE:
-#   cp scripts/set_env_template.sh ~/.soc_env
+#   cp templates/set_env_template.sh ~/.soc_env
 #   Fill in real values in ~/.soc_env
 #   Add to ~/.bashrc:  source ~/.soc_env
 #

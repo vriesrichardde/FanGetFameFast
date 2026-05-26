@@ -93,13 +93,15 @@ def cmd_step(args: argparse.Namespace) -> None:
             "</details>\n"
         )
 
+    outcome = f"[ASSUMPTION] {args.outcome}" if getattr(args, "assumption", False) else args.outcome
+
     entry = (
         f"### [{_now_utc()}] — Step {step_num}: {args.title}\n\n"
         "| | |\n"
         "|---|---|\n"
         f"| **Action** | {args.action} |\n"
         f"| **Why** | {args.why} |\n"
-        f"| **Outcome** | {args.outcome} |"
+        f"| **Outcome** | {outcome} |"
         f"{raw_block}\n\n"
         "---\n\n"
     )
@@ -107,6 +109,25 @@ def cmd_step(args: argparse.Namespace) -> None:
     with path.open("a", encoding="utf-8") as fh:
         fh.write(entry)
     print(f"[research_notes] Step {step_num} appended: {args.title}")
+
+
+def cmd_assumption(args: argparse.Namespace) -> None:
+    path = _notes_path(args.case_id, args.output_dir)
+    if not path.exists():
+        print(
+            f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    entry = (
+        f"### [{_now_utc()}] — Assumption: {args.text}\n\n"
+        "---\n\n"
+    )
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(entry)
+    print(f"[research_notes] Assumption appended.")
 
 
 def cmd_finalize(args: argparse.Namespace) -> None:
@@ -151,7 +172,14 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--why",        required=True, metavar="TEXT", help="Forensic rationale for this step")
     ps.add_argument("--outcome",    required=True, metavar="TEXT", help="Summary of findings")
     ps.add_argument("--raw",        metavar="TEXT", help="Significant raw output to include (optional)")
+    ps.add_argument("--assumption", action="store_true",           help="Mark this step's outcome as an assumption (prefixes [ASSUMPTION] for the report generator)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+
+    # assumption
+    pa = sub.add_parser("assumption", help="Record a standalone analytical assumption")
+    pa.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
+    pa.add_argument("--text",       required=True, metavar="TEXT", help="The assumption statement")
+    pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
 
     # finalize
     pf = sub.add_parser("finalize", help="Insert investigation summary and mark complete")
@@ -164,4 +192,4 @@ def _build_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
-    {"init": cmd_init, "step": cmd_step, "finalize": cmd_finalize}[args.command](args)
+    {"init": cmd_init, "step": cmd_step, "assumption": cmd_assumption, "finalize": cmd_finalize}[args.command](args)

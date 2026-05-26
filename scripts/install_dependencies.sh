@@ -503,7 +503,7 @@ cat <<'EOF'
        bash scripts/setup_folder_structure.sh
 
   2. Configure API credentials in ~/.soc_env (copy template):
-       cp scripts/set_env_template.sh ~/.soc_env
+       cp templates/set_env_template.sh ~/.soc_env
        nano ~/.soc_env    # fill in PERPLEXITY_API_KEY, OPENCTI_URL, OPENCTI_API_KEY
        echo 'source ~/.soc_env' >> ~/.bashrc
        source ~/.soc_env

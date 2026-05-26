@@ -12,6 +12,9 @@
     "PYTHONUNBUFFERED": "1",
     "PIP_DISABLE_PIP_VERSION_CHECK": "1"
   },
+  "mounts": [
+    "source=${localEnv:FGFF_EVIDENCE_INPUT},target=/home/vscode/evidence,type=bind,readonly,consistency=cached"
+  ],
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {
     "vscode": {
