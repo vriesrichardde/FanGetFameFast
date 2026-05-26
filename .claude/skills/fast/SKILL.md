@@ -30,6 +30,11 @@ raw tool output.
 
 Every FAST investigation produces a **research notes file** (`./reports/<case_id>_research_notes.md`)
 alongside the formal report. The notes are a timestamped, step-by-step investigative log that lets
+
+> **MANDATORY RULE: Do NOT proceed to the next analysis step until the current step has been
+> documented in the research notes via `python3 lib/research_notes.py step ...`. Running a tool
+> and immediately launching the next one without logging is not permitted. Read the output,
+> interpret it, call `step`, then advance.**
 any analyst follow the complete workflow, rationale, and findings from start to finish.
 
 **Three calls to make during every investigation:**

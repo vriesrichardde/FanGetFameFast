@@ -256,6 +256,7 @@ python3 lib/vault_query.py --search powershell
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.
 - Internal processing, vault storage, and log entries use UTC.
 - Scoped conclusions must cite their evidence source (e.g., "as observed in the PCAP file", "as found in the memory dump").
+- **Research notes are mandatory and sequential**: do NOT run the next investigation step until the output of the current step has been read, interpreted, and appended to the research notes via `python3 lib/research_notes.py step`. Parallel background tool execution is permitted only when the outputs are logged before launching subsequent steps.
 
 ## License
 
