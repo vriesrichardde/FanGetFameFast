@@ -22,6 +22,7 @@ CASE_ID=""
 CASE_DESC=""
 NO_VAULT=0
 REPORT_VERSION=1
+REPORTS_PERSIST_DIR=""
 
 usage() {
     cat <<'EOF'
@@ -41,12 +42,13 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --case-id)      CASE_ID="$2";   shift 2 ;;
-        --description)  CASE_DESC="$2"; shift 2 ;;
-        --no-vault)     NO_VAULT=1;     shift ;;
-        -h|--help)      usage ;;
-        -*)             echo "Unknown option: $1" >&2; exit 1 ;;
-        *)              PCAP_FILE="$1"; shift ;;
+        --case-id)             CASE_ID="$2";               shift 2 ;;
+        --description)         CASE_DESC="$2";             shift 2 ;;
+        --no-vault)            NO_VAULT=1;                 shift   ;;
+        --reports-persist-dir) REPORTS_PERSIST_DIR="$2";  shift 2 ;;
+        -h|--help)             usage ;;
+        -*)                    echo "Unknown option: $1" >&2; exit 1 ;;
+        *)                     PCAP_FILE="$1"; shift ;;
     esac
 done
 
@@ -340,6 +342,15 @@ find "$ANALYSIS" -mindepth 2 -maxdepth 2 -type d -name "$STEM" -exec rm -rf {} +
 for mod_dir in "$ANALYSIS"/*/; do
     [[ -d "${mod_dir}${STEM}" ]] && rm -rf "${mod_dir}${STEM}"
 done
+
+# Copy reports to a persistent directory when requested (used by batch_analyze.sh
+# so the batch report generator can read FAN reports after WIP cleanup)
+if [[ -n "$REPORTS_PERSIST_DIR" ]]; then
+    mkdir -p "$REPORTS_PERSIST_DIR"
+    cp -f "$REPORTS_TMP"/*.md  "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    cp -f "$REPORTS_TMP"/*.pdf "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    ok "FAN reports copied to: $REPORTS_PERSIST_DIR"
+fi
 
 # Remove the temporary reports dir
 rm -rf "$REPORTS_TMP"

@@ -4,6 +4,7 @@ reports/
 vault/
 graphify-out/
 exports/
+batch_work/
 
 # Credentials and API keys
 .env
