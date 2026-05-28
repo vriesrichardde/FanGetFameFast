@@ -36,6 +36,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from research_notes import parse_steps as _parse_research_steps
 try:
     from zoneinfo import ZoneInfo
     _CET = ZoneInfo("Europe/Amsterdam")
@@ -417,6 +419,34 @@ def _build_confidence_gaps_section(
         a(f"- {followup}")
     a("")
 
+    return lines
+
+
+# ── Evidence trail ────────────────────────────────────────────────────────────
+
+def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
+    steps = _parse_research_steps(case_id, str(reports_dir))
+    if not steps:
+        return []
+    raw_filename = f"{case_id}_raw_output.md"
+    lines: list[str] = [
+        "---", "",
+        "## Appendix B — Investigation Evidence Trail", "",
+        "Steps recorded in the research notes during this investigation. "
+        f"Full command output for each step is in `{raw_filename}`.", "",
+        "| Step ID | Timestamp | Analysis Step | Outcome |",
+        "|---------|-----------|---------------|---------|",
+    ]
+    for s in steps:
+        sid = f"`{s['id']}`" if s["id"] else "—"
+        outcome = s["outcome"].replace("|", "\\|")
+        lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} |")
+    lines += [
+        "",
+        "*Cross-reference step IDs with the research notes and raw output file "
+        "to verify any conclusion in this report.*",
+        "",
+    ]
     return lines
 
 
@@ -808,6 +838,9 @@ def _build_markdown(
     a("")
     a("*All findings derived from memory image analysis as stated. Evidence integrity preserved.*")
     a("")
+
+    # ── Evidence Trail ────────────────────────────────────────────────────────
+    lines.extend(_build_evidence_trail(case_id, reports_dir))
 
     return "\n".join(lines)
 

@@ -13,6 +13,9 @@ exports/
 # Claude Code local settings
 .claude/settings.json
 
+# Devcontainer personal config — generated from devcontainer.template.json, never committed
+.devcontainer/devcontainer.json
+
 # Python artifacts
 .venv/
 __pycache__/

@@ -14,11 +14,13 @@ investigation:
             the file is uploaded to the investigations vault.
 
 Output path: ./reports/<case_id>_research_notes.md
+Companion:   ./reports/<case_id>_raw_output.md  (full command output, keyed by RN-NNN)
 The reports/ directory is in .gitignore — notes are never committed to the repo.
 """
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +39,12 @@ def _notes_path(case_id: str, output_dir: str | None) -> Path:
     return d / f"{case_id}_research_notes.md"
 
 
+def _raw_output_path(case_id: str, output_dir: str | None) -> Path:
+    d = Path(output_dir) if output_dir else REPORTS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{case_id}_raw_output.md"
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -49,11 +57,72 @@ def _step_count(path: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Public API — importable by report generators
+# ---------------------------------------------------------------------------
+
+def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
+    """Return one dict per recorded step: {id, step_num, timestamp, title, action, why, outcome}.
+
+    Parses the research notes Markdown.  Steps without the [RN-NNN] badge
+    (written by older versions) are included with id=None.
+    """
+    path = _notes_path(case_id, output_dir)
+    if not path.exists():
+        return []
+
+    steps: list[dict] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    current: dict | None = None
+
+    for line in lines:
+        # Detect step header: ### [YYYY-MM-DD HH:MM:SS UTC] — Step N [RN-NNN]: Title
+        if line.startswith("### [") and "— Step" in line:
+            if current is not None:
+                steps.append(current)
+
+            ts_match = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\]", line)
+            id_match  = re.search(r"\[RN-(\d{3})\]", line)
+            num_match = re.search(r"— Step (\d+)", line)
+            title_match = re.search(r"\[RN-\d{3}\]: (.+)$", line)
+            if title_match is None:
+                # Older format without RN badge: "— Step N: Title"
+                title_match = re.search(r"— Step \d+: (.+)$", line)
+
+            step_num = int(num_match.group(1)) if num_match else len(steps) + 1
+            current = {
+                "id":        f"RN-{int(id_match.group(1)):03d}" if id_match else None,
+                "step_num":  step_num,
+                "timestamp": ts_match.group(1) if ts_match else "",
+                "title":     title_match.group(1).strip() if title_match else line,
+                "action":    "",
+                "why":       "",
+                "outcome":   "",
+            }
+            continue
+
+        if current is None:
+            continue
+
+        if "| **Action**" in line:
+            current["action"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Why**" in line:
+            current["why"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Outcome**" in line:
+            current["outcome"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+
+    if current is not None:
+        steps.append(current)
+
+    return steps
+
+
+# ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 
 def cmd_init(args: argparse.Namespace) -> None:
     path = _notes_path(args.case_id, args.output_dir)
+    raw_path = _raw_output_path(args.case_id, args.output_dir)
     module_label = args.module.upper()
     hostname = args.hostname or "—"
     evidence = args.evidence or "—"
@@ -71,6 +140,15 @@ def cmd_init(args: argparse.Namespace) -> None:
     path.write_text(content, encoding="utf-8")
     print(f"[research_notes] Initialized: {path}")
 
+    raw_content = (
+        f"# Raw Command Output — {args.case_id}\n\n"
+        f"Companion file to `{args.case_id}_research_notes.md`.  \n"
+        "Each section is keyed by step ID (`RN-NNN`) for cross-reference with the research notes and final report.\n\n"
+        "---\n\n"
+    )
+    raw_path.write_text(raw_content, encoding="utf-8")
+    print(f"[research_notes] Raw output file initialized: {raw_path}")
+
 
 def cmd_step(args: argparse.Namespace) -> None:
     path = _notes_path(args.case_id, args.output_dir)
@@ -82,13 +160,32 @@ def cmd_step(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     step_num = _step_count(path) + 1
+    step_id  = f"RN-{step_num:03d}"
 
+    # Resolve raw output: --raw-file wins over --raw
+    raw_text: str | None = None
+    if getattr(args, "raw_file", None):
+        raw_file = Path(args.raw_file)
+        if raw_file.exists():
+            raw_text = raw_file.read_text(encoding="utf-8", errors="replace")
+            if getattr(args, "raw", None):
+                print("[research_notes] WARNING: --raw-file takes precedence over --raw", file=sys.stderr)
+        else:
+            print(f"[research_notes] WARNING: --raw-file path not found: {raw_file}", file=sys.stderr)
+            raw_text = getattr(args, "raw", None)
+    else:
+        raw_text = getattr(args, "raw", None)
+
+    # Build inline details block for research notes (key excerpt + reference to companion file)
     raw_block = ""
-    if args.raw:
+    if raw_text:
+        raw_output_filename = f"{args.case_id}_raw_output.md"
+        anchor = step_id.lower().replace("-", "")  # e.g. rn001
         raw_block = (
-            "\n<details><summary>Significant raw output</summary>\n\n"
+            f"\n<details><summary>Key excerpt (full output → "
+            f"[{raw_output_filename}#{anchor}]({raw_output_filename}#{anchor}))</summary>\n\n"
             "```text\n"
-            f"{args.raw}\n"
+            f"{raw_text}\n"
             "```\n\n"
             "</details>\n"
         )
@@ -96,7 +193,7 @@ def cmd_step(args: argparse.Namespace) -> None:
     outcome = f"[ASSUMPTION] {args.outcome}" if getattr(args, "assumption", False) else args.outcome
 
     entry = (
-        f"### [{_now_utc()}] — Step {step_num}: {args.title}\n\n"
+        f"### [{_now_utc()}] — Step {step_num} [{step_id}]: {args.title}\n\n"
         "| | |\n"
         "|---|---|\n"
         f"| **Action** | {args.action} |\n"
@@ -108,7 +205,26 @@ def cmd_step(args: argparse.Namespace) -> None:
 
     with path.open("a", encoding="utf-8") as fh:
         fh.write(entry)
-    print(f"[research_notes] Step {step_num} appended: {args.title}")
+
+    # Always append to companion raw output file
+    raw_path = _raw_output_path(args.case_id, args.output_dir)
+    anchor_heading = f"[{step_id}]"
+    if raw_path.exists():
+        with raw_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"## {anchor_heading} — {args.title}\n\n")
+            fh.write(f"**Action:** {args.action}  \n")
+            fh.write(f"**Timestamp:** {_now_utc()}\n\n")
+            if raw_text:
+                fh.write("```text\n")
+                fh.write(raw_text)
+                if not raw_text.endswith("\n"):
+                    fh.write("\n")
+                fh.write("```\n\n")
+            else:
+                fh.write("*(No raw output captured for this step.)*\n\n")
+            fh.write("---\n\n")
+
+    print(f"[research_notes] Step {step_num} [{step_id}] appended: {args.title}")
 
 
 def cmd_assumption(args: argparse.Namespace) -> None:
@@ -171,7 +287,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--action",     required=True, metavar="TEXT", help="What was run or checked")
     ps.add_argument("--why",        required=True, metavar="TEXT", help="Forensic rationale for this step")
     ps.add_argument("--outcome",    required=True, metavar="TEXT", help="Summary of findings")
-    ps.add_argument("--raw",        metavar="TEXT", help="Significant raw output to include (optional)")
+    ps.add_argument("--raw",        metavar="TEXT", help="Raw output to include as inline excerpt and in companion file (optional)")
+    ps.add_argument("--raw-file",   metavar="PATH", help="Path to file containing full raw output — wins over --raw (avoids shell arg size limits)")
     ps.add_argument("--assumption", action="store_true",           help="Mark this step's outcome as an assumption (prefixes [ASSUMPTION] for the report generator)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
 

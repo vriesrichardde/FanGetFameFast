@@ -40,6 +40,8 @@ except ImportError:
 from pathlib import Path
 from typing import Any
 
+from research_notes import parse_steps as _parse_research_steps
+
 PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
 REPORTS_DIR  = PROJECT_ROOT / "reports"
@@ -3321,6 +3323,36 @@ def convert_to_pdf(
     return False
 
 
+# ── Evidence trail ────────────────────────────────────────────────────────────
+
+def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
+    if not case_id:
+        return []
+    steps = _parse_research_steps(case_id, str(reports_dir))
+    if not steps:
+        return []
+    raw_filename = f"{case_id}_raw_output.md"
+    lines: list[str] = [
+        "---", "",
+        "## Appendix B — Investigation Evidence Trail", "",
+        "Steps recorded in the research notes during this investigation. "
+        f"Full command output for each step is in `{raw_filename}`.", "",
+        "| Step ID | Timestamp | Analysis Step | Outcome |",
+        "|---------|-----------|---------------|---------|",
+    ]
+    for s in steps:
+        sid = f"`{s['id']}`" if s["id"] else "—"
+        outcome = s["outcome"].replace("|", "\\|")
+        lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} |")
+    lines += [
+        "",
+        "*Cross-reference step IDs with the research notes and raw output file "
+        "to verify any conclusion in this report.*",
+        "",
+    ]
+    return lines
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def generate_report(
@@ -3412,6 +3444,7 @@ def generate_report(
     sections.extend(sec_mitre(coverage))
     sections.extend(sec_recommendations(recs))
     sections.extend(sec_appendix(stem, data))
+    sections.extend(_build_evidence_trail(case_id, out_dir))
 
     md_content = "\n".join(sections) + "\n"
 
