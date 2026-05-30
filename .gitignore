@@ -13,6 +13,9 @@ exports/
 # Claude Code local settings (machine-specific paths, MCP servers, credentials)
 .claude/settings.local.json
 
+# Claude Code runtime lock files (ephemeral process state)
+.claude/*.lock
+
 # Python artifacts
 .venv/
 __pycache__/
