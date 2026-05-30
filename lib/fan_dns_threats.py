@@ -1038,8 +1038,10 @@ def main():
     print(f"[dns_threats] Loaded {len(records)} DNS records")
 
     if not records:
+        # No DNS traffic in this capture. Still emit the standard artifacts so
+        # downstream report generation and the combined pipeline find the
+        # expected dns_threats.json (matches the behaviour of sibling modules).
         print("[dns_threats] No DNS records found in PCAP.", file=sys.stderr)
-        sys.exit(0)
 
     print("[dns_threats] Running detection modules...")
     results = {
