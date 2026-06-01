@@ -37,7 +37,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from research_notes import parse_steps as _parse_research_steps
+from research_notes import (
+    parse_steps as _parse_research_steps,
+    parse_events as _parse_research_events,
+    parse_reflections as _parse_research_reflections,
+)
 try:
     from zoneinfo import ZoneInfo
     _CET = ZoneInfo("Europe/Amsterdam")
@@ -383,7 +387,7 @@ def _build_confidence_gaps_section(
 
     a("---")
     a("")
-    a("## 16. Confidence & gaps")
+    a("## 17. Confidence & gaps")
     a("")
     a(f"**Overall investigation confidence: {level}**")
     a("")
@@ -413,6 +417,23 @@ def _build_confidence_gaps_section(
         a("No explicit assumptions recorded. Use `python3 lib/research_notes.py assumption`")
         a("to document analytical judgements for reviewer transparency.")
     a("")
+    a("### Reflection log")
+    a("")
+    reflections = _parse_research_reflections(case_id, str(reports_dir))
+    if reflections:
+        for r in reflections:
+            a(f"**{r['id']} — {r['trigger']}** *(recorded {r['timestamp']})*")
+            a("")
+            if r["reinterpret"] and r["reinterpret"] != "—":
+                a(f"> Re-interpretations: {r['reinterpret']}")
+                a("")
+            if r["open_leads"] and r["open_leads"] != "—":
+                a(f"> Open leads: {r['open_leads']}")
+                a("")
+    else:
+        a("No reflection entries recorded.")
+        a("Use `python3 lib/research_notes.py reflect` to log mid-investigation re-assessments.")
+    a("")
     a("### Recommended follow-up investigations")
     a("")
     for followup in followups:
@@ -422,31 +443,90 @@ def _build_confidence_gaps_section(
     return lines
 
 
+# ── Narrative loader ──────────────────────────────────────────────────────────
+
+def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
+    """Load Claude-generated narrative sections from {case_id}_narrative.md."""
+    path = reports_dir / f"{case_id}_narrative.md"
+    if not path.exists():
+        return {}
+    sections: dict[str, str] = {}
+    current: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = ""
+        elif line.startswith("<!--"):
+            continue
+        elif current is not None:
+            sections[current] += line + "\n"
+    return {k: v.strip() for k, v in sections.items()}
+
+
 # ── Evidence trail ────────────────────────────────────────────────────────────
 
 def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
-    steps = _parse_research_steps(case_id, str(reports_dir))
-    if not steps:
+    steps  = _parse_research_steps(case_id, str(reports_dir))
+    events = _parse_research_events(case_id, str(reports_dir))
+    if not steps and not events:
         return []
-    raw_filename = f"{case_id}_raw_output.md"
+
     lines: list[str] = [
         "---", "",
         "## Appendix B — Investigation Evidence Trail", "",
-        "Steps recorded in the research notes during this investigation. "
-        f"Full command output for each step is in `{raw_filename}`.", "",
-        "| Step ID | Timestamp | Analysis Step | Outcome |",
-        "|---------|-----------|---------------|---------|",
     ]
-    for s in steps:
-        sid = f"`{s['id']}`" if s["id"] else "—"
-        outcome = s["outcome"].replace("|", "\\|")
-        lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} |")
-    lines += [
-        "",
-        "*Cross-reference step IDs with the research notes and raw output file "
-        "to verify any conclusion in this report.*",
-        "",
-    ]
+
+    # Attacker timeline — events sorted by evidence timestamp
+    if events:
+        def _ev_sort(ev: dict) -> tuple:
+            ts = ev.get("timestamp", "")
+            if ts:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
+                    return (0, dt.replace(tzinfo=timezone.utc))
+                except ValueError:
+                    pass
+            from datetime import datetime, timezone
+            return (1, datetime.min.replace(tzinfo=timezone.utc))
+
+        sorted_events = sorted(events, key=_ev_sort)
+        lines += [
+            "### Attacker Timeline", "",
+            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
+            "| Timestamp (UTC) | Severity | Event | Source |",
+            "|-----------------|----------|-------|--------|",
+        ]
+        for ev in sorted_events:
+            ts   = ev.get("timestamp", "") or "—"
+            sev  = ev.get("severity", "info").upper()
+            desc = ev.get("description", "")[:160].replace("|", "\\|")
+            if len(ev.get("description", "")) > 160:
+                desc += "…"
+            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
+            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
+        lines += ["", ""]
+
+    # Analysis timeline — analyst investigation steps
+    if steps:
+        lines += [
+            "### Analysis Timeline", "",
+            "Steps recorded in the research notes during this investigation. "
+            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
+            "| Step ID | Timestamp | Analysis Step | Outcome | Dismissed |",
+            "|---------|-----------|---------------|---------|-----------|",
+        ]
+        for s in steps:
+            sid = f"`{s['id']}`" if s["id"] else "—"
+            outcome   = s["outcome"].replace("|", "\\|")
+            dismissed = (s.get("dismissed") or "—").replace("|", "\\|")
+            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} | {dismissed} |")
+        lines += [
+            "",
+            "*Cross-reference step IDs with the research notes and preserved artifacts "
+            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
+            "",
+        ]
     return lines
 
 
@@ -470,6 +550,9 @@ def _build_markdown(
     """
     lines: list[str] = []
     a = lines.append
+
+    reports_dir = PROJECT_ROOT / "reports"
+    narrative = _load_narrative(case_id, reports_dir)
 
     # ── Header ────────────────────────────────────────────────────────────────
     a(f"# FAME Memory Forensics Report")
@@ -541,10 +624,27 @@ def _build_markdown(
         a("Refer to the Technical Body below for detailed findings extracted from the memory image.")
     a("")
 
+    # ── Incident Timeline (Claude-generated) ─────────────────────────────────
+    timeline_text = narrative.get("attack_timeline", "")
+    a("---")
+    a("")
+    a("## 2. Incident Timeline")
+    a("")
+    a("> Chronological reconstruction of the attack path. Each finding references")
+    a("> the investigation step (RN-NNN) and the preserved source file in")
+    a(f"> `{case_id}_evidence/`.")
+    a("")
+    if timeline_text:
+        a(timeline_text)
+    else:
+        a("> *Incident timeline not yet generated. Run the FAME skill to produce*")
+        a(f"> *`{case_id}_narrative.md` with the `attack_timeline` section.*")
+    a("")
+
     # ── System Profile ────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 2. System profile")
+    a("## 3. System profile")
     a("")
     profile_lines = []
     for src in (data.get("banners", ""), data.get("vmcoreinfo", ""), data.get("windows_info", ""), shutdown_md):
@@ -586,9 +686,17 @@ def _build_markdown(
             a("")
             a(f"## 4. {title}")
             a("")
-            a("> Claude: enhance and elaborate when necessary — flag any processes that")
-            a("> do not belong to the OS baseline, appear in psscan but not pslist (hidden),")
-            a("> or show suspicious parent-child relationships.")
+            proc_narrative = narrative.get("section_processes", "")
+            if proc_narrative:
+                a(proc_narrative)
+                a("")
+            else:
+                a("> Claude: enhance and elaborate when necessary — flag any processes that")
+                a("> do not belong to the OS baseline, appear in psscan but not pslist (hidden),")
+                a("> or show suspicious parent-child relationships.")
+                a("")
+            a(f"> **Source file:** [`{case_id}_evidence/memory/{plugin}.txt`]"
+              f"(./{case_id}_evidence/memory/{plugin}.txt)")
             a("")
             a("```")
             a(content.strip()[:3000])
@@ -605,8 +713,16 @@ def _build_markdown(
             a("")
             a(f"## 5. {title}")
             a("")
-            a("> Claude: enhance and elaborate when necessary — identify any external")
-            a("> connections and cross-reference with OpenCTI / FAN findings.")
+            net_narrative = narrative.get("section_network", "")
+            if net_narrative:
+                a(net_narrative)
+                a("")
+            else:
+                a("> Claude: enhance and elaborate when necessary — identify any external")
+                a("> connections and cross-reference with OpenCTI / FAN findings.")
+                a("")
+            a(f"> **Source file:** [`{case_id}_evidence/memory/{plugin}.txt`]"
+              f"(./{case_id}_evidence/memory/{plugin}.txt)")
             a("")
             a("```")
             a(content.strip()[:3000])
@@ -621,8 +737,16 @@ def _build_markdown(
         a("")
         a("## 6. Code injection analysis (windows.malfind)")
         a("")
-        a("> Claude: enhance and elaborate when necessary — distinguish JIT-compiled")
-        a("> false positives (.NET/Java) from genuine shellcode injection indicators.")
+        mal_narrative = narrative.get("section_malware", "")
+        if mal_narrative:
+            a(mal_narrative)
+            a("")
+        else:
+            a("> Claude: enhance and elaborate when necessary — distinguish JIT-compiled")
+            a("> false positives (.NET/Java) from genuine shellcode injection indicators.")
+            a("")
+        a(f"> **Source file:** [`{case_id}_evidence/memory/malfind.txt`]"
+          f"(./{case_id}_evidence/memory/malfind.txt)")
         a("")
         a("```")
         a(malfind.strip()[:3000])
@@ -716,7 +840,7 @@ def _build_markdown(
     # ── MITRE ATT&CK ─────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 12. MITRE ATT&CK coverage")
+    a("## 13. MITRE ATT&CK coverage")
     a("")
     a("> Claude: enhance and elaborate when necessary — add sub-technique context and")
     a("> procedural examples observed in this investigation for each technique.")
@@ -750,7 +874,7 @@ def _build_markdown(
     # ── IOCs ──────────────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 13. Indicators of compromise")
+    a("## 14. Indicators of compromise")
     a("")
     a("> Claude: enhance and elaborate when necessary — defang all IOC values and add")
     a("> OSINT context or OpenCTI attribution where available.")
@@ -784,7 +908,7 @@ def _build_markdown(
     # ── Recommendations ───────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 15. Recommendations")  # "Recommendations" is the conventional heading — keep cap
+    a("## 16. Recommendations")  # "Recommendations" is the conventional heading — keep cap
     a("")
     a("> Claude: enhance and elaborate when necessary — prioritise by risk and add")
     a("> implementation detail appropriate to the target environment.")
@@ -795,7 +919,6 @@ def _build_markdown(
     a("")
 
     # ── Confidence & Gaps ─────────────────────────────────────────────────────
-    reports_dir = PROJECT_ROOT / "reports"
     lines.extend(_build_confidence_gaps_section(data, case_id, reports_dir, opencti_findings))
 
     # ── Volatility Plugin Status ──────────────────────────────────────────────
@@ -819,22 +942,26 @@ def _build_markdown(
     a("")
     a("## Appendix A — Analysis source files")
     a("")
+    a(f"All artifact files are preserved in `./{case_id}_evidence/memory/` and uploaded")
+    a("to the investigations vault alongside this report. SHA-256 hashes are recorded in the")
+    a("research notes (Appendix B) for chain-of-custody verification.")
+    a("")
     a("| File | Description |")
     a("|------|-------------|")
-    a("| `./analysis/memory/pslist.txt` | Windows process list (EPROCESS walk) |")
-    a("| `./analysis/memory/psscan.txt` | Windows process pool scan (finds hidden/exited) |")
-    a("| `./analysis/memory/linux_pslist.txt` | Linux process list |")
-    a("| `./analysis/memory/cmdline.txt` | Process command lines |")
-    a("| `./analysis/memory/netstat.txt` | Active network connections |")
-    a("| `./analysis/memory/netscan.txt` | Network connection pool scan |")
-    a("| `./analysis/memory/malfind.txt` | Code injection findings |")
-    a("| `./analysis/memory/svcscan.txt` | Services pool scan |")
-    a("| `./analysis/memory/modules.txt` | Kernel modules (linked list) |")
-    a("| `./analysis/memory/modscan.txt` | Kernel modules pool scan |")
-    a("| `./analysis/memory/mem_timeline.txt` | Memory artifact timeline |")
-    a("| `./analysis/memory/proc_baseline.csv` | Process baseline diff (Memory Baseliner) |")
-    a("| `./analysis/memory/drv_baseline.csv` | Driver baseline diff (Memory Baseliner) |")
-    a("| `./analysis/memory/svc_baseline.csv` | Service baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/pslist.txt`](./{case_id}_evidence/memory/pslist.txt) | Windows process list (EPROCESS walk) |")
+    a(f"| [`{case_id}_evidence/memory/psscan.txt`](./{case_id}_evidence/memory/psscan.txt) | Windows process pool scan (finds hidden/exited) |")
+    a(f"| [`{case_id}_evidence/memory/linux_pslist.txt`](./{case_id}_evidence/memory/linux_pslist.txt) | Linux process list |")
+    a(f"| [`{case_id}_evidence/memory/cmdline.txt`](./{case_id}_evidence/memory/cmdline.txt) | Process command lines |")
+    a(f"| [`{case_id}_evidence/memory/netstat.txt`](./{case_id}_evidence/memory/netstat.txt) | Active network connections |")
+    a(f"| [`{case_id}_evidence/memory/netscan.txt`](./{case_id}_evidence/memory/netscan.txt) | Network connection pool scan |")
+    a(f"| [`{case_id}_evidence/memory/malfind.txt`](./{case_id}_evidence/memory/malfind.txt) | Code injection findings |")
+    a(f"| [`{case_id}_evidence/memory/svcscan.txt`](./{case_id}_evidence/memory/svcscan.txt) | Services pool scan |")
+    a(f"| [`{case_id}_evidence/memory/modules.txt`](./{case_id}_evidence/memory/modules.txt) | Kernel modules (linked list) |")
+    a(f"| [`{case_id}_evidence/memory/modscan.txt`](./{case_id}_evidence/memory/modscan.txt) | Kernel modules pool scan |")
+    a(f"| [`{case_id}_evidence/memory/mem_timeline.txt`](./{case_id}_evidence/memory/mem_timeline.txt) | Memory artifact timeline |")
+    a(f"| [`{case_id}_evidence/memory/proc_baseline.csv`](./{case_id}_evidence/memory/proc_baseline.csv) | Process baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/drv_baseline.csv`](./{case_id}_evidence/memory/drv_baseline.csv) | Driver baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/svc_baseline.csv`](./{case_id}_evidence/memory/svc_baseline.csv) | Service baseline diff (Memory Baseliner) |")
     a("")
     a("*All findings derived from memory image analysis as stated. Evidence integrity preserved.*")
     a("")
@@ -1957,6 +2084,7 @@ def generate(
     opencti_findings: str = "",
     fan_summary: str = "",
     fast_summary: str = "",
+    md_only: bool = False,
 ) -> dict[str, Path]:
     """
     Generate the full FAME report suite (Markdown, PDF, PPTX, DOCX).
@@ -1997,35 +2125,40 @@ def generate(
 
     # ── PDF ───────────────────────────────────────────────────────────────────
     pdf_path: Path | None = None
-    try:
-        sys.path.insert(0, str(PROJECT_ROOT / "lib"))
-        from md_to_pdf import convert as md2pdf
-        pdf_path = output_dir / f"{stem}_fame_report.pdf"
-        md2pdf(pdf_source, pdf_path)
-        print(f"[fame] PDF saved: {pdf_path}")
-    except Exception as exc:
-        print(f"[fame] WARNING: PDF generation failed: {exc}")
+    if not md_only:
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "lib"))
+            from md_to_pdf import convert as md2pdf
+            pdf_path = output_dir / f"{stem}_fame_report.pdf"
+            md2pdf(pdf_source, pdf_path)
+            print(f"[fame] PDF saved: {pdf_path}")
+        except Exception as exc:
+            print(f"[fame] WARNING: PDF generation failed: {exc}")
 
     # ── PPTX ──────────────────────────────────────────────────────────────────
-    pptx_path = output_dir / f"{stem}_fame_presentation.pptx"
-    _build_pptx(
-        data, case_id, hostname, image_path or str(analysis_dir),
-        generated_utc, pptx_path, opencti_findings, fan_summary, fast_summary,
-    )
+    pptx_path: Path | None = None
+    if not md_only:
+        pptx_path = output_dir / f"{stem}_fame_presentation.pptx"
+        _build_pptx(
+            data, case_id, hostname, image_path or str(analysis_dir),
+            generated_utc, pptx_path, opencti_findings, fan_summary, fast_summary,
+        )
 
     # ── DOCX ──────────────────────────────────────────────────────────────────
-    docx_path = output_dir / f"{stem}_fame_report.docx"
-    _build_docx(
-        data, case_id, hostname, image_path or str(analysis_dir),
-        generated_utc, docx_path, opencti_findings, fan_summary, fast_summary,
-    )
+    docx_path: Path | None = None
+    if not md_only:
+        docx_path = output_dir / f"{stem}_fame_report.docx"
+        _build_docx(
+            data, case_id, hostname, image_path or str(analysis_dir),
+            generated_utc, docx_path, opencti_findings, fan_summary, fast_summary,
+        )
 
     return {
         "md":       md_path,
         "md_draft": md_draft_path,
         "pdf":      pdf_path,
-        "pptx":     pptx_path if pptx_path.exists() else None,
-        "docx":     docx_path if docx_path.exists() else None,
+        "pptx":     pptx_path if (pptx_path and pptx_path.exists()) else None,
+        "docx":     docx_path if (docx_path and docx_path.exists()) else None,
     }
 
 
@@ -2041,6 +2174,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--opencti",      default="",   metavar="TEXT",  help="OpenCTI enrichment text")
     p.add_argument("--fan-summary",  default="",   metavar="TEXT",  help="FAN (network) summary for cross-module section")
     p.add_argument("--fast-summary", default="",   metavar="TEXT",  help="FAST (storage) summary for cross-module section")
+    p.add_argument("--md-only",      action="store_true",           help="Generate Markdown only — skip PDF, PPTX, DOCX")
     return p
 
 
@@ -2055,6 +2189,7 @@ if __name__ == "__main__":
         opencti_findings = args.opencti,
         fan_summary   = args.fan_summary,
         fast_summary  = args.fast_summary,
+        md_only       = args.md_only,
     )
     print("[fame] Report suite complete:")
     for fmt, p in paths.items():

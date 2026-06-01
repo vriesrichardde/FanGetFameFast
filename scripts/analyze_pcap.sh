@@ -319,6 +319,36 @@ run_step "Bundle artefacts (ZIP)" \
 
 REPORT_ZIP="$REPORTS_TMP/${STEM}_${CASE_ID}_artifacts.zip"
 
+# ── Evidence folder preservation ─────────────────────────────────────────────
+header "Preserving Analysis Artifacts"
+EVIDENCE_DIR="$PROJECT_ROOT/reports/${CASE_ID}_evidence"
+mkdir -p "$EVIDENCE_DIR/analysis"
+rsync -a "$ANALYSIS/" "$EVIDENCE_DIR/analysis/" 2>/dev/null || true
+info "Evidence folder: $EVIDENCE_DIR"
+
+# SHA-256 hashes for key FAN output files
+for artifact_file in \
+    "$EVIDENCE_DIR/analysis/pcap/${STEM}/netflow.csv" \
+    "$EVIDENCE_DIR/analysis/dns_threats/${STEM}/dns_threats.json" \
+    "$EVIDENCE_DIR/analysis/http_threats/${STEM}/http_threats.json" \
+    "$EVIDENCE_DIR/analysis/tls_inspector/${STEM}/tls_sessions.json" \
+    "$EVIDENCE_DIR/analysis/suricata/${STEM}/suricata_results.json"; do
+    if [[ -f "$artifact_file" ]]; then
+        _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
+        _relpath="${CASE_ID}_evidence/analysis/$(realpath --relative-to="$EVIDENCE_DIR/analysis" "$artifact_file" 2>/dev/null || echo "$(basename "$artifact_file")")"
+        python3 "$PROJECT_ROOT/lib/research_notes.py" step \
+            --case-id "$CASE_ID" \
+            --title   "Evidence preserved: $(basename "$artifact_file")" \
+            --action  "sha256sum $artifact_file" \
+            --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
+            --outcome "Preserved to ${_relpath} — SHA-256: ${_hash}" \
+            --output-dir "$PROJECT_ROOT/reports" 2>/dev/null || true
+    fi
+done
+
+EVIDENCE_ZIP="$PROJECT_ROOT/reports/${CASE_ID}_evidence.zip"
+(cd "$PROJECT_ROOT/reports" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q 2>/dev/null) || true
+
 # ── Upload to investigations vault ────────────────────────────────────────────
 header "Uploading to Investigations Vault"
 
@@ -326,9 +356,10 @@ run_step "Upload report" \
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" \
     --case-id "$CASE_ID" \
     --md "$REPORT_MD" \
-    $( [[ -f "$REPORT_PDF"  ]] && echo "--pdf $REPORT_PDF" ) \
-    $( [[ -f "$REPORT_PPTX" ]] && echo "--pptx $REPORT_PPTX" ) \
-    $( [[ -f "$REPORT_ZIP"  ]] && echo "--zip $REPORT_ZIP" )
+    $( [[ -f "$REPORT_PDF"   ]] && echo "--pdf $REPORT_PDF" ) \
+    $( [[ -f "$REPORT_PPTX"  ]] && echo "--pptx $REPORT_PPTX" ) \
+    $( [[ -f "$REPORT_ZIP"   ]] && echo "--zip $REPORT_ZIP" ) \
+    $( [[ -f "$EVIDENCE_ZIP" ]] && echo "--zip $EVIDENCE_ZIP" )
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"

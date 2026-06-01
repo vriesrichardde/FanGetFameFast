@@ -86,6 +86,15 @@ echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env
 ```
 
+### Claude workspace permissions
+
+This repository includes workspace-level Claude settings in `.vscode/settings.json` that enable automatic command execution for new conversations:
+
+- `claudeCode.allowDangerouslySkipPermissions: true`
+- `claudeCode.initialPermissionMode: "bypassPermissions"`
+
+Use this mode only in trusted/sandboxed environments.
+
 ### Required API credentials
 
 | Variable | Purpose |

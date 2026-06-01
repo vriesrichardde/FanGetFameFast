@@ -28,6 +28,8 @@ The three modules interrogate each other. A suspicious network connection found 
 
 Runs on Ubuntu 24.04 LTS (x86-64). See the global `~/.claude/CLAUDE.md` for the full inventory of installed forensic tools, their invocation paths, and shell aliases.
 
+In the devcontainer, evidence files are located at `/home/vscode/evidence`.
+
 ## Module status
 
 | Module | Domain | Status |
@@ -109,7 +111,8 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 | `lib/fan_*.py` | FAN analysis modules (22 protocol detectors + pcap_analyzer, generate_pcap_report) |
 | `lib/generate_fame_report.py` | FAME report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/memory/` Volatility 3 outputs |
 | `lib/generate_fast_report.py` | FAST report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/storage/` and `./exports/` TSK outputs |
-| `lib/generate_combined_report.py` | Unified cross-module report: merges FAN + FAME + FAST reports into a single Markdown + PDF + PPTX + DOCX |
+| `lib/generate_combined_report.py` | Unified cross-module report: merges FAN + FAME + FAST reports into a single Markdown + PDF + PPTX + DOCX; automatically embeds `<case_id>_correlation.md` in Section 2 when present |
+| `lib/correlate_findings.py` | Cross-module correlation engine: matches netscan→PCAP (FAN↔FAME), process→deleted-file (FAME↔FAST), DNS→carved-URL (FAN↔FAST); outputs `<case_id>_correlation.md` + `.json` |
 
 ## Skills
 
@@ -117,8 +120,10 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
+| Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerate all FAME + FAST evidence files and run them sequentially in-session; default dir: `/home/vscode/evidence` |
 | Memory Forensics (FAME) | `/fame` | Run Volatility 3 + Memory Baseliner; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Storage Forensics (FAST) | `/fast` | Run TSK / EWF tools; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
+| Cross-module correlation | `/correlate` | Compute actual FAN↔FAME / FAME↔FAST / FAN↔FAST matches from raw artifact files; run before `./analysis/` is cleaned up |
 | CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Check extracted IPs and FQDNs against OpenCTI; write `opencti_lookup.md` to investigations vault |
 | Vault query (pre-investigation) | `/obsidian-query` | Query the vault before an investigation for known context |
 | Vault recording (post-investigation) | `/obsidian-record` | Record confirmed findings into the vault (also pushes to OpenCTI) |

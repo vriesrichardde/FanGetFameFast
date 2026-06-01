@@ -106,6 +106,20 @@ else
   python -m pip install -r requirements.txt
 fi
 
+# ---------------------------------------------------------------------------
+# Volatility 3 — memory forensics framework (FAME module).
+# Installed via requirements.txt above; verify the entry-point is available.
+# ---------------------------------------------------------------------------
+if python -c "import volatility3" &>/dev/null && command -v vol &>/dev/null; then
+    VOL_VER="$(vol -h 2>&1 | grep -oE 'Volatility [0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    echo "[devcontainer] ${VOL_VER:-Volatility 3} installed (vol entry-point available)"
+else
+    echo "[devcontainer] Installing Volatility 3 explicitly..."
+    python -m pip install --quiet "volatility3>=2.0.0" \
+        && echo "[devcontainer] Volatility 3 $(python -c 'import volatility3; print(volatility3.__version__)') installed" \
+        || echo "[devcontainer] Warning: Volatility 3 install failed — FAME module may not function"
+fi
+
 if command -v npm >/dev/null 2>&1; then
   echo "[devcontainer] Installing Claude Code CLI"
   NPM_GLOBAL_PREFIX="$HOME/.npm-global"

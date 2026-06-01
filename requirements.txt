@@ -28,6 +28,9 @@ scipy>=1.11.0
 # Graph analysis (network topology, correlation graphs)
 networkx>=3.2.0
 
+# Interactive timeline visualisation (HTML output)
+plotly>=5.18.0
+
 # Fuzzy matching (vault dedup, IOC correlation)
 rapidfuzz>=3.0.0
 datasketch>=1.6.0

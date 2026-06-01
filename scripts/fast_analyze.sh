@@ -31,6 +31,7 @@ HOSTNAME_ARG="unknown"
 NO_VAULT=0
 SKIP_UPLOAD=0
 SKIP_MOUNT=0
+MD_ONLY=0
 ANALYSIS_DIR="$PROJECT_ROOT/analysis/storage"
 EXPORTS_DIR="$PROJECT_ROOT/exports"
 REPORTS_DIR="$PROJECT_ROOT/reports"
@@ -47,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --no-vault)   NO_VAULT=1;         shift   ;;
         --no-upload)  SKIP_UPLOAD=1;      shift   ;;
         --no-mount)   SKIP_MOUNT=1;       shift   ;;
+        --md-only)    MD_ONLY=1;          shift   ;;
         -*)
             echo "[fast] Unknown option: $1" >&2
             exit 1
@@ -397,10 +399,37 @@ if [[ $NBD_CONNECTED -eq 1 ]]; then
     NBD_CONNECTED=0
 fi
 
+# ── Evidence folder preservation (before report generation) ───────────────────
+STEM="${CASE_ID//[[:space:]]/_}"
+EVIDENCE_DIR="$REPORTS_DIR/${CASE_ID}_evidence"
+echo "[fast] Preserving analysis artifacts → $EVIDENCE_DIR ..."
+mkdir -p "$EVIDENCE_DIR/storage" "$EVIDENCE_DIR/exports"
+rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/storage/" 2>/dev/null || true
+rsync -a "$EXPORTS_DIR/"  "$EVIDENCE_DIR/exports/"  2>/dev/null || true
+
+for artifact_file in \
+    "$EVIDENCE_DIR/storage/ewfinfo.txt" \
+    "$EVIDENCE_DIR/storage/mmls.txt" \
+    "$EVIDENCE_DIR/storage/fsstat.txt" \
+    "$EVIDENCE_DIR/storage/fls_output.txt" \
+    "$EVIDENCE_DIR/storage/bodyfile.txt" \
+    "$EVIDENCE_DIR/exports/fs_timeline.csv"; do
+    if [[ -f "$artifact_file" ]]; then
+        _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
+        _relname="${CASE_ID}_evidence/$(realpath --relative-to="$EVIDENCE_DIR/.." "$artifact_file")"
+        python3 "$PROJECT_ROOT/lib/research_notes.py" step \
+            --case-id "$CASE_ID" \
+            --title   "Evidence preserved: $(basename "$artifact_file")" \
+            --action  "sha256sum $artifact_file" \
+            --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
+            --outcome "Preserved to ${_relname} — SHA-256: ${_hash}" \
+            --output-dir "$REPORTS_DIR" 2>/dev/null || true
+    fi
+done
+echo "[fast] Evidence folder ready: $EVIDENCE_DIR"
+
 # ── Report generation ─────────────────────────────────────────────────────────
 echo "[fast] Generating reports (Markdown, PDF, PPTX, DOCX)..."
-
-STEM="${CASE_ID//[[:space:]]/_}"
 FAN_MD=""
 FAME_MD=""
 [[ -f "$REPORTS_DIR/${STEM}_incident_report.md" ]] && \
@@ -416,23 +445,8 @@ python3 "$PROJECT_ROOT/lib/generate_fast_report.py" \
     --exports-dir  "$EXPORTS_DIR" \
     --output-dir   "$REPORTS_DIR" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
-    ${FAME_MD:+--fame-summary "$FAME_MD"}
-
-# ── Combined report ───────────────────────────────────────────────────────────
-FAN_EXISTS=0
-FAME_EXISTS=0
-[[ -f "$REPORTS_DIR/${STEM}_incident_report.md" || \
-   -f "$REPORTS_DIR/${STEM}_fan_report.md" ]] && FAN_EXISTS=1
-[[ -f "$REPORTS_DIR/${STEM}_fame_report.md" ]] && FAME_EXISTS=1
-
-if [[ $FAN_EXISTS -eq 1 || $FAME_EXISTS -eq 1 ]]; then
-    echo "[fast] Other module reports detected — generating combined unified report..."
-    python3 "$PROJECT_ROOT/lib/generate_combined_report.py" \
-        --case-id     "$CASE_ID" \
-        --hostname    "$HOSTNAME_ARG" \
-        --reports-dir "$REPORTS_DIR" \
-        --output-dir  "$REPORTS_DIR"
-fi
+    ${FAME_MD:+--fame-summary "$FAME_MD"} \
+    $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
 
 # ── Upload to investigations vault ────────────────────────────────────────────
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
@@ -447,6 +461,13 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=" --pdf $PDF_PATH"
     [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=" --pptx $PPTX_PATH"
     [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=" --docx $DOCX_PATH"
+
+    # Upload evidence folder as ZIP
+    EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
+    if [[ -d "$EVIDENCE_DIR" ]]; then
+        (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
+            UPLOAD_ARGS+=" --zip $EVIDENCE_ZIP"
+    fi
 
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
         echo "[fast] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."

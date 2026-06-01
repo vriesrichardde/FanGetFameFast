@@ -33,6 +33,7 @@ CASE_ID=""
 HOSTNAME_ARG="unknown"
 NO_VAULT=0
 SKIP_UPLOAD=0
+MD_ONLY=0
 ANALYSIS_DIR="$PROJECT_ROOT/analysis/memory"
 EXPORTS_DIR="$PROJECT_ROOT/exports"
 REPORTS_DIR="$PROJECT_ROOT/reports"
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --hostname)  HOSTNAME_ARG="$2";  shift 2 ;;
         --no-vault)  NO_VAULT=1;         shift   ;;
         --no-upload) SKIP_UPLOAD=1;      shift   ;;
+        --md-only)   MD_ONLY=1;          shift   ;;
         -*)
             echo "[fame] Unknown option: $1" >&2
             exit 1
@@ -450,13 +452,46 @@ else
     echo "[fame]            pip3 install -r /opt/EVTXtract/requirements.txt"
 fi
 
+# ── Evidence folder preservation (before report generation) ───────────────────
+STEM="${CASE_ID//[[:space:]]/_}"
+EVIDENCE_DIR="$REPORTS_DIR/${CASE_ID}_evidence"
+echo "[fame] Preserving analysis artifacts → $EVIDENCE_DIR ..."
+mkdir -p "$EVIDENCE_DIR/memory"
+rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/memory/" 2>/dev/null || true
+
+for artifact_file in \
+    "$EVIDENCE_DIR/memory/pslist.txt" \
+    "$EVIDENCE_DIR/memory/psscan.txt" \
+    "$EVIDENCE_DIR/memory/netstat.txt" \
+    "$EVIDENCE_DIR/memory/netscan.txt" \
+    "$EVIDENCE_DIR/memory/malfind.txt" \
+    "$EVIDENCE_DIR/memory/cmdline.txt" \
+    "$EVIDENCE_DIR/memory/svcscan.txt" \
+    "$EVIDENCE_DIR/memory/modules.txt" \
+    "$EVIDENCE_DIR/memory/mem_timeline.txt" \
+    "$EVIDENCE_DIR/memory/proc_baseline.csv" \
+    "$EVIDENCE_DIR/memory/drv_baseline.csv" \
+    "$EVIDENCE_DIR/memory/svc_baseline.csv"; do
+    if [[ -f "$artifact_file" ]]; then
+        _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
+        _relpath="${CASE_ID}_evidence/memory/$(basename "$artifact_file")"
+        python3 "$PROJECT_ROOT/lib/research_notes.py" step \
+            --case-id "$CASE_ID" \
+            --title   "Evidence preserved: $(basename "$artifact_file")" \
+            --action  "sha256sum $artifact_file" \
+            --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
+            --outcome "Preserved to ${_relpath} — SHA-256: ${_hash}" \
+            --output-dir "$REPORTS_DIR" 2>/dev/null || true
+    fi
+done
+echo "[fame] Evidence folder ready: $EVIDENCE_DIR"
+
 # ── Report generation ─────────────────────────────────────────────────────────
 echo "[fame] Generating reports (Markdown, PDF, PPTX, DOCX)..."
 
 # Check for existing FAN report to include cross-module summary
 FAN_MD=""
 FAST_MD=""
-STEM="${CASE_ID//[[:space:]]/_}"
 [[ -f "$REPORTS_DIR/${STEM}_incident_report.md" ]] && \
     FAN_MD="$(head -60 "$REPORTS_DIR/${STEM}_incident_report.md")"
 [[ -f "$REPORTS_DIR/${STEM}_fast_report.md" ]] && \
@@ -469,22 +504,8 @@ python3 "$PROJECT_ROOT/lib/generate_fame_report.py" \
     --analysis-dir "$ANALYSIS_DIR" \
     --output-dir   "$REPORTS_DIR" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
-    ${FAST_MD:+--fast-summary "$FAST_MD"}
-
-# ── Combined report (if multiple modules have run) ────────────────────────────
-FAN_EXISTS=0
-FAST_EXISTS=0
-[[ -f "$REPORTS_DIR/${STEM}_incident_report.md" || -f "$REPORTS_DIR/${STEM}_fan_report.md" ]] && FAN_EXISTS=1
-[[ -f "$REPORTS_DIR/${STEM}_fast_report.md" ]] && FAST_EXISTS=1
-
-if [[ $FAN_EXISTS -eq 1 || $FAST_EXISTS -eq 1 ]]; then
-    echo "[fame] Other module reports detected — generating combined unified report..."
-    python3 "$PROJECT_ROOT/lib/generate_combined_report.py" \
-        --case-id    "$CASE_ID" \
-        --hostname   "$HOSTNAME_ARG" \
-        --reports-dir "$REPORTS_DIR" \
-        --output-dir  "$REPORTS_DIR"
-fi
+    ${FAST_MD:+--fast-summary "$FAST_MD"} \
+    $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
 
 # ── Upload to investigations vault ────────────────────────────────────────────
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
@@ -503,6 +524,13 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     # Include memory artifact ZIP if created during Linux analysis
     ARTIFACT_ZIP="$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip"
     [[ -f "$ARTIFACT_ZIP" ]] && UPLOAD_ARGS+=" --zip $ARTIFACT_ZIP"
+
+    # Upload evidence folder as a ZIP
+    EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
+    if [[ -d "$EVIDENCE_DIR" ]]; then
+        (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
+            UPLOAD_ARGS+=" --zip $EVIDENCE_ZIP"
+    fi
 
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
         echo "[fame] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."

@@ -14,7 +14,7 @@ investigation:
             the file is uploaded to the investigations vault.
 
 Output path: ./reports/<case_id>_research_notes.md
-Companion:   ./reports/<case_id>_raw_output.md  (full command output, keyed by RN-NNN)
+Raw artifacts: preserved individually in ./reports/<case_id>_evidence/ (with SHA-256).
 The reports/ directory is in .gitignore — notes are never committed to the repo.
 """
 from __future__ import annotations
@@ -39,11 +39,6 @@ def _notes_path(case_id: str, output_dir: str | None) -> Path:
     return d / f"{case_id}_research_notes.md"
 
 
-def _raw_output_path(case_id: str, output_dir: str | None) -> Path:
-    d = Path(output_dir) if output_dir else REPORTS_DIR
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"{case_id}_raw_output.md"
-
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -53,7 +48,21 @@ def _step_count(path: Path) -> int:
     if not path.exists():
         return 0
     return sum(1 for ln in path.read_text(encoding="utf-8").splitlines()
-               if ln.startswith("### ["))
+               if ln.startswith("### [") and "— Step" in ln)
+
+
+def _event_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines()
+               if ln.startswith("### [") and "— Event EVT-" in ln)
+
+
+def _reflect_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines()
+               if ln.startswith("### [") and "— Reflect RF-" in ln)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +106,7 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
                 "action":    "",
                 "why":       "",
                 "outcome":   "",
+                "dismissed": "",
             }
             continue
 
@@ -109,11 +119,115 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
             current["why"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
         elif "| **Outcome**" in line:
             current["outcome"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Dismissed**" in line:
+            current["dismissed"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
 
     if current is not None:
         steps.append(current)
 
     return steps
+
+
+def parse_events(case_id: str, output_dir: str | None = None) -> list[dict]:
+    """Return one dict per logged attacker event:
+    {id, event_num, timestamp, severity, module, description, source_detail}.
+
+    Events written with --no-timestamp have timestamp='' and are excluded from
+    visual timelines but still returned here for the untimed-findings section.
+    """
+    path = _notes_path(case_id, output_dir)
+    if not path.exists():
+        return []
+
+    events: list[dict] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    current: dict | None = None
+
+    for line in lines:
+        # Header: ### [YYYY-MM-DD HH:MM:SS UTC] — Event EVT-NNN [severity] [module]: Description
+        if line.startswith("### [") and "— Event EVT-" in line:
+            if current is not None:
+                events.append(current)
+
+            ts_match  = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\]", line)
+            id_match  = re.search(r"EVT-(\d+)", line)
+            sev_match = re.search(r"\[(critical|high|medium|low|info)\]", line)
+            mod_match = re.search(r"\[(FAN|FAME|FAST)\]", line)
+            desc_match = re.search(r"\]: (.+)$", line)
+
+            event_num = int(id_match.group(1)) if id_match else len(events) + 1
+            current = {
+                "id":           f"EVT-{event_num:03d}" if id_match else None,
+                "event_num":    event_num,
+                "timestamp":    ts_match.group(1) if ts_match else "",
+                "severity":     sev_match.group(1) if sev_match else "info",
+                "module":       mod_match.group(1) if mod_match else "",
+                "description":  desc_match.group(1).strip() if desc_match else line,
+                "source_detail": "",
+            }
+            continue
+
+        if current is None:
+            continue
+
+        if "| **Source**" in line:
+            current["source_detail"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Detail**" in line:
+            detail = line.split("|", 2)[-1].strip().rstrip("|").strip()
+            if current["source_detail"]:
+                current["source_detail"] += " — " + detail
+            else:
+                current["source_detail"] = detail
+
+    if current is not None:
+        events.append(current)
+
+    return events
+
+
+def parse_reflections(case_id: str, output_dir: str | None = None) -> list[dict]:
+    """Return one dict per reflect entry: {id, reflect_num, timestamp, trigger, reinterpret, open_leads}."""
+    path = _notes_path(case_id, output_dir)
+    if not path.exists():
+        return []
+
+    reflections: list[dict] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    current: dict | None = None
+
+    for line in lines:
+        # Header: ### [timestamp] — Reflect RF-NNN: trigger
+        if line.startswith("### [") and "— Reflect RF-" in line:
+            if current is not None:
+                reflections.append(current)
+
+            ts_match   = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\]", line)
+            id_match   = re.search(r"RF-(\d+)", line)
+            trig_match = re.search(r"RF-\d+: (.+)$", line)
+
+            reflect_num = int(id_match.group(1)) if id_match else len(reflections) + 1
+            current = {
+                "id":           f"RF-{reflect_num:03d}" if id_match else None,
+                "reflect_num":  reflect_num,
+                "timestamp":    ts_match.group(1) if ts_match else "",
+                "trigger":      trig_match.group(1).strip() if trig_match else line,
+                "reinterpret":  "",
+                "open_leads":   "",
+            }
+            continue
+
+        if current is None:
+            continue
+
+        if "| **Re-interpretations**" in line:
+            current["reinterpret"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Open leads**" in line:
+            current["open_leads"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+
+    if current is not None:
+        reflections.append(current)
+
+    return reflections
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +236,6 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
 
 def cmd_init(args: argparse.Namespace) -> None:
     path = _notes_path(args.case_id, args.output_dir)
-    raw_path = _raw_output_path(args.case_id, args.output_dir)
     module_label = args.module.upper()
     hostname = args.hostname or "—"
     evidence = args.evidence or "—"
@@ -139,15 +252,6 @@ def cmd_init(args: argparse.Namespace) -> None:
     )
     path.write_text(content, encoding="utf-8")
     print(f"[research_notes] Initialized: {path}")
-
-    raw_content = (
-        f"# Raw Command Output — {args.case_id}\n\n"
-        f"Companion file to `{args.case_id}_research_notes.md`.  \n"
-        "Each section is keyed by step ID (`RN-NNN`) for cross-reference with the research notes and final report.\n\n"
-        "---\n\n"
-    )
-    raw_path.write_text(raw_content, encoding="utf-8")
-    print(f"[research_notes] Raw output file initialized: {raw_path}")
 
 
 def cmd_step(args: argparse.Namespace) -> None:
@@ -176,14 +280,11 @@ def cmd_step(args: argparse.Namespace) -> None:
     else:
         raw_text = getattr(args, "raw", None)
 
-    # Build inline details block for research notes (key excerpt + reference to companion file)
+    # Build inline details block for research notes (key excerpt)
     raw_block = ""
     if raw_text:
-        raw_output_filename = f"{args.case_id}_raw_output.md"
-        anchor = step_id.lower().replace("-", "")  # e.g. rn001
         raw_block = (
-            f"\n<details><summary>Key excerpt (full output → "
-            f"[{raw_output_filename}#{anchor}]({raw_output_filename}#{anchor}))</summary>\n\n"
+            "\n<details><summary>Key excerpt</summary>\n\n"
             "```text\n"
             f"{raw_text}\n"
             "```\n\n"
@@ -191,6 +292,7 @@ def cmd_step(args: argparse.Namespace) -> None:
         )
 
     outcome = f"[ASSUMPTION] {args.outcome}" if getattr(args, "assumption", False) else args.outcome
+    dismissed_row = f"\n| **Dismissed** | {args.dismissed} |" if getattr(args, "dismissed", None) else ""
 
     entry = (
         f"### [{_now_utc()}] — Step {step_num} [{step_id}]: {args.title}\n\n"
@@ -199,30 +301,13 @@ def cmd_step(args: argparse.Namespace) -> None:
         f"| **Action** | {args.action} |\n"
         f"| **Why** | {args.why} |\n"
         f"| **Outcome** | {outcome} |"
+        f"{dismissed_row}"
         f"{raw_block}\n\n"
         "---\n\n"
     )
 
     with path.open("a", encoding="utf-8") as fh:
         fh.write(entry)
-
-    # Always append to companion raw output file
-    raw_path = _raw_output_path(args.case_id, args.output_dir)
-    anchor_heading = f"[{step_id}]"
-    if raw_path.exists():
-        with raw_path.open("a", encoding="utf-8") as fh:
-            fh.write(f"## {anchor_heading} — {args.title}\n\n")
-            fh.write(f"**Action:** {args.action}  \n")
-            fh.write(f"**Timestamp:** {_now_utc()}\n\n")
-            if raw_text:
-                fh.write("```text\n")
-                fh.write(raw_text)
-                if not raw_text.endswith("\n"):
-                    fh.write("\n")
-                fh.write("```\n\n")
-            else:
-                fh.write("*(No raw output captured for this step.)*\n\n")
-            fh.write("---\n\n")
 
     print(f"[research_notes] Step {step_num} [{step_id}] appended: {args.title}")
 
@@ -244,6 +329,77 @@ def cmd_assumption(args: argparse.Namespace) -> None:
     with path.open("a", encoding="utf-8") as fh:
         fh.write(entry)
     print(f"[research_notes] Assumption appended.")
+
+
+def cmd_reflect(args: argparse.Namespace) -> None:
+    path = _notes_path(args.case_id, args.output_dir)
+    if not path.exists():
+        print(
+            f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    reflect_num = _reflect_count(path) + 1
+    reflect_id  = f"RF-{reflect_num:03d}"
+
+    reinterpret = getattr(args, "reinterpret", None) or "—"
+    open_leads  = getattr(args, "open_leads",  None) or "—"
+
+    entry = (
+        f"### [{_now_utc()}] — Reflect {reflect_id}: {args.trigger}\n\n"
+        "| | |\n"
+        "|---|---|\n"
+        f"| **Trigger** | {args.trigger} |\n"
+        f"| **Re-interpretations** | {reinterpret} |\n"
+        f"| **Open leads** | {open_leads} |\n"
+        "\n---\n\n"
+    )
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(entry)
+
+    print(f"[research_notes] Reflect {reflect_num} [{reflect_id}] appended: {args.trigger[:60]}")
+
+
+def cmd_event(args: argparse.Namespace) -> None:
+    path = _notes_path(args.case_id, args.output_dir)
+    if not path.exists():
+        print(
+            f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    event_num = _event_count(path) + 1
+    event_id  = f"EVT-{event_num:03d}"
+    severity  = args.severity
+    module    = args.module
+
+    no_ts = getattr(args, "no_timestamp", False)
+    ts    = "" if no_ts else (getattr(args, "timestamp", None) or _now_utc())
+
+    header_ts = ts if ts else "NO-TIMESTAMP"
+    note_flag = " [no-timestamp]" if no_ts else ""
+
+    source_row = f"| **Source** | {args.source} |\n" if getattr(args, "source", None) else ""
+    detail_row = f"| **Detail** | {args.detail} |\n" if getattr(args, "detail", None) else ""
+
+    entry = (
+        f"### [{header_ts}] — Event {event_id} [{severity}] [{module}]: {args.description}{note_flag}\n\n"
+        "| | |\n"
+        "|---|---|\n"
+        f"| **Timestamp** | {ts or '— (unconfirmed)'} |\n"
+        f"{source_row}"
+        f"{detail_row}"
+        "\n---\n\n"
+    )
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(entry)
+
+    ts_label = ts if ts else "(no confirmed timestamp)"
+    print(f"[research_notes] Event {event_num} [{event_id}] [{severity}] appended: {args.description[:60]} — {ts_label}")
 
 
 def cmd_finalize(args: argparse.Namespace) -> None:
@@ -290,6 +446,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--raw",        metavar="TEXT", help="Raw output to include as inline excerpt and in companion file (optional)")
     ps.add_argument("--raw-file",   metavar="PATH", help="Path to file containing full raw output — wins over --raw (avoids shell arg size limits)")
     ps.add_argument("--assumption", action="store_true",           help="Mark this step's outcome as an assumption (prefixes [ASSUMPTION] for the report generator)")
+    ps.add_argument("--dismissed",  metavar="TEXT", help="What was observed in this output but not flagged as significant, and why (optional)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
 
     # assumption
@@ -304,9 +461,39 @@ def _build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--summary",    required=True, metavar="TEXT", help="Closing summary paragraph")
     pf.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
 
+    # reflect — mid-investigation or pre-finalize structured reflection
+    pr = sub.add_parser("reflect", help="Log a structured reflection: re-interpretations and open leads")
+    pr.add_argument("--case-id",      required=True, metavar="ID",   help="Case ID")
+    pr.add_argument("--trigger",      required=True, metavar="TEXT", help="What prompted this reflection (e.g. 'post-netscan mid-investigation review')")
+    pr.add_argument("--reinterpret",  metavar="TEXT", help="How current findings change interpretation of earlier steps (optional)")
+    pr.add_argument("--open-leads",   metavar="TEXT", help="What needs follow-up that this investigation cannot resolve alone (optional)")
+    pr.add_argument("--output-dir",   metavar="DIR",  help="Output directory (default: ./reports/)")
+
+    # event — log a confirmed attacker action observed in the evidence
+    pe = sub.add_parser("event", help="Log a timestamped attacker-observed event from the evidence")
+    pe.add_argument("--case-id",      required=True, metavar="ID",   help="Case ID")
+    pe.add_argument("--description",  required=True, metavar="TEXT", help="What the attacker did")
+    pe.add_argument("--severity",     required=True, choices=["critical", "high", "medium", "low", "info"])
+    pe.add_argument("--module",       required=True, choices=["FAN", "FAME", "FAST"],
+                    help="Module that observed this event")
+    pe.add_argument("--timestamp",    metavar="YYYY-MM-DD HH:MM:SS UTC",
+                    help="Evidence timestamp (omit with --no-timestamp if unconfirmed)")
+    pe.add_argument("--source",       metavar="TEXT", help="Specific artifact reference (IP, PID, file path)")
+    pe.add_argument("--detail",       metavar="TEXT", help="Additional forensic context")
+    pe.add_argument("--no-timestamp", action="store_true", dest="no_timestamp",
+                    help="Mark as finding without a confirmed timestamp (excluded from visual timeline)")
+    pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/)")
+
     return p
 
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
-    {"init": cmd_init, "step": cmd_step, "assumption": cmd_assumption, "finalize": cmd_finalize}[args.command](args)
+    {
+        "init":       cmd_init,
+        "step":       cmd_step,
+        "assumption": cmd_assumption,
+        "reflect":    cmd_reflect,
+        "finalize":   cmd_finalize,
+        "event":      cmd_event,
+    }[args.command](args)
