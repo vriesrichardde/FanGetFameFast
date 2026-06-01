@@ -202,7 +202,7 @@ _process_file() {
 
     case "$module" in
         FAME)
-            if claude --dangerously-skip-permissions -p "/fame \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
+            if claude -p "/fame \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
                 PASS=$((PASS + 1))
             else
                 status="failed"
@@ -211,7 +211,7 @@ _process_file() {
             fi
             ;;
         FAST)
-            if claude --dangerously-skip-permissions -p "/fast \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
+            if claude -p "/fast \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
                 PASS=$((PASS + 1))
             else
                 status="failed"
