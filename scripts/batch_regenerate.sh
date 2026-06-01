@@ -45,20 +45,6 @@ count_ok=0
 count_fail=0
 count_skip=0
 
-run_step() {
-    local label="$1"; shift
-    if [[ $DRY_RUN -eq 1 ]]; then
-        info "[dry-run] $label"
-        return 0
-    fi
-    if "$@" 2>&1 | sed 's/^/    /'; then
-        (( count_ok++ )) || true
-    else
-        red "  FAILED: $label"
-        (( count_fail++ )) || true
-    fi
-}
-
 # ── Discover cases ────────────────────────────────────────────────────────────
 
 if [[ -n "$SINGLE_CASE" ]]; then
@@ -115,13 +101,15 @@ for CASE_ID in "${case_ids[@]}"; do
     yellow "  Case: $CASE_ID  [module: $MODULE  host: ${HOSTNAME:-unknown}]"
     echo ""
 
+    case_failed=0
+
     # Step 1 — Narrative file
     info "1/3  Generating narrative..."
     python3 "$LIB_DIR/narrative_generator.py" \
         --case-id "$CASE_ID" \
         --reports-dir "$REPORTS_DIR" || {
         red "    WARNING: narrative generation failed for $CASE_ID"
-        (( count_fail++ )) || true
+        case_failed=1
     }
 
     # Step 2 — Board deck PPTX
@@ -132,7 +120,7 @@ for CASE_ID in "${case_ids[@]}"; do
         --hostname "${HOSTNAME:-}" \
         --reports-dir "$REPORTS_DIR" || {
         red "    WARNING: board deck failed for $CASE_ID"
-        (( count_fail++ )) || true
+        case_failed=1
     }
 
     # Step 3 — Re-render PDF from existing markdown
@@ -158,7 +146,7 @@ for CASE_ID in "${case_ids[@]}"; do
                 --subtitle "${HOSTNAME:-}" \
                 2>&1 | sed 's/^/    /' || {
                 red "    WARNING: PDF render failed for $CASE_ID"
-                (( count_fail++ )) || true
+                case_failed=1
             }
         else
             yellow "    No source markdown found — skipping PDF"
@@ -169,8 +157,13 @@ for CASE_ID in "${case_ids[@]}"; do
         (( count_skip++ )) || true
     fi
 
-    (( count_ok++ )) || true
-    green "  Done: $CASE_ID"
+    if (( case_failed )); then
+        (( count_fail++ )) || true
+        red "  Completed with errors: $CASE_ID"
+    else
+        (( count_ok++ )) || true
+        green "  Done: $CASE_ID"
+    fi
     echo ""
 
 done
@@ -200,7 +193,8 @@ echo "║  Batch Complete                                              ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Cases processed : ${#case_ids[@]}"
-echo "  Failures        : $count_fail"
+echo "  Succeeded       : $count_ok"
+echo "  Failed (cases)  : $count_fail"
 echo "  Skipped PDF     : $count_skip"
 echo ""
 

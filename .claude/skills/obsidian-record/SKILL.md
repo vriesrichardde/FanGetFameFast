@@ -17,8 +17,10 @@ rather than replacing existing content. `record_risk`, `record_malware`, and
 
 ## Automatic vault write from a report (primary use)
 
-**Normal use: fully automatic.** `fame_analyze.sh`, `fast_analyze.sh`, and
-`analyze_pcap.sh` all call `lib/vault_writer.py` at the end of their pipelines.
+**Automatic for FAME; manual for FAST and FAN.** `fame_analyze.sh` calls
+`lib/vault_writer.py` automatically at the end of its pipeline. `fast_analyze.sh`
+and `analyze_pcap.sh` do not — run the commands below manually after those
+investigations complete.
 Vault entries are parsed directly from the finalised report Markdown — the
 analyst's reviewed output — so only confirmed findings are recorded.
 
