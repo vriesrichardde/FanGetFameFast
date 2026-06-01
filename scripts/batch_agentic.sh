@@ -205,7 +205,7 @@ _process_file() {
 
     case "$module" in
         FAME)
-            if claude -p "/fame \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
+            if claude -p "/fame \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
                 PASS=$((PASS + 1))
             else
                 status="failed"
@@ -214,7 +214,7 @@ _process_file() {
             fi
             ;;
         FAST)
-            if claude -p "/fast \"$file\" --case-id $case_id --hostname $stem$extra_args"; then
+            if claude -p "/fast \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
                 PASS=$((PASS + 1))
             else
                 status="failed"
