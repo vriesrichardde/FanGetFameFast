@@ -371,7 +371,7 @@ import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
 for c in data.get("cases", []):
-    if c.get("status") == "done":
+    if c.get("status") == "success":
         print(c["case_id"])
 PYEOF
 )

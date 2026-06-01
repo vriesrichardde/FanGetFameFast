@@ -216,7 +216,7 @@ def _build_markdown(
         a("")
         if len(modules_run) > 1:
             a("The following cross-domain observations are candidate correlation points.")
-            a("Run `python3 lib/correlate_findings.py --case-id {case_id}` to compute")
+            a(f"Run `python3 lib/correlate_findings.py --case-id {case_id}` to compute")
             a("actual matches from raw artifact files.")
             a("")
             if fan and fame:
@@ -697,10 +697,10 @@ def _build_docx(
                     _p(clean)
     else:
         _p(
-            "Cross-domain correlation has not yet been computed. Run "
-            "python3 lib/correlate_findings.py --case-id {case_id} to match "
-            "netscan connections to PCAP threats, process images to deleted disk "
-            "entries, and DNS queries to carved URLs."
+            f"Cross-domain correlation has not yet been computed. Run "
+            f"python3 lib/correlate_findings.py --case-id {case_id} to match "
+            f"netscan connections to PCAP threats, process images to deleted disk "
+            f"entries, and DNS queries to carved URLs."
         )
         correlations = []
         if fan and fame:

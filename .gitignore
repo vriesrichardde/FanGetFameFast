@@ -2,6 +2,9 @@
 analysis/
 reports/
 vault/
+FAME-*/
+FAST-*/
+FAN-*/
 graphify-out/
 exports/
 batch_work/
@@ -18,8 +21,11 @@ archive/
 # Claude Code runtime lock files (ephemeral process state)
 .claude/*.lock
 
-# Devcontainer personal config — generated from devcontainer.template.json, never committed
-.devcontainer/devcontainer.json
+# Devcontainer: devcontainer.json uses ${localEnv:FGFF_EVIDENCE_INPUT} — set this
+# env var to your local evidence directory before opening in a devcontainer.
+
+# VS Code workspace settings — contains per-developer Claude Code permission config
+.vscode/settings.json
 
 # Python artifacts
 .venv/

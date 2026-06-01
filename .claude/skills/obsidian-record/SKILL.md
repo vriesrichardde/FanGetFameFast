@@ -4,8 +4,10 @@
 
 Use this skill to write confirmed forensic findings into the Obsidian vault
 (`./vault/`) after an investigation or at any point a fact is established.
-Every `record_*` call is **idempotent**: calling it again with the same identifier
-appends a new timestamped observation block rather than replacing existing content.
+Most `record_*` calls are **idempotent**: `record_ioc`, `record_ttp`, and
+`record_threat_actor` append a new timestamped observation block on each call
+rather than replacing existing content. `record_risk`, `record_malware`, and
+`record_concept` replace the note body on each call.
 
 > **Rule:** Only record confirmed, tool-verified findings. Never write speculation,
 > raw evidence paths, or content from `/cases/`, `/mnt/`, or `/media/` into the vault.
@@ -339,8 +341,9 @@ read at any time for a current snapshot of vault state.
 
 ## Notes
 
-- All `record_*` calls are idempotent — re-running with the same identifier
-  appends a new timestamped observation block rather than replacing existing content.
+- `record_ioc`, `record_ttp`, and `record_threat_actor` are idempotent — re-running
+  appends a new timestamped observation block. `record_risk`, `record_malware`, and
+  `record_concept` replace the existing note body on each call.
 - Severity is propagated at the **maximum** level: a second recording at `high`
   promotes a `medium` note; a `low` recording does not demote a `high` note.
 - Note titles become Obsidian wikilink targets — keep them stable; avoid renaming after creation.

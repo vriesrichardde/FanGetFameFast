@@ -96,7 +96,7 @@ def upload(
     pdf_path: Path | None = None,
     pptx_path: Path | None = None,
     docx_path: Path | None = None,
-    zip_path: Path | None = None,
+    zip_paths: list[Path] | None = None,
     notes_path: Path | None = None,
     host: str = SSH_HOST,
     key: str = SSH_KEY,
@@ -121,8 +121,9 @@ def upload(
     if docx_path and docx_path.exists():
         _up(docx_path, "Word document")
 
-    if zip_path and zip_path.exists():
-        _up(zip_path, "Artefact ZIP")
+    for zp in (zip_paths or []):
+        if zp.exists():
+            _up(zp, "Artefact ZIP")
 
     if notes_path and notes_path.exists():
         _up(notes_path, "Research notes")
@@ -137,7 +138,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pdf",                         metavar="FILE",  help="Local PDF report path (optional)")
     p.add_argument("--pptx",                        metavar="FILE",  help="Local PowerPoint path (optional)")
     p.add_argument("--docx",                        metavar="FILE",  help="Local Word document path (optional)")
-    p.add_argument("--zip",                         metavar="FILE",  help="Local artefact ZIP path (optional)")
+    p.add_argument("--zip",  action="append",        metavar="FILE",  help="Local artefact ZIP path (may be repeated)")
     p.add_argument("--notes",                       metavar="FILE",  help="Local research notes Markdown path (optional)")
     p.add_argument("--host",        default=SSH_HOST,                help=f"SSH target user@host (default: {SSH_HOST}; env: INVESTIGATIONS_SSH_HOST)")
     p.add_argument("--key",         default=SSH_KEY,                 help=f"SSH identity file (default: {SSH_KEY}; env: INVESTIGATIONS_SSH_KEY)")
@@ -175,7 +176,7 @@ if __name__ == "__main__":
             pdf_path    = Path(args.pdf)   if args.pdf   else None,
             pptx_path   = Path(args.pptx)  if args.pptx  else None,
             docx_path   = Path(args.docx)  if args.docx  else None,
-            zip_path    = Path(args.zip)   if args.zip   else None,
+            zip_paths   = [Path(z) for z in args.zip] if args.zip else None,
             notes_path  = Path(args.notes) if args.notes else None,
             host        = host,
             key         = key,

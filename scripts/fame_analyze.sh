@@ -89,16 +89,16 @@ echo "  Case ID  : $CASE_ID"
 echo "  Hostname : $HOSTNAME_ARG"
 echo ""
 
-# ── Vault bootstrap + case opening ───────────────────────────────────────────
+# ── Vault bootstrap ───────────────────────────────────────────────────────────
 python3 "$PROJECT_ROOT/lib/init_vault.py" 2>/dev/null || true
-if [[ $NO_VAULT -eq 0 ]]; then
-    python3 - <<PYEOF 2>/dev/null || echo "[fame] WARNING: Could not open vault case."
-import sys; sys.path.insert(0, "$PROJECT_ROOT/lib")
-from knowledge_extractor import open_case
-open_case("$CASE_ID", "FAME memory forensics investigation of $HOSTNAME_ARG — image: $(basename "$MEMORY_IMAGE")", severity="medium")
-print("[fame] Vault case opened: $CASE_ID")
-PYEOF
-fi
+
+# ── Research notes initialisation ─────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/research_notes.py" init \
+    --case-id    "$CASE_ID" \
+    --module     fame \
+    --evidence   "$MEMORY_IMAGE" \
+    --hostname   "$HOSTNAME_ARG" \
+    --output-dir "$REPORTS_DIR" 2>/dev/null || true
 
 # ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p \

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(bash scripts/batch_regenerate.sh --only-pptx)",
-      "Bash(7z l *)"
-    ],
-    "defaultMode": "bypassPermissions"
-  }
-}

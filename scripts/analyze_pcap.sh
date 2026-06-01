@@ -29,10 +29,11 @@ usage() {
 Usage: analyze_pcap.sh [OPTIONS] /path/to/capture.pcap
 
 Options:
-  --case-id ID      Case ID (default: FAN-YYYYMMDD-HHMMSS)
-  --description D   Case description recorded in the report header
-  --no-vault        Skip all Obsidian vault writes
-  -h, --help        Show this help
+  --case-id ID             Case ID (default: FAN-YYYYMMDD-HHMMSS)
+  --description D          Case description recorded in the report header
+  --no-vault               Skip all Obsidian vault writes
+  --reports-persist-dir D  Persist final reports to DIR in addition to the vault
+  -h, --help               Show this help
 
 All WIP files are written to ./analysis/ and removed after the report
 is uploaded to the investigations vault.
@@ -80,6 +81,13 @@ STEM="${STEM%.pcapng}"
 STEM="${STEM%.pcap}"
 
 [[ -z "$CASE_ID" ]] && CASE_ID="FAN-$(date -u +%Y%m%d-%H%M%S)"
+
+# ── Research notes initialisation ─────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/research_notes.py" init \
+    --case-id    "$CASE_ID" \
+    --module     fan \
+    --evidence   "$PCAP_ABS" \
+    --output-dir "$REPORTS_TMP" 2>/dev/null || true
 
 # ── Update Suricata rules ─────────────────────────────────────────────────────
 header "Updating Suricata Rules"

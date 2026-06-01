@@ -90,13 +90,15 @@ def _discover_case_reports(reports_dir: Path, case_id: str) -> dict[str, str]:
 def _extract_section(md: str, marker: str, max_chars: int = 2000) -> str:
     lines = md.splitlines()
     in_section = False
+    section_level = 0
     collected: list[str] = []
     for line in lines:
         if marker.lower() in line.lower() and line.startswith("#"):
             in_section = True
+            section_level = len(line) - len(line.lstrip("#"))
             continue
         if in_section:
-            if line.startswith("#") and not line.startswith("##"):
+            if line.startswith("#") and (len(line) - len(line.lstrip("#"))) <= section_level:
                 break
             collected.append(line)
     result = "\n".join(collected).strip()

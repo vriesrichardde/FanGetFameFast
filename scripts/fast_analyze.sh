@@ -90,6 +90,14 @@ echo "  Case ID  : $CASE_ID"
 echo "  Hostname : $HOSTNAME_ARG"
 echo ""
 
+# ── Research notes initialisation ─────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/research_notes.py" init \
+    --case-id    "$CASE_ID" \
+    --module     fast \
+    --evidence   "$DISK_IMAGE" \
+    --hostname   "$HOSTNAME_ARG" \
+    --output-dir "$REPORTS_DIR" 2>/dev/null || true
+
 # ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p \
     "$ANALYSIS_DIR" \
