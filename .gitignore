@@ -11,8 +11,11 @@ batch_work/
 *.env
 .soc_env
 
-# Claude Code local settings
-.claude/settings.json
+# Claude Code local settings (machine-specific paths, MCP servers, credentials)
+.claude/settings.local.json
+
+# Claude Code runtime lock files (ephemeral process state)
+.claude/*.lock
 
 # Devcontainer personal config — generated from devcontainer.template.json, never committed
 .devcontainer/devcontainer.json

@@ -26,6 +26,7 @@ TICK="${C_GREEN}✓${C_RESET}"; SKIP="${C_YELLOW}–${C_RESET}"
 section() { echo ""; echo -e "${C_BOLD}${C_CYAN}══════  $*  ══════${C_RESET}"; }
 made()    { echo -e "  ${TICK} created  $*"; }
 exists()  { echo -e "  ${SKIP} exists   $*"; }
+ok()      { echo -e "  ${TICK} $*"; }
 
 # ── Argument defaults ─────────────────────────────────────────────────────────
 # Default layout mirrors the MCP server defaults:
