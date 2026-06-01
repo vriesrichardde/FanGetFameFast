@@ -61,9 +61,10 @@ def _discover_sources(reports_dir: Path, case_id: str) -> dict[str, str]:
     sources: dict[str, str] = {}
 
     patterns = {
-        "fan_md":  [f"{stem}_incident_report.md", f"{stem}_fan_report.md"],
-        "fame_md": [f"{stem}_fame_report.md"],
-        "fast_md": [f"{stem}_fast_report.md"],
+        "fan_md":        [f"{stem}_incident_report.md", f"{stem}_fan_report.md"],
+        "fame_md":       [f"{stem}_fame_report.md"],
+        "fast_md":       [f"{stem}_fast_report.md"],
+        "correlation_md": [f"{stem}_correlation.md"],
     }
     for key, filenames in patterns.items():
         for fn in filenames:
@@ -192,31 +193,49 @@ def _build_markdown(
     a("")
     a("## 2. Cross-domain correlation")
     a("")
-    a("> Claude: enhance and elaborate when necessary — identify events that appear in")
-    a("> two or more evidence domains. For example: a process seen in FAME memory that")
-    a("> also initiated network connections visible in FAN, and whose binary is found")
-    a("> in FAST storage artifacts.")
-    a("")
-    if len(modules_run) > 1:
-        a("The following cross-domain observations are candidate correlation points:")
+    correlation_md = sources.get("correlation_md", "")
+    if correlation_md:
+        a("> Computed by `lib/correlate_findings.py` — actual matches across FAN, FAME, and FAST.")
+        a("> Claude: enhance and elaborate when necessary.")
         a("")
-        if fan and fame:
-            a("- **FAN ↔ FAME:** Cross-reference network connections from the memory")
-            a("  `netscan` output with PCAP flow data — any matching (src_ip, dst_ip, port)")
-            a("  tuple links a specific process to observed network traffic.")
-        if fame and fast:
-            a("- **FAME ↔ FAST:** Cross-reference process image paths from memory")
-            a("  `filescan` / `dlllist` with the `fls` file listing — any path seen in")
-            a("  memory that is deleted on disk is a strong persistence or clean-up indicator.")
-        if fan and fast:
-            a("- **FAN ↔ FAST:** Cross-reference carved URLs/domains from `bulk_extractor`")
-            a("  output with DNS queries observed in the PCAP — matching domains confirm")
-            a("  browser or tool-based C2 contact.")
-        a("")
+        # Include correlation content starting from the first section (skip title + meta table)
+        corr_lines = correlation_md.splitlines()
+        past_meta = False
+        for line in corr_lines:
+            if not past_meta:
+                # The first "---" separator marks the end of the metadata block
+                if line.strip() == "---":
+                    past_meta = True
+                continue
+            a(line)
     else:
-        a("Run all three modules (FAN, FAME, FAST) for the same case ID to generate")
-        a("cross-domain correlation observations.")
+        a("> Claude: enhance and elaborate when necessary — identify events that appear in")
+        a("> two or more evidence domains. For example: a process seen in FAME memory that")
+        a("> also initiated network connections visible in FAN, and whose binary is found")
+        a("> in FAST storage artifacts.")
         a("")
+        if len(modules_run) > 1:
+            a("The following cross-domain observations are candidate correlation points.")
+            a(f"Run `python3 lib/correlate_findings.py --case-id {case_id}` to compute")
+            a("actual matches from raw artifact files.")
+            a("")
+            if fan and fame:
+                a("- **FAN ↔ FAME:** Cross-reference network connections from the memory")
+                a("  `netscan` output with PCAP flow data — any matching (src_ip, dst_ip, port)")
+                a("  tuple links a specific process to observed network traffic.")
+            if fame and fast:
+                a("- **FAME ↔ FAST:** Cross-reference process image paths from memory")
+                a("  `filescan` / `dlllist` with the `fls` file listing — any path seen in")
+                a("  memory that is deleted on disk is a strong persistence or clean-up indicator.")
+            if fan and fast:
+                a("- **FAN ↔ FAST:** Cross-reference carved URLs/domains from `bulk_extractor`")
+                a("  output with DNS queries observed in the PCAP — matching domains confirm")
+                a("  browser or tool-based C2 contact.")
+            a("")
+        else:
+            a("Run all three modules (FAN, FAME, FAST) for the same case ID, then run")
+            a("`python3 lib/correlate_findings.py` to generate cross-domain correlation.")
+            a("")
 
     # ── MITRE ATT&CK (deduplicated union) ─────────────────────────────────────
     a("---")
@@ -419,19 +438,46 @@ def _build_pptx(
     _rect(s, 0, 0, W, Inches(1.1), _MID_NAVY)
     _txt(s, "Cross-domain correlation", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
 
-    correlations = []
-    if fan and fame:
-        correlations.append(("FAN ↔ FAME",
-            "Match netscan process IDs to PCAP flows — links specific processes to observed network traffic"))
-    if fame and fast:
-        correlations.append(("FAME ↔ FAST",
-            "Cross-reference process image paths in memory with deleted file entries on disk"))
-    if fan and fast:
-        correlations.append(("FAN ↔ FAST",
-            "Match carved URLs from bulk_extractor with DNS queries in PCAP"))
-    if len(modules_run) == 3:
-        correlations.append(("FAN + FAME + FAST",
-            "Full kill-chain reconstruction: network delivery → memory execution → disk persistence"))
+    correlation_md = sources.get("correlation_md", "")
+    if correlation_md:
+        # Extract match counts from the confidence table in the correlation report
+        ff_n = mf_n = fd_n = 0
+        for line in correlation_md.splitlines():
+            if "FAN ↔ FAME" in line and "|" in line:
+                m = re.search(r"\|\s*(\d+)\s*\|", line)
+                if m: ff_n = int(m.group(1))
+            elif "FAME ↔ FAST" in line and "|" in line:
+                m = re.search(r"\|\s*(\d+)\s*\|", line)
+                if m: mf_n = int(m.group(1))
+            elif "FAN ↔ FAST" in line and "|" in line:
+                m = re.search(r"\|\s*(\d+)\s*\|", line)
+                if m: fd_n = int(m.group(1))
+        total_corr = ff_n + mf_n + fd_n
+        correlations = [
+            ("FAN ↔ FAME",
+             f"{ff_n} match(es) — process-to-network: links running processes to flagged PCAP connections"),
+            ("FAME ↔ FAST",
+             f"{mf_n} match(es) — process-to-disk: identifies executables deleted post-execution (T1070.004)"),
+            ("FAN ↔ FAST",
+             f"{fd_n} match(es) — domain-to-URL: confirms endpoints seen in both DNS traffic and carved artifacts"),
+        ]
+        if total_corr > 0:
+            correlations.append(("Total matches",
+                f"{total_corr} cross-domain linkages — see {case_id}_correlation.md for full detail"))
+    else:
+        correlations = []
+        if fan and fame:
+            correlations.append(("FAN ↔ FAME",
+                "Match netscan process IDs to PCAP flows — links specific processes to observed network traffic"))
+        if fame and fast:
+            correlations.append(("FAME ↔ FAST",
+                "Cross-reference process image paths in memory with deleted file entries on disk"))
+        if fan and fast:
+            correlations.append(("FAN ↔ FAST",
+                "Match carved URLs from bulk_extractor with DNS queries in PCAP"))
+        if len(modules_run) == 3:
+            correlations.append(("FAN + FAME + FAST",
+                "Run python3 lib/correlate_findings.py to compute full kill-chain correlations"))
 
     if correlations:
         row_h = Inches(1.1)
@@ -443,8 +489,8 @@ def _build_pptx(
             _txt(s, desc, M + Inches(3.0), y + Inches(0.15), W - M - Inches(3.4), row_h,
                  14, color=_TEXT_DARK)
     else:
-        _txt(s, "Run all three modules (FAN, FAME, FAST) for the same case ID to generate "
-             "cross-domain correlation observations.",
+        _txt(s, "Run all three modules (FAN, FAME, FAST) for the same case ID, then run "
+             "python3 lib/correlate_findings.py to generate cross-domain correlation.",
              M, Inches(2.0), W - 2*M, Inches(2.0), 15, color=_TEXT_MID)
     _txt(s, "Claude: enhance and elaborate when necessary", M, H - Inches(0.4), W - 2*M, Inches(0.3),
          9, color=_TEXT_MID)
@@ -621,29 +667,54 @@ def _build_docx(
     # Cross-domain correlation
     _h("2. Cross-domain correlation", 1)
     _note("Claude: enhance and elaborate when necessary — surface any event visible in two or more domains.")
-    _p(
-        "The following correlation points require manual analysis to confirm linkage "
-        "across investigation domains:"
-    )
-    correlations = []
-    if fan and fame:
-        correlations.append("FAN ↔ FAME: Match memory netscan output to PCAP flows by (src_ip, dst_ip, port) — "
-                            "links specific processes to observed network connections.")
-    if fame and fast:
-        correlations.append("FAME ↔ FAST: Cross-reference process image paths from memory filescan with "
-                            "deleted file entries in fls output — any path seen in memory but deleted on disk "
-                            "is a strong persistence or clean-up indicator.")
-    if fan and fast:
-        correlations.append("FAN ↔ FAST: Match carved URLs/domains from bulk_extractor with DNS queries "
-                            "observed in the PCAP — confirms browser or tool-based C2 contact.")
-    if len(modules_run) == 3:
-        correlations.append("Full kill chain: Network delivery (FAN) → memory execution (FAME) → "
-                            "disk persistence (FAST) — reconstruct the complete attack timeline.")
-    for c in correlations:
-        p = doc.add_paragraph(style="List Bullet")
-        p.add_run(c)
-    if not correlations:
-        _p("Run all three modules for the same case ID to generate cross-domain correlation.")
+    correlation_md_docx = sources.get("correlation_md", "")
+    if correlation_md_docx:
+        _note("Computed by lib/correlate_findings.py — actual matches across FAN, FAME, and FAST.")
+        past_meta = False
+        for line in correlation_md_docx.splitlines():
+            stripped = line.strip()
+            if not past_meta:
+                if stripped == "---":
+                    past_meta = True
+                continue
+            if not stripped:
+                doc.add_paragraph()
+            elif stripped.startswith("# "):
+                doc.add_heading(stripped[2:], 2)
+            elif stripped.startswith("## "):
+                doc.add_heading(stripped[3:], 3)
+            elif stripped.startswith("### "):
+                doc.add_heading(stripped[4:], 4)
+            elif stripped.startswith("|"):
+                _p(stripped)
+            elif stripped.startswith("---"):
+                pass
+            else:
+                clean = re.sub(r"\*\*(.*?)\*\*", r"\1", stripped)
+                clean = re.sub(r"\*(.*?)\*",     r"\1", clean)
+                clean = re.sub(r"`(.*?)`",       r"\1", clean)
+                if clean and not clean.startswith(">"):
+                    _p(clean)
+    else:
+        _p(
+            f"Cross-domain correlation has not yet been computed. Run "
+            f"python3 lib/correlate_findings.py --case-id {case_id} to match "
+            f"netscan connections to PCAP threats, process images to deleted disk "
+            f"entries, and DNS queries to carved URLs."
+        )
+        correlations = []
+        if fan and fame:
+            correlations.append("FAN ↔ FAME: Match memory netscan output to PCAP flows — "
+                                "links specific processes to observed network connections.")
+        if fame and fast:
+            correlations.append("FAME ↔ FAST: Cross-reference process image paths from memory "
+                                "filescan with deleted entries in fls output.")
+        if fan and fast:
+            correlations.append("FAN ↔ FAST: Match carved URLs/domains from bulk_extractor "
+                                "with DNS queries in the PCAP.")
+        for c in correlations:
+            p = doc.add_paragraph(style="List Bullet")
+            p.add_run(c)
     doc.add_paragraph()
     doc.add_page_break()
 

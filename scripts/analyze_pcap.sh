@@ -22,16 +22,18 @@ CASE_ID=""
 CASE_DESC=""
 NO_VAULT=0
 REPORT_VERSION=1
+REPORTS_PERSIST_DIR=""
 
 usage() {
     cat <<'EOF'
 Usage: analyze_pcap.sh [OPTIONS] /path/to/capture.pcap
 
 Options:
-  --case-id ID      Case ID (default: FAN-YYYYMMDD-HHMMSS)
-  --description D   Case description recorded in the report header
-  --no-vault        Skip all Obsidian vault writes
-  -h, --help        Show this help
+  --case-id ID             Case ID (default: FAN-YYYYMMDD-HHMMSS)
+  --description D          Case description recorded in the report header
+  --no-vault               Skip all Obsidian vault writes
+  --reports-persist-dir D  Persist final reports to DIR in addition to the vault
+  -h, --help               Show this help
 
 All WIP files are written to ./analysis/ and removed after the report
 is uploaded to the investigations vault.
@@ -41,12 +43,13 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --case-id)      CASE_ID="$2";   shift 2 ;;
-        --description)  CASE_DESC="$2"; shift 2 ;;
-        --no-vault)     NO_VAULT=1;     shift ;;
-        -h|--help)      usage ;;
-        -*)             echo "Unknown option: $1" >&2; exit 1 ;;
-        *)              PCAP_FILE="$1"; shift ;;
+        --case-id)             CASE_ID="$2";               shift 2 ;;
+        --description)         CASE_DESC="$2";             shift 2 ;;
+        --no-vault)            NO_VAULT=1;                 shift   ;;
+        --reports-persist-dir) REPORTS_PERSIST_DIR="$2";  shift 2 ;;
+        -h|--help)             usage ;;
+        -*)                    echo "Unknown option: $1" >&2; exit 1 ;;
+        *)                     PCAP_FILE="$1"; shift ;;
     esac
 done
 
@@ -78,6 +81,13 @@ STEM="${STEM%.pcapng}"
 STEM="${STEM%.pcap}"
 
 [[ -z "$CASE_ID" ]] && CASE_ID="FAN-$(date -u +%Y%m%d-%H%M%S)"
+
+# ── Research notes initialisation ─────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/research_notes.py" init \
+    --case-id    "$CASE_ID" \
+    --module     fan \
+    --evidence   "$PCAP_ABS" \
+    --output-dir "$REPORTS_TMP" 2>/dev/null || true
 
 # ── Update Suricata rules ─────────────────────────────────────────────────────
 header "Updating Suricata Rules"
@@ -317,6 +327,36 @@ run_step "Bundle artefacts (ZIP)" \
 
 REPORT_ZIP="$REPORTS_TMP/${STEM}_${CASE_ID}_artifacts.zip"
 
+# ── Evidence folder preservation ─────────────────────────────────────────────
+header "Preserving Analysis Artifacts"
+EVIDENCE_DIR="$PROJECT_ROOT/reports/${CASE_ID}_evidence"
+mkdir -p "$EVIDENCE_DIR/analysis"
+rsync -a "$ANALYSIS/" "$EVIDENCE_DIR/analysis/" 2>/dev/null || true
+info "Evidence folder: $EVIDENCE_DIR"
+
+# SHA-256 hashes for key FAN output files
+for artifact_file in \
+    "$EVIDENCE_DIR/analysis/pcap/${STEM}/netflow.csv" \
+    "$EVIDENCE_DIR/analysis/dns_threats/${STEM}/dns_threats.json" \
+    "$EVIDENCE_DIR/analysis/http_threats/${STEM}/http_threats.json" \
+    "$EVIDENCE_DIR/analysis/tls_inspector/${STEM}/tls_sessions.json" \
+    "$EVIDENCE_DIR/analysis/suricata/${STEM}/suricata_results.json"; do
+    if [[ -f "$artifact_file" ]]; then
+        _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
+        _relpath="${CASE_ID}_evidence/analysis/$(realpath --relative-to="$EVIDENCE_DIR/analysis" "$artifact_file" 2>/dev/null || echo "$(basename "$artifact_file")")"
+        python3 "$PROJECT_ROOT/lib/research_notes.py" step \
+            --case-id "$CASE_ID" \
+            --title   "Evidence preserved: $(basename "$artifact_file")" \
+            --action  "sha256sum $artifact_file" \
+            --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
+            --outcome "Preserved to ${_relpath} — SHA-256: ${_hash}" \
+            --output-dir "$PROJECT_ROOT/reports" 2>/dev/null || true
+    fi
+done
+
+EVIDENCE_ZIP="$PROJECT_ROOT/reports/${CASE_ID}_evidence.zip"
+(cd "$PROJECT_ROOT/reports" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q 2>/dev/null) || true
+
 # ── Upload to investigations vault ────────────────────────────────────────────
 header "Uploading to Investigations Vault"
 
@@ -324,9 +364,10 @@ run_step "Upload report" \
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" \
     --case-id "$CASE_ID" \
     --md "$REPORT_MD" \
-    $( [[ -f "$REPORT_PDF"  ]] && echo "--pdf $REPORT_PDF" ) \
-    $( [[ -f "$REPORT_PPTX" ]] && echo "--pptx $REPORT_PPTX" ) \
-    $( [[ -f "$REPORT_ZIP"  ]] && echo "--zip $REPORT_ZIP" )
+    $( [[ -f "$REPORT_PDF"   ]] && echo "--pdf $REPORT_PDF" ) \
+    $( [[ -f "$REPORT_PPTX"  ]] && echo "--pptx $REPORT_PPTX" ) \
+    $( [[ -f "$REPORT_ZIP"   ]] && echo "--zip $REPORT_ZIP" ) \
+    $( [[ -f "$EVIDENCE_ZIP" ]] && echo "--zip $EVIDENCE_ZIP" )
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"
@@ -340,6 +381,15 @@ find "$ANALYSIS" -mindepth 2 -maxdepth 2 -type d -name "$STEM" -exec rm -rf {} +
 for mod_dir in "$ANALYSIS"/*/; do
     [[ -d "${mod_dir}${STEM}" ]] && rm -rf "${mod_dir}${STEM}"
 done
+
+# Copy reports to a persistent directory when requested (used by batch_analyze.sh
+# so the batch report generator can read FAN reports after WIP cleanup)
+if [[ -n "$REPORTS_PERSIST_DIR" ]]; then
+    mkdir -p "$REPORTS_PERSIST_DIR"
+    cp -f "$REPORTS_TMP"/*.md  "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    cp -f "$REPORTS_TMP"/*.pdf "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    ok "FAN reports copied to: $REPORTS_PERSIST_DIR"
+fi
 
 # Remove the temporary reports dir
 rm -rf "$REPORTS_TMP"

@@ -28,3 +28,9 @@ export TEAMS_WEBHOOK_URL="https://your-org.webhook.office.com/webhookb2/..."
 
 # ── Perplexity (live threat intel) ───────────────────────────────────────────
 export PERPLEXITY_API_KEY="pplx-..."
+
+# ── Devcontainer evidence mount ───────────────────────────────────────────────
+# Local directory containing memory images (.mem, .raw, .vmem) and disk images
+# (.E01, .vmdk, .dd). Mounted read-only at /home/vscode/evidence inside the
+# container. Must be set before rebuilding the devcontainer.
+export FGFF_EVIDENCE_INPUT="/path/to/your/evidence"

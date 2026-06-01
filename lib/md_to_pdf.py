@@ -32,14 +32,14 @@ _CSS = """
 
 @page {
     size: A4;
-    margin: 0;
+    margin: 0 0 1.2cm 0;
     @bottom-right {
         content: "Page " counter(page) " of " counter(pages);
         font-family: 'Inter', Arial, sans-serif;
         font-size: 8pt;
         color: #9ca3af;
         margin-right: 2cm;
-        margin-bottom: 0.55cm;
+        margin-bottom: 0.3cm;
     }
     @bottom-left {
         content: "CONFIDENTIAL — DFIR INTERNAL USE ONLY";
@@ -47,7 +47,7 @@ _CSS = """
         font-size: 8pt;
         color: #9ca3af;
         margin-left: 2cm;
-        margin-bottom: 0.55cm;
+        margin-bottom: 0.3cm;
     }
 }
 
@@ -91,7 +91,7 @@ body {
     color: white;
     padding: 2.8cm 2.2cm 2cm 2.2cm;
     page-break-after: always;
-    min-height: 100vh;
+    height: 297mm;
     display: flex;
     flex-direction: column;
     justify-content: space-between;

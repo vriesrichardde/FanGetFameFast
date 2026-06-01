@@ -443,7 +443,7 @@ Autopsy is located via `$PATH`, `/opt/autopsy/bin/autopsy`, or `/usr/share/autop
 | `test_mcp_servers.sh` | Verifies all three MCP servers respond to JSON-RPC initialize requests |
 | `install_dependencies.sh` | System and Python dependency installer |
 | `setup_folder_structure.sh` | Creates all required directories and generates `.claude/settings.json` |
-| `set_env_template.sh` | Template for `~/.soc_env` (API credentials) |
+| `templates/set_env_template.sh` | Template for `~/.soc_env` (API credentials and devcontainer mounts) |
 
 ---
 
@@ -913,7 +913,7 @@ closed: 2026-05-01T16:00:00Z   # absent if status is open
 
 ### Environment variables
 
-All variables are set in `~/.soc_env` (template: `scripts/set_env_template.sh`) and sourced from `~/.bashrc`.
+All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`) and sourced from `~/.bashrc`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|

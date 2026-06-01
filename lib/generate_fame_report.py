@@ -36,6 +36,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from research_notes import (
+    parse_steps as _parse_research_steps,
+    parse_events as _parse_research_events,
+    parse_reflections as _parse_research_reflections,
+)
 try:
     from zoneinfo import ZoneInfo
     _CET = ZoneInfo("Europe/Amsterdam")
@@ -96,6 +102,17 @@ def _load_analysis(analysis_dir: Path) -> dict[str, Any]:
         "isf_investigation":  _read_text(analysis_dir / "isf_investigation.txt"),
         "yara_scan":          _read_text(analysis_dir / "yara_scan.txt"),
     }
+    # Merge individual YARA output files (yara_common_malware.txt, yara_pe_analysis.txt, …)
+    # when the consolidated yara_scan.txt is absent (CLI-based YARA runs write separate files)
+    if not data["yara_scan"]:
+        _yara_parts = [
+            _read_text(fname)
+            for fname in sorted(analysis_dir.glob("yara_*.txt"))
+            if fname.name != "yara_scan.txt"
+        ]
+        _yara_parts = [p for p in _yara_parts if p.strip()]
+        if _yara_parts:
+            data["yara_scan"] = "\n\n".join(_yara_parts)
     # Load MemProcFS JSON results
     memprocfs_dir = analysis_dir / "memprocfs"
     memprocfs_results: dict[str, Any] = {}
@@ -154,6 +171,365 @@ def _available_plugins(data: dict[str, Any]) -> list[str]:
     return [k for k, v in data.items() if v and k not in ("proc_baseline", "drv_baseline", "svc_baseline")]
 
 
+# ── Confidence & Gaps helpers ──────────────────────────────────────────────────
+
+def _is_dkom_active(data: dict[str, Any]) -> bool:
+    pslist = data.get("pslist", "")
+    psscan = data.get("psscan", "")
+    # Process rows always start with a numeric PID; header/progress lines do not
+    pslist_procs = [l for l in pslist.splitlines() if l.strip() and l.strip()[0].isdigit()]
+    psscan_procs = [l for l in psscan.splitlines() if l.strip() and l.strip()[0].isdigit()]
+    return not pslist_procs and bool(psscan_procs)
+
+
+_DKOM_AFFECTED = {"pstree", "cmdline", "svcscan", "malfind", "filescan", "hivelist"}
+
+_EXPECTED_PLUGINS: list[tuple[str, str, str]] = [
+    ("Image Type Detection",          "banners",      "OS type unknown — cannot select correct plugin chain"),
+    ("Hidden Process Scan (psscan)",  "psscan",       "Critical — authoritative process list when DKOM active"),
+    ("Active Process List (pslist)",  "pslist",       "EPROCESS walk; empty output confirms DKOM (T1014) active"),
+    ("Process Tree (pstree)",         "pstree",       "Parent-child relationships unavailable"),
+    ("Command Lines (cmdline)",       "cmdline",      "Process command arguments unverifiable"),
+    ("Network Connections (netscan)", "netscan",      "C2 connection pivot source"),
+    ("Kernel Modules (modscan)",      "modscan",      "Rootkit driver detection"),
+    ("Services (svcscan)",            "svcscan",      "Service-based persistence partially blind"),
+    ("Registry (hivelist)",           "hivelist",     "Registry-based persistence unverifiable"),
+    ("Code Injection (malfind)",      "malfind",      "Process injection evidence unavailable"),
+    ("File Handles (filescan)",       "filescan",     "Open file handle enumeration unavailable"),
+    ("YARA Scan",                     "yara_scan",    "Malware signature detection unavailable"),
+    ("Baseline Comparison",           "proc_baseline","Memory Baseliner requires baseline.json"),
+]
+
+
+def _compute_plugin_completeness(data: dict[str, Any], dkom: bool) -> list[dict]:
+    rows = []
+    for label, key, missing_note in _EXPECTED_PLUGINS:
+        val = data.get(key)
+        has_data = bool(val) if not isinstance(val, list) else bool(val)
+
+        if key == "pslist":
+            proc_lines = [l for l in (val or "").splitlines()
+                          if l.strip() and l.strip()[0].isdigit()]
+            if not proc_lines and dkom:
+                rows.append({"step": label, "status": "Empty result",
+                             "notes": "DKOM active — EPROCESS list unlinked by rootkit; not authoritative"})
+                continue
+
+        if dkom and key in _DKOM_AFFECTED:
+            rows.append({"step": label, "status": "Skipped — DKOM active", "notes": missing_note})
+            continue
+
+        if key == "banners" and not has_data:
+            if data.get("windows_info"):
+                rows.append({"step": label, "status": "Complete", "notes": "via windows_info"})
+                continue
+
+        if key == "proc_baseline":
+            rows.append({"step": label, "status": "Complete" if has_data else "Not run",
+                         "notes": "" if has_data else missing_note})
+            continue
+
+        rows.append({"step": label, "status": "Complete" if has_data else "Not run",
+                     "notes": "" if has_data else missing_note})
+    return rows
+
+
+def _detect_gaps(
+    data: dict[str, Any], dkom: bool, case_id: str,
+    reports_dir: Path, opencti_findings: str,
+) -> list[str]:
+    gaps = []
+    if dkom:
+        gaps.append(
+            "**DKOM cascade (T1014):** A rootkit driver suppressed 7 standard Volatility plugins — "
+            "pslist, pstree, cmdline, svcscan, malfind, filescan, and hivelist all returned empty. "
+            "Process-level evidence (command lines, injected regions, service registry entries) is "
+            "unavailable from this image alone. A disk image (FAST) or a secondary memory capture "
+            "with a rootkit-resistant profile would recover this data."
+        )
+    if not data.get("proc_baseline"):
+        gaps.append(
+            "**Memory Baseliner not run:** No known-good baseline was available for comparison. "
+            "Anomalous-but-legitimate processes cannot be distinguished from attacker tooling "
+            "without a baseline from a clean system at the same OS/patch level."
+        )
+    if not data.get("yara_scan"):
+        gaps.append(
+            "**YARA scan not run:** No YARA rules were applied to this image — malware signature "
+            "detection is unavailable. Place `.yar` or `.yara` files in `./yara/` and re-run."
+        )
+    fan_report = reports_dir / f"{case_id}_fan_report.md"
+    if not fan_report.exists():
+        gaps.append(
+            f"**No FAN (network) report for {case_id}:** Extracted C2 IPs have not been confirmed "
+            "in PCAP traffic. A network capture from the same time window would confirm beaconing "
+            "cadence, payload content, and lateral movement targets."
+        )
+    fast_report = reports_dir / f"{case_id}_fast_report.md"
+    if not fast_report.exists():
+        gaps.append(
+            f"**No FAST (storage) report for {case_id}:** Disk-level artifacts — rootkit driver "
+            "presence, browser history, prefetch, MFT entries, and Windows Event Logs — are "
+            "unexamined. The initial infection vector and full persistence mechanism remain unknown."
+        )
+    if not opencti_findings:
+        gaps.append(
+            "**No OpenCTI enrichment:** Extracted IOCs (C2 IPs, process hashes) have not been "
+            "attributed to a known threat actor or campaign. Run `/fan-opencti-lookup` to correlate."
+        )
+    return gaps
+
+
+def _parse_assumptions(case_id: str, reports_dir: Path) -> list[str]:
+    notes_path = reports_dir / f"{case_id}_research_notes.md"
+    if not notes_path.exists():
+        return []
+    assumptions = []
+    for line in notes_path.read_text(encoding="utf-8").splitlines():
+        if "— Assumption:" in line and line.startswith("### ["):
+            text = line.split("— Assumption:", 1)[1].strip()
+            if text:
+                assumptions.append(text)
+        elif "| **Outcome** |" in line and "[ASSUMPTION]" in line:
+            text = line.split("[ASSUMPTION]", 1)[1].strip().rstrip("|").strip()
+            if text:
+                assumptions.append(text)
+    return assumptions
+
+
+def _score_overall_confidence(dkom: bool, data: dict[str, Any]) -> tuple[str, str]:
+    yara_ran = bool(data.get("yara_scan"))
+    baseline_ran = bool(data.get("proc_baseline"))
+    psscan_ran = bool(data.get("psscan"))
+    netscan_ran = bool(data.get("netscan"))
+
+    if not yara_ran and not baseline_ran:
+        return (
+            "LOW",
+            "YARA scan and Memory Baseliner were both unavailable — malware signature detection "
+            "and baseline deviation analysis could not be performed. Key findings rest on "
+            "pool-scan artifacts alone.",
+        )
+    if dkom:
+        return (
+            "MEDIUM",
+            "DKOM (T1014) is active — a rootkit driver unlinked critical process structures from "
+            "the EPROCESS doubly-linked list, suppressing six standard Volatility plugins. "
+            "Pool-scan alternatives (psscan, netscan, modscan) remain authoritative and were used "
+            "as the primary evidence basis. Confidence is MEDIUM because living-off-the-land "
+            "activity and process injection evidence that would normally come from cmdline and "
+            "malfind is absent.",
+        )
+    if psscan_ran and netscan_ran and yara_ran:
+        return (
+            "HIGH",
+            "All critical pool-scan plugins produced results, YARA signatures were applied, "
+            "and no rootkit-induced visibility gaps were detected.",
+        )
+    return (
+        "MEDIUM",
+        "One or more critical analysis steps did not produce results — findings are based on "
+        "available evidence only.",
+    )
+
+
+def _build_followup_investigations(
+    data: dict[str, Any], dkom: bool, case_id: str,
+    reports_dir: Path, opencti_findings: str,
+) -> list[str]:
+    followups = []
+    if not (reports_dir / f"{case_id}_fast_report.md").exists():
+        followups.append(
+            "**[FAST]** Acquire a disk image from the subject host; confirm rootkit driver on "
+            "disk, locate dropper, recover prefetch and MFT entries, and examine Windows Event "
+            "Logs for the initial access vector."
+        )
+    if not (reports_dir / f"{case_id}_fan_report.md").exists():
+        followups.append(
+            "**[FAN]** Capture live traffic or retrieve historical PCAP; confirm C2 beaconing "
+            "to extracted IPs; identify initial delivery mechanism (phishing, drive-by, exploit)."
+        )
+    if not opencti_findings:
+        followups.append(
+            "**[OpenCTI]** Submit extracted C2 IPs and process hashes to OpenCTI; cross-reference "
+            "against known threat actor campaigns and malware families via `/fan-opencti-lookup`."
+        )
+    if dkom:
+        followups.append(
+            "**[Re-image]** If a sandbox is available, detonate the rootkit in isolation to recover "
+            "suppressed process, service, and file-handle artifacts."
+        )
+    if "ESTABLISHED" in data.get("netscan", ""):
+        followups.append(
+            "**[Credential scope]** Rotate all domain credentials accessible from this host; "
+            "check domain controller event logs for lateral movement originating from this machine."
+        )
+    if not followups:
+        followups.append("No specific follow-up investigations identified based on current findings.")
+    return followups
+
+
+def _build_confidence_gaps_section(
+    data: dict[str, Any],
+    case_id: str,
+    reports_dir: Path,
+    opencti_findings: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    a = lines.append
+
+    dkom = _is_dkom_active(data)
+    level, reasoning = _score_overall_confidence(dkom, data)
+    completeness = _compute_plugin_completeness(data, dkom)
+    gaps = _detect_gaps(data, dkom, case_id, reports_dir, opencti_findings)
+    assumptions = _parse_assumptions(case_id, reports_dir)
+    followups = _build_followup_investigations(data, dkom, case_id, reports_dir, opencti_findings)
+
+    a("---")
+    a("")
+    a("## 17. Confidence & gaps")
+    a("")
+    a(f"**Overall investigation confidence: {level}**")
+    a("")
+    a(f"*{reasoning}*")
+    a("")
+    a("### Completeness")
+    a("")
+    a("| Analysis step | Status | Notes |")
+    a("|---|---|---|")
+    for row in completeness:
+        a(f"| {row['step']} | {row['status']} | {row['notes']} |")
+    a("")
+    a("### Data gaps & missing evidence")
+    a("")
+    if gaps:
+        for gap in gaps:
+            a(f"- {gap}")
+    else:
+        a("No significant data gaps identified — all standard analysis steps completed.")
+    a("")
+    a("### Assumptions")
+    a("")
+    if assumptions:
+        for assumption in assumptions:
+            a(f"- {assumption}")
+    else:
+        a("No explicit assumptions recorded. Use `python3 lib/research_notes.py assumption`")
+        a("to document analytical judgements for reviewer transparency.")
+    a("")
+    a("### Reflection log")
+    a("")
+    reflections = _parse_research_reflections(case_id, str(reports_dir))
+    if reflections:
+        for r in reflections:
+            a(f"**{r['id']} — {r['trigger']}** *(recorded {r['timestamp']})*")
+            a("")
+            if r["reinterpret"] and r["reinterpret"] != "—":
+                a(f"> Re-interpretations: {r['reinterpret']}")
+                a("")
+            if r["open_leads"] and r["open_leads"] != "—":
+                a(f"> Open leads: {r['open_leads']}")
+                a("")
+    else:
+        a("No reflection entries recorded.")
+        a("Use `python3 lib/research_notes.py reflect` to log mid-investigation re-assessments.")
+    a("")
+    a("### Recommended follow-up investigations")
+    a("")
+    for followup in followups:
+        a(f"- {followup}")
+    a("")
+
+    return lines
+
+
+# ── Narrative loader ──────────────────────────────────────────────────────────
+
+def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
+    """Load Claude-generated narrative sections from {case_id}_narrative.md."""
+    path = reports_dir / f"{case_id}_narrative.md"
+    if not path.exists():
+        return {}
+    sections: dict[str, str] = {}
+    current: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = ""
+        elif line.startswith("<!--"):
+            continue
+        elif current is not None:
+            sections[current] += line + "\n"
+    return {k: v.strip() for k, v in sections.items()}
+
+
+# ── Evidence trail ────────────────────────────────────────────────────────────
+
+def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
+    steps  = _parse_research_steps(case_id, str(reports_dir))
+    events = _parse_research_events(case_id, str(reports_dir))
+    if not steps and not events:
+        return []
+
+    lines: list[str] = [
+        "---", "",
+        "## Appendix B — Investigation Evidence Trail", "",
+    ]
+
+    # Attacker timeline — events sorted by evidence timestamp
+    if events:
+        def _ev_sort(ev: dict) -> tuple:
+            ts = ev.get("timestamp", "")
+            if ts:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
+                    return (0, dt.replace(tzinfo=timezone.utc))
+                except ValueError:
+                    pass
+            from datetime import datetime, timezone
+            return (1, datetime.min.replace(tzinfo=timezone.utc))
+
+        sorted_events = sorted(events, key=_ev_sort)
+        lines += [
+            "### Attacker Timeline", "",
+            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
+            "| Timestamp (UTC) | Severity | Event | Source |",
+            "|-----------------|----------|-------|--------|",
+        ]
+        for ev in sorted_events:
+            ts   = ev.get("timestamp", "") or "—"
+            sev  = ev.get("severity", "info").upper()
+            desc = ev.get("description", "")[:160].replace("|", "\\|")
+            if len(ev.get("description", "")) > 160:
+                desc += "…"
+            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
+            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
+        lines += ["", ""]
+
+    # Analysis timeline — analyst investigation steps
+    if steps:
+        lines += [
+            "### Analysis Timeline", "",
+            "Steps recorded in the research notes during this investigation. "
+            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
+            "| Step ID | Timestamp | Analysis Step | Outcome | Dismissed |",
+            "|---------|-----------|---------------|---------|-----------|",
+        ]
+        for s in steps:
+            sid = f"`{s['id']}`" if s["id"] else "—"
+            outcome   = s["outcome"].replace("|", "\\|")
+            dismissed = (s.get("dismissed") or "—").replace("|", "\\|")
+            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} | {dismissed} |")
+        lines += [
+            "",
+            "*Cross-reference step IDs with the research notes and preserved artifacts "
+            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
+            "",
+        ]
+    return lines
+
+
 # ── Markdown generation ────────────────────────────────────────────────────────
 
 def _build_markdown(
@@ -174,6 +550,9 @@ def _build_markdown(
     """
     lines: list[str] = []
     a = lines.append
+
+    reports_dir = PROJECT_ROOT / "reports"
+    narrative = _load_narrative(case_id, reports_dir)
 
     # ── Header ────────────────────────────────────────────────────────────────
     a(f"# FAME Memory Forensics Report")
@@ -245,10 +624,27 @@ def _build_markdown(
         a("Refer to the Technical Body below for detailed findings extracted from the memory image.")
     a("")
 
+    # ── Incident Timeline (Claude-generated) ─────────────────────────────────
+    timeline_text = narrative.get("attack_timeline", "")
+    a("---")
+    a("")
+    a("## 2. Incident Timeline")
+    a("")
+    a("> Chronological reconstruction of the attack path. Each finding references")
+    a("> the investigation step (RN-NNN) and the preserved source file in")
+    a(f"> `{case_id}_evidence/`.")
+    a("")
+    if timeline_text:
+        a(timeline_text)
+    else:
+        a("> *Incident timeline not yet generated. Run the FAME skill to produce*")
+        a(f"> *`{case_id}_narrative.md` with the `attack_timeline` section.*")
+    a("")
+
     # ── System Profile ────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 2. System profile")
+    a("## 3. System profile")
     a("")
     profile_lines = []
     for src in (data.get("banners", ""), data.get("vmcoreinfo", ""), data.get("windows_info", ""), shutdown_md):
@@ -290,9 +686,17 @@ def _build_markdown(
             a("")
             a(f"## 4. {title}")
             a("")
-            a("> Claude: enhance and elaborate when necessary — flag any processes that")
-            a("> do not belong to the OS baseline, appear in psscan but not pslist (hidden),")
-            a("> or show suspicious parent-child relationships.")
+            proc_narrative = narrative.get("section_processes", "")
+            if proc_narrative:
+                a(proc_narrative)
+                a("")
+            else:
+                a("> Claude: enhance and elaborate when necessary — flag any processes that")
+                a("> do not belong to the OS baseline, appear in psscan but not pslist (hidden),")
+                a("> or show suspicious parent-child relationships.")
+                a("")
+            a(f"> **Source file:** [`{case_id}_evidence/memory/{plugin}.txt`]"
+              f"(./{case_id}_evidence/memory/{plugin}.txt)")
             a("")
             a("```")
             a(content.strip()[:3000])
@@ -309,8 +713,16 @@ def _build_markdown(
             a("")
             a(f"## 5. {title}")
             a("")
-            a("> Claude: enhance and elaborate when necessary — identify any external")
-            a("> connections and cross-reference with OpenCTI / FAN findings.")
+            net_narrative = narrative.get("section_network", "")
+            if net_narrative:
+                a(net_narrative)
+                a("")
+            else:
+                a("> Claude: enhance and elaborate when necessary — identify any external")
+                a("> connections and cross-reference with OpenCTI / FAN findings.")
+                a("")
+            a(f"> **Source file:** [`{case_id}_evidence/memory/{plugin}.txt`]"
+              f"(./{case_id}_evidence/memory/{plugin}.txt)")
             a("")
             a("```")
             a(content.strip()[:3000])
@@ -325,8 +737,16 @@ def _build_markdown(
         a("")
         a("## 6. Code injection analysis (windows.malfind)")
         a("")
-        a("> Claude: enhance and elaborate when necessary — distinguish JIT-compiled")
-        a("> false positives (.NET/Java) from genuine shellcode injection indicators.")
+        mal_narrative = narrative.get("section_malware", "")
+        if mal_narrative:
+            a(mal_narrative)
+            a("")
+        else:
+            a("> Claude: enhance and elaborate when necessary — distinguish JIT-compiled")
+            a("> false positives (.NET/Java) from genuine shellcode injection indicators.")
+            a("")
+        a(f"> **Source file:** [`{case_id}_evidence/memory/malfind.txt`]"
+          f"(./{case_id}_evidence/memory/malfind.txt)")
         a("")
         a("```")
         a(malfind.strip()[:3000])
@@ -420,7 +840,7 @@ def _build_markdown(
     # ── MITRE ATT&CK ─────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 12. MITRE ATT&CK coverage")
+    a("## 13. MITRE ATT&CK coverage")
     a("")
     a("> Claude: enhance and elaborate when necessary — add sub-technique context and")
     a("> procedural examples observed in this investigation for each technique.")
@@ -454,7 +874,7 @@ def _build_markdown(
     # ── IOCs ──────────────────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 13. Indicators of compromise")
+    a("## 14. Indicators of compromise")
     a("")
     a("> Claude: enhance and elaborate when necessary — defang all IOC values and add")
     a("> OSINT context or OpenCTI attribution where available.")
@@ -488,7 +908,7 @@ def _build_markdown(
     # ── Recommendations ───────────────────────────────────────────────────────
     a("---")
     a("")
-    a("## 15. Recommendations")  # "Recommendations" is the conventional heading — keep cap
+    a("## 16. Recommendations")  # "Recommendations" is the conventional heading — keep cap
     a("")
     a("> Claude: enhance and elaborate when necessary — prioritise by risk and add")
     a("> implementation detail appropriate to the target environment.")
@@ -498,11 +918,14 @@ def _build_markdown(
         a(f"{i}. {rec}")
     a("")
 
+    # ── Confidence & Gaps ─────────────────────────────────────────────────────
+    lines.extend(_build_confidence_gaps_section(data, case_id, reports_dir, opencti_findings))
+
     # ── Volatility Plugin Status ──────────────────────────────────────────────
     if "Volatility 3 Plugin Status" in shutdown_md:
         a("---")
         a("")
-        a("## 16. Volatility 3 plugin status")
+        a("## 17. Volatility 3 plugin status")
         a("")
         in_section = False
         for line in shutdown_md.splitlines():
@@ -519,25 +942,32 @@ def _build_markdown(
     a("")
     a("## Appendix A — Analysis source files")
     a("")
+    a(f"All artifact files are preserved in `./{case_id}_evidence/memory/` and uploaded")
+    a("to the investigations vault alongside this report. SHA-256 hashes are recorded in the")
+    a("research notes (Appendix B) for chain-of-custody verification.")
+    a("")
     a("| File | Description |")
     a("|------|-------------|")
-    a("| `./analysis/memory/pslist.txt` | Windows process list (EPROCESS walk) |")
-    a("| `./analysis/memory/psscan.txt` | Windows process pool scan (finds hidden/exited) |")
-    a("| `./analysis/memory/linux_pslist.txt` | Linux process list |")
-    a("| `./analysis/memory/cmdline.txt` | Process command lines |")
-    a("| `./analysis/memory/netstat.txt` | Active network connections |")
-    a("| `./analysis/memory/netscan.txt` | Network connection pool scan |")
-    a("| `./analysis/memory/malfind.txt` | Code injection findings |")
-    a("| `./analysis/memory/svcscan.txt` | Services pool scan |")
-    a("| `./analysis/memory/modules.txt` | Kernel modules (linked list) |")
-    a("| `./analysis/memory/modscan.txt` | Kernel modules pool scan |")
-    a("| `./analysis/memory/mem_timeline.txt` | Memory artifact timeline |")
-    a("| `./analysis/memory/proc_baseline.csv` | Process baseline diff (Memory Baseliner) |")
-    a("| `./analysis/memory/drv_baseline.csv` | Driver baseline diff (Memory Baseliner) |")
-    a("| `./analysis/memory/svc_baseline.csv` | Service baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/pslist.txt`](./{case_id}_evidence/memory/pslist.txt) | Windows process list (EPROCESS walk) |")
+    a(f"| [`{case_id}_evidence/memory/psscan.txt`](./{case_id}_evidence/memory/psscan.txt) | Windows process pool scan (finds hidden/exited) |")
+    a(f"| [`{case_id}_evidence/memory/linux_pslist.txt`](./{case_id}_evidence/memory/linux_pslist.txt) | Linux process list |")
+    a(f"| [`{case_id}_evidence/memory/cmdline.txt`](./{case_id}_evidence/memory/cmdline.txt) | Process command lines |")
+    a(f"| [`{case_id}_evidence/memory/netstat.txt`](./{case_id}_evidence/memory/netstat.txt) | Active network connections |")
+    a(f"| [`{case_id}_evidence/memory/netscan.txt`](./{case_id}_evidence/memory/netscan.txt) | Network connection pool scan |")
+    a(f"| [`{case_id}_evidence/memory/malfind.txt`](./{case_id}_evidence/memory/malfind.txt) | Code injection findings |")
+    a(f"| [`{case_id}_evidence/memory/svcscan.txt`](./{case_id}_evidence/memory/svcscan.txt) | Services pool scan |")
+    a(f"| [`{case_id}_evidence/memory/modules.txt`](./{case_id}_evidence/memory/modules.txt) | Kernel modules (linked list) |")
+    a(f"| [`{case_id}_evidence/memory/modscan.txt`](./{case_id}_evidence/memory/modscan.txt) | Kernel modules pool scan |")
+    a(f"| [`{case_id}_evidence/memory/mem_timeline.txt`](./{case_id}_evidence/memory/mem_timeline.txt) | Memory artifact timeline |")
+    a(f"| [`{case_id}_evidence/memory/proc_baseline.csv`](./{case_id}_evidence/memory/proc_baseline.csv) | Process baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/drv_baseline.csv`](./{case_id}_evidence/memory/drv_baseline.csv) | Driver baseline diff (Memory Baseliner) |")
+    a(f"| [`{case_id}_evidence/memory/svc_baseline.csv`](./{case_id}_evidence/memory/svc_baseline.csv) | Service baseline diff (Memory Baseliner) |")
     a("")
     a("*All findings derived from memory image analysis as stated. Evidence integrity preserved.*")
     a("")
+
+    # ── Evidence Trail ────────────────────────────────────────────────────────
+    lines.extend(_build_evidence_trail(case_id, reports_dir))
 
     return "\n".join(lines)
 
@@ -1654,11 +2084,15 @@ def generate(
     opencti_findings: str = "",
     fan_summary: str = "",
     fast_summary: str = "",
+    md_only: bool = False,
 ) -> dict[str, Path]:
     """
     Generate the full FAME report suite (Markdown, PDF, PPTX, DOCX).
 
-    Returns dict with keys: md, pdf, pptx, docx — each a Path (or None if skipped).
+    Returns dict with keys: md, md_draft, pdf, pptx, docx — each a Path (or None).
+    If the primary Markdown report already exists (analyst may have enhanced it),
+    the new auto-generated content is written to <case_id>_fame_report_generated.md
+    and md_draft points to that file; md always points to the primary report path.
     """
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "memory")
     output_dir   = output_dir   or (PROJECT_ROOT / "reports")
@@ -1674,39 +2108,57 @@ def generate(
         generated_utc, opencti_findings, fan_summary, fast_summary,
     )
     md_path = output_dir / f"{stem}_fame_report.md"
-    md_path.write_text(md_text)
-    print(f"[fame] Markdown saved: {md_path}")
+    md_draft_path: Path | None = None
+
+    if md_path.exists():
+        # Analyst may have enhanced the primary report — write new auto-generated
+        # content to a draft file so they can review and promote it if desired.
+        md_draft_path = output_dir / f"{stem}_fame_report_generated.md"
+        md_draft_path.write_text(md_text)
+        pdf_source = md_draft_path
+        print(f"[fame] Existing report preserved: {md_path}")
+        print(f"[fame] New auto-generated draft:  {md_draft_path}")
+    else:
+        md_path.write_text(md_text)
+        pdf_source = md_path
+        print(f"[fame] Markdown saved: {md_path}")
 
     # ── PDF ───────────────────────────────────────────────────────────────────
     pdf_path: Path | None = None
-    try:
-        sys.path.insert(0, str(PROJECT_ROOT / "lib"))
-        from md_to_pdf import convert as md2pdf
-        pdf_path = output_dir / f"{stem}_fame_report.pdf"
-        md2pdf(md_path, pdf_path)
-        print(f"[fame] PDF saved: {pdf_path}")
-    except Exception as exc:
-        print(f"[fame] WARNING: PDF generation failed: {exc}")
+    if not md_only:
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "lib"))
+            from md_to_pdf import convert as md2pdf
+            pdf_path = output_dir / f"{stem}_fame_report.pdf"
+            md2pdf(pdf_source, pdf_path)
+            print(f"[fame] PDF saved: {pdf_path}")
+        except Exception as exc:
+            print(f"[fame] WARNING: PDF generation failed: {exc}")
 
     # ── PPTX ──────────────────────────────────────────────────────────────────
-    pptx_path = output_dir / f"{stem}_fame_presentation.pptx"
-    _build_pptx(
-        data, case_id, hostname, image_path or str(analysis_dir),
-        generated_utc, pptx_path, opencti_findings, fan_summary, fast_summary,
-    )
+    pptx_path: Path | None = None
+    if not md_only:
+        pptx_path = output_dir / f"{stem}_fame_presentation.pptx"
+        _build_pptx(
+            data, case_id, hostname, image_path or str(analysis_dir),
+            generated_utc, pptx_path, opencti_findings, fan_summary, fast_summary,
+        )
 
     # ── DOCX ──────────────────────────────────────────────────────────────────
-    docx_path = output_dir / f"{stem}_fame_report.docx"
-    _build_docx(
-        data, case_id, hostname, image_path or str(analysis_dir),
-        generated_utc, docx_path, opencti_findings, fan_summary, fast_summary,
-    )
+    docx_path: Path | None = None
+    if not md_only:
+        docx_path = output_dir / f"{stem}_fame_report.docx"
+        _build_docx(
+            data, case_id, hostname, image_path or str(analysis_dir),
+            generated_utc, docx_path, opencti_findings, fan_summary, fast_summary,
+        )
 
     return {
-        "md":   md_path,
-        "pdf":  pdf_path,
-        "pptx": pptx_path if pptx_path.exists() else None,
-        "docx": docx_path if docx_path.exists() else None,
+        "md":       md_path,
+        "md_draft": md_draft_path,
+        "pdf":      pdf_path,
+        "pptx":     pptx_path if (pptx_path and pptx_path.exists()) else None,
+        "docx":     docx_path if (docx_path and docx_path.exists()) else None,
     }
 
 
@@ -1722,6 +2174,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--opencti",      default="",   metavar="TEXT",  help="OpenCTI enrichment text")
     p.add_argument("--fan-summary",  default="",   metavar="TEXT",  help="FAN (network) summary for cross-module section")
     p.add_argument("--fast-summary", default="",   metavar="TEXT",  help="FAST (storage) summary for cross-module section")
+    p.add_argument("--md-only",      action="store_true",           help="Generate Markdown only — skip PDF, PPTX, DOCX")
     return p
 
 
@@ -1736,6 +2189,7 @@ if __name__ == "__main__":
         opencti_findings = args.opencti,
         fan_summary   = args.fan_summary,
         fast_summary  = args.fast_summary,
+        md_only       = args.md_only,
     )
     print("[fame] Report suite complete:")
     for fmt, p in paths.items():

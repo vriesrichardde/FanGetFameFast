@@ -37,17 +37,23 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 
 # ── Colour palette (RGB tuples) ────────────────────────────────────────────────
+# Board-level cybersecurity dark theme
 
-_DARK_NAVY  = (0x0f, 0x17, 0x2a)
-_MID_NAVY   = (0x1e, 0x3a, 0x5f)
-_BLUE       = (0x1d, 0x4e, 0xd8)
-_LIGHT_BLUE = (0x93, 0xc5, 0xfd)
-_WHITE      = (0xff, 0xff, 0xff)
-_LIGHT_BG   = (0xf8, 0xfa, 0xfc)
-_ROW_ALT    = (0xf1, 0xf5, 0xf9)
-_TEXT_DARK  = (0x1f, 0x29, 0x37)
-_TEXT_MID   = (0x6b, 0x72, 0x80)
-_AMBER      = (0xfb, 0xbf, 0x24)
+_DARK_NAVY  = (0x0a, 0x16, 0x28)   # slide background
+_MID_NAVY   = (0x13, 0x2a, 0x4a)   # slightly lighter panel/card backgrounds
+_BLUE       = (0x15, 0x65, 0xc0)   # title bars, accent shapes
+_ELECTRIC   = (0x29, 0x79, 0xff)   # highlights, key numbers, ticks
+_LIGHT_BLUE = (0x90, 0xca, 0xf9)   # secondary highlights
+_WHITE      = (0xff, 0xff, 0xff)   # primary body text
+_LIGHT      = (0xb0, 0xbe, 0xc5)   # secondary / de-emphasised text
+_ALERT      = (0xff, 0x52, 0x52)   # risk / warning indicators
+_AMBER      = (0xfb, 0xbf, 0x24)   # classification / caution
+
+# Legacy aliases (keep for compatibility with severity tables)
+_LIGHT_BG   = _MID_NAVY
+_ROW_ALT    = (0x0f, 0x1e, 0x36)
+_TEXT_DARK  = _WHITE
+_TEXT_MID   = _LIGHT
 
 _SEV_RGB = {
     "critical": (0xef, 0x44, 0x44),
@@ -226,19 +232,20 @@ def _text_lines(slide, lines: list[tuple], left, top, width, height,
 
 
 def _header_bar(slide, title: str, case_id: str, W, H) -> None:
-    """Dark navy header bar with slide title and case ID (used on content slides)."""
+    """Blue title bar on dark-navy slide (content slides)."""
     from pptx.util import Inches, Pt
     from pptx.enum.text import PP_ALIGN
-    BAR_H = Inches(0.6)
-    _rect(slide, 0, 0, W, BAR_H, fill=_DARK_NAVY)
-    # Left accent stripe
-    _rect(slide, 0, 0, Inches(0.06), BAR_H, fill=_BLUE)
+    BAR_H = Inches(0.65)
+    _rect(slide, 0, 0, W, BAR_H, fill=_BLUE)
+    # Thin electric-blue left accent
+    _rect(slide, 0, 0, Inches(0.06), BAR_H, fill=_ELECTRIC)
     # Title
-    _text(slide, title, Inches(0.2), Inches(0.05), Inches(9), Inches(0.5),
-          size=16, bold=True, color=_WHITE)
+    _text(slide, title, Inches(0.18), Inches(0.07), Inches(10), Inches(0.52),
+          size=18, bold=True, color=_WHITE)
     # Case ID right-aligned
-    _text(slide, case_id, Inches(9.33), Inches(0.1), Inches(3.8), Inches(0.4),
-          size=10, color=(0x93, 0xc5, 0xfd), align=__import__("pptx.enum.text", fromlist=["PP_ALIGN"]).PP_ALIGN.RIGHT)
+    _text(slide, case_id, Inches(10.0), Inches(0.1), Inches(3.1), Inches(0.45),
+          size=9, color=_LIGHT_BLUE,
+          align=__import__("pptx.enum.text", fromlist=["PP_ALIGN"]).PP_ALIGN.RIGHT)
 
 
 def _sev_badge(slide, severity: str, left, top, width=None, height=None) -> None:
@@ -317,7 +324,8 @@ def _slide_cover(prs, title: str, case_id: str, description: str,
 
 def _slide_exec_summary(prs, data: dict, overall_sev: str,
                         case_id: str, first_ts: str, last_ts: str,
-                        duration: float, W, H) -> None:
+                        duration: float, W, H,
+                        narrative: dict | None = None) -> None:
     from pptx.util import Inches, Pt
     from pptx.enum.text import PP_ALIGN
 
@@ -325,7 +333,7 @@ def _slide_exec_summary(prs, data: dict, overall_sev: str,
     from generate_pcap_report import _triggered, build_recommendations, _format_duration
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_bg(slide, _WHITE)
+    _set_bg(slide, _DARK_NAVY)
     _header_bar(slide, "Executive Summary", case_id, W, H)
 
     CONTENT_TOP = Inches(0.8)
@@ -346,7 +354,7 @@ def _slide_exec_summary(prs, data: dict, overall_sev: str,
     _text(slide, sev_sentences.get(overall_sev, ""),
           CONTENT_L + Inches(1.45), CONTENT_TOP - Inches(0.01),
           CONTENT_W - Inches(1.5), Inches(0.35),
-          size=13, bold=True, color=_TEXT_DARK)
+          size=13, bold=True, color=_WHITE)
 
     # Traffic scope box
     netflow_count = len(data["netflow"])
@@ -369,10 +377,10 @@ def _slide_exec_summary(prs, data: dict, overall_sev: str,
         _rect(slide, bx, BOX_TOP, box_w, BOX_H, fill=_LIGHT_BG, line=_MID_NAVY, line_width_pt=0.5)
         _text(slide, val, bx + Inches(0.12), BOX_TOP + Inches(0.05),
               box_w - Inches(0.24), Inches(0.4),
-              size=20, bold=True, color=_rgb(_BLUE))
+              size=20, bold=True, color=_rgb(_ELECTRIC))
         _text(slide, lbl, bx + Inches(0.12), BOX_TOP + Inches(0.44),
               box_w - Inches(0.24), Inches(0.3),
-              size=10, color=_TEXT_MID)
+              size=10, color=_LIGHT)
         bx += box_w + box_gap
 
     # Key findings section
@@ -427,10 +435,17 @@ def _slide_exec_summary(prs, data: dict, overall_sev: str,
         )
 
     if not finding_lines:
-        finding_lines.append(("No significant threat indicators detected.", 11, False, _TEXT_MID))
+        finding_lines.append(("No significant threat indicators detected.", 11, False, _LIGHT))
 
-    _text_lines(slide, finding_lines,
-                CONTENT_L, KF_TOP + Inches(0.35), CONTENT_W, Inches(3.2))
+    # If narrative is available, replace auto-generated findings with board language
+    if narrative and narrative.get("pptx_executive_summary"):
+        nar_lines = [(ln, 11, False, _WHITE)
+                     for ln in narrative["pptx_executive_summary"].splitlines() if ln.strip()]
+        _text_lines(slide, nar_lines,
+                    CONTENT_L, KF_TOP + Inches(0.35), CONTENT_W, Inches(3.2))
+    else:
+        _text_lines(slide, finding_lines,
+                    CONTENT_L, KF_TOP + Inches(0.35), CONTENT_W, Inches(3.2))
 
     # Bottom CTI note
     mal_ips   = [r for r in data.get("fan_ip", []) if r.get("reputation") == "malicious"]
@@ -747,34 +762,36 @@ def _slide_iocs(prs, iocs: list[dict], case_id: str, W, H) -> None:
         _cell(row, 3, src, bold=False, size=9, fg=_TEXT_MID, bg=bg)
 
 
-def _slide_recommendations(prs, recs: list[str], case_id: str, W, H) -> None:
+def _slide_recommendations(prs, recs: list[str], case_id: str, W, H,
+                           narrative: dict | None = None) -> None:
     from pptx.util import Inches, Pt
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_bg(slide, _WHITE)
-    _header_bar(slide, "Recommended Actions", case_id, W, H)
+    _set_bg(slide, _DARK_NAVY)
+    _header_bar(slide, "Recommendations & Next Steps", case_id, W, H)
 
     CONTENT_TOP = Inches(0.82)
     CONTENT_L   = Inches(0.4)
     CONTENT_W   = Inches(12.5)
 
-    if not recs:
-        recs = ["Continue routine monitoring. No critical actions required at this time."]
-
-    # Strip markdown bold markers for plain-text PPTX
     def _strip_md(s: str) -> str:
         return s.replace("**IMMEDIATE**: ", "IMMEDIATE ACTION: ").replace("**", "")
 
-    # Show top 8 recommendations
-    display = [_strip_md(r) for r in recs[:8]]
-    item_h  = (H - CONTENT_TOP - Inches(0.3)) / max(len(display), 1)
-    item_h  = min(item_h, Inches(0.75))
+    # Prefer narrative board language over auto-generated recs
+    if narrative and narrative.get("pptx_recommendations"):
+        display = [ln for ln in narrative["pptx_recommendations"].splitlines() if ln.strip()][:8]
+    else:
+        if not recs:
+            recs = ["Continue routine monitoring. No critical actions required at this time."]
+        display = [_strip_md(r) for r in recs[:8]]
+
+    item_h = (H - CONTENT_TOP - Inches(0.3)) / max(len(display), 1)
+    item_h = min(item_h, Inches(0.75))
 
     for idx, rec in enumerate(display):
         row_top = CONTENT_TOP + idx * item_h
-        # Number bubble
-        is_immediate = rec.startswith("IMMEDIATE")
-        num_color = _SEV_RGB["critical"] if is_immediate else _MID_NAVY
+        is_immediate = rec.upper().startswith("IMMEDIATE")
+        num_color = _ALERT if is_immediate else _BLUE
         _rect(slide, CONTENT_L, row_top + Inches(0.04),
               Inches(0.36), Inches(0.36), fill=num_color)
         _text(slide, str(idx + 1),
@@ -782,16 +799,134 @@ def _slide_recommendations(prs, recs: list[str], case_id: str, W, H) -> None:
               Inches(0.28), Inches(0.3),
               size=12, bold=True, color=_WHITE,
               align=__import__("pptx.enum.text", fromlist=["PP_ALIGN"]).PP_ALIGN.CENTER)
-        # Recommendation text
-        text_color = _SEV_RGB["critical"] if is_immediate else _TEXT_DARK
+        text_color = _ALERT if is_immediate else _WHITE
         _text(slide, rec, CONTENT_L + Inches(0.48), row_top,
               CONTENT_W - Inches(0.55), item_h - Inches(0.06),
               size=11, bold=is_immediate, color=text_color)
-
-        # Separator line
         if idx < len(display) - 1:
             _rect(slide, CONTENT_L, row_top + item_h - Inches(0.02),
-                  CONTENT_W, Inches(0.01), fill=(0xe5, 0xe7, 0xeb))
+                  CONTENT_W, Inches(0.01), fill=_MID_NAVY)
+
+
+def _slide_timelines(prs, case_id: str, reports_dir: Path, W, H) -> None:
+    """Slides 3+ — Attack Timelines: one PPTX slide per PNG page for each timeline type."""
+    from pptx.util import Inches
+
+    CONTENT_TOP = Inches(0.75)
+    CONTENT_L   = Inches(0.3)
+    IMG_W       = W - Inches(0.6)
+
+    timeline_groups = [
+        ("Attacker Perspective",               f"{case_id}_timeline_attacker_p*.png"),
+        ("Attacker Perspective — Unconfirmed", f"{case_id}_timeline_attacker_unconfirmed.png"),
+        ("Defender Perspective",               f"{case_id}_timeline_defender_p*.png"),
+        ("Combined Key Events",                f"{case_id}_timeline_combined_p*.png"),
+    ]
+
+    any_slide_added = False
+    for group_title, glob_pattern in timeline_groups:
+        png_files = sorted(reports_dir.glob(glob_pattern))
+        if not png_files:
+            continue
+        for i, png_path in enumerate(png_files):
+            if not png_path.exists():
+                continue
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            _set_bg(slide, _DARK_NAVY)
+            page_label = f"Page {i + 1} of {len(png_files)}" if len(png_files) > 1 else ""
+            slide_title = f"{group_title}  {page_label}".strip()
+            _header_bar(slide, slide_title, case_id, W, H)
+            slide.shapes.add_picture(str(png_path), CONTENT_L, CONTENT_TOP, IMG_W)
+            any_slide_added = True
+
+    if not any_slide_added:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _set_bg(slide, _DARK_NAVY)
+        _header_bar(slide, "Attack Timelines", case_id, W, H)
+        _text(slide, "Timeline images not available — run investigation to generate.",
+              CONTENT_L, CONTENT_TOP + Inches(1.0), IMG_W, Inches(0.5),
+              size=12, color=_LIGHT)
+
+
+def _slide_risk_impact(prs, case_id: str, W, H, narrative: dict | None = None) -> None:
+    """Slide 4 — Risk & Impact: board-level, no technical identifiers."""
+    from pptx.util import Inches
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide, _DARK_NAVY)
+    _header_bar(slide, "Risk & Impact", case_id, W, H)
+
+    CONTENT_TOP = Inches(0.82)
+    CONTENT_L   = Inches(0.4)
+    HALF_W      = Inches(6.0)
+    GAP         = Inches(0.3)
+
+    # Risk panel (left)
+    _rect(slide, CONTENT_L, CONTENT_TOP, HALF_W, Inches(5.8),
+          fill=_MID_NAVY, line=_BLUE, line_width_pt=0.5)
+    _text(slide, "BUSINESS RISK",
+          CONTENT_L + Inches(0.2), CONTENT_TOP + Inches(0.15),
+          HALF_W - Inches(0.4), Inches(0.3),
+          size=11, bold=True, color=_ELECTRIC)
+
+    risk_text = (narrative or {}).get("pptx_risk",
+        "Risk assessment not yet generated.\n"
+        "Run the forensic skill and write the narrative file to populate this slide.")
+    _text(slide, risk_text,
+          CONTENT_L + Inches(0.2), CONTENT_TOP + Inches(0.55),
+          HALF_W - Inches(0.4), Inches(5.0),
+          size=11, color=_WHITE)
+
+    # Impact panel (right)
+    IMP_L = CONTENT_L + HALF_W + GAP
+    IMP_W = W - IMP_L - Inches(0.35)
+    _rect(slide, IMP_L, CONTENT_TOP, IMP_W, Inches(5.8),
+          fill=_MID_NAVY, line=_BLUE, line_width_pt=0.5)
+    _text(slide, "OPERATIONAL IMPACT",
+          IMP_L + Inches(0.2), CONTENT_TOP + Inches(0.15),
+          IMP_W - Inches(0.4), Inches(0.3),
+          size=11, bold=True, color=_ELECTRIC)
+
+    impact_text = (narrative or {}).get("pptx_impact",
+        "Impact assessment not yet generated.\n"
+        "Run the forensic skill and write the narrative file to populate this slide.")
+    _text(slide, impact_text,
+          IMP_L + Inches(0.2), CONTENT_TOP + Inches(0.55),
+          IMP_W - Inches(0.4), Inches(5.0),
+          size=11, color=_WHITE)
+
+
+def _slide_mitigations(prs, case_id: str, W, H, narrative: dict | None = None) -> None:
+    """Slide 5 — Mitigations: what has been done and what is in progress."""
+    from pptx.util import Inches
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide, _DARK_NAVY)
+    _header_bar(slide, "Mitigations", case_id, W, H)
+
+    CONTENT_TOP = Inches(0.85)
+    CONTENT_L   = Inches(0.4)
+    CONTENT_W   = Inches(12.5)
+
+    mit_text = (narrative or {}).get("pptx_mitigations",
+        "Mitigations not yet documented.\n"
+        "Run the forensic skill and write the narrative file to populate this slide.")
+
+    lines = [(ln, 12, False, _WHITE) for ln in mit_text.splitlines() if ln.strip()]
+    if not lines:
+        lines = [("No mitigations recorded yet.", 12, False, _LIGHT)]
+
+    item_h = (H - CONTENT_TOP - Inches(0.4)) / max(len(lines), 1)
+    item_h = min(item_h, Inches(0.65))
+
+    for idx, (txt, size, bold, color) in enumerate(lines[:9]):
+        row_top = CONTENT_TOP + idx * item_h
+        _rect(slide, CONTENT_L, row_top + Inches(0.12),
+              Inches(0.12), Inches(0.12), fill=_ELECTRIC)
+        _text(slide, txt,
+              CONTENT_L + Inches(0.28), row_top,
+              CONTENT_W - Inches(0.35), item_h - Inches(0.06),
+              size=size, bold=bold, color=color)
 
 
 def _slide_coverage(prs, data: dict, case_id: str, W, H) -> None:
@@ -799,7 +934,7 @@ def _slide_coverage(prs, data: dict, case_id: str, W, H) -> None:
     from pptx.enum.text import PP_ALIGN
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_bg(slide, _WHITE)
+    _set_bg(slide, _DARK_NAVY)
     _header_bar(slide, "Investigation Coverage — 23 Detection Modules", case_id, W, H)
 
     CONTENT_TOP = Inches(0.72)
@@ -823,11 +958,11 @@ def _slide_coverage(prs, data: dict, case_id: str, W, H) -> None:
         status = "Complete" if ran else "No data"
         _text(slide, friendly,
               lx + Inches(0.22), ly, COL_W - Inches(0.25), ROW_H - Inches(0.04),
-              size=10, color=_TEXT_DARK if ran else _TEXT_MID)
+              size=10, color=_WHITE if ran else _LIGHT)
         _text(slide, status,
               lx + COL_W - Inches(1.05), ly + Inches(0.06), Inches(0.95), Inches(0.24),
               size=8.5, bold=False,
-              color=(0x22, 0xc5, 0x5e) if ran else _TEXT_MID,
+              color=(0x22, 0xc5, 0x5e) if ran else _LIGHT,
               align=PP_ALIGN.RIGHT)
 
     # Footer count
@@ -835,10 +970,30 @@ def _slide_coverage(prs, data: dict, case_id: str, W, H) -> None:
     _text(slide,
           f"{run_count} of {len(_MODULES)} modules returned results for this capture.",
           CONTENT_L, H - Inches(0.5), Inches(10), Inches(0.38),
-          size=10, italic=True, color=_TEXT_MID)
+          size=10, italic=True, color=_LIGHT)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
+
+def _load_pptx_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
+    """Load Claude-generated narrative for PPTX from {case_id}_narrative.md."""
+    if not case_id:
+        return {}
+    path = reports_dir / f"{case_id}_narrative.md"
+    if not path.exists():
+        return {}
+    sections: dict[str, str] = {}
+    current: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = ""
+        elif line.startswith("<!--"):
+            continue
+        elif current is not None:
+            sections[current] += line + "\n"
+    return {k: v.strip() for k, v in sections.items()}
+
 
 def generate(
     data: dict,
@@ -846,8 +1001,19 @@ def generate(
     case_id: str = "",
     output_dir: Path | None = None,
     description: str = "",
+    reports_dir: Path | None = None,
 ) -> Path:
-    """Build the management PowerPoint and return its path."""
+    """Build the 7-slide board management PowerPoint and return its path.
+
+    Slide order:
+      1  Cover
+      2  Executive Summary
+      3  Attack Timeline (PNG)
+      4  Risk & Impact
+      5  Mitigations
+      6  Recommendations & Next Steps
+      7  Investigation Coverage
+    """
     try:
         from pptx import Presentation
         from pptx.util import Inches
@@ -860,12 +1026,14 @@ def generate(
     sys.path.insert(0, str(PROJECT_ROOT / "lib"))
     from generate_pcap_report import (
         _overall_severity, _capture_window, extract_iocs, build_recommendations,
-        _format_duration,
     )
 
     out_dir = output_dir or (PROJECT_ROOT / "analysis" / "_reports" / stem)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stem}_management_briefing.pptx"
+
+    rpts_dir = reports_dir or (PROJECT_ROOT / "reports")
+    narrative = _load_pptx_narrative(case_id, rpts_dir)
 
     overall_sev = _overall_severity(data)
     first_ts, last_ts, duration = _capture_window(data)
@@ -875,25 +1043,30 @@ def generate(
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     prs = Presentation()
-    # 16:9 widescreen
     prs.slide_width  = Inches(13.33)
     prs.slide_height = Inches(7.5)
     W = prs.slide_width
     H = prs.slide_height
 
-    _slide_cover(
-        prs,
-        title="Security Incident Briefing",
-        case_id=case_id,
-        description=description,
-        date_str=date_str,
-        W=W, H=H,
-    )
-    _slide_exec_summary(prs, data, overall_sev, case_id, first_ts, last_ts, duration, W, H)
-    _slide_threats(prs, data, case_id, W, H)
-    _slide_alerts(prs, data, case_id, W, H)
-    _slide_iocs(prs, iocs, case_id, W, H)
-    _slide_recommendations(prs, recs, case_id, W, H)
+    # Slide 1 — Cover
+    _slide_cover(prs, title="Security Incident Briefing",
+                 case_id=case_id, description=description,
+                 date_str=date_str, W=W, H=H)
+
+    # Slide 2 — Executive Summary
+    _slide_exec_summary(prs, data, overall_sev, case_id,
+                        first_ts, last_ts, duration, W, H, narrative=narrative)
+
+    # Slide — Risk & Impact
+    _slide_risk_impact(prs, case_id, W, H, narrative=narrative)
+
+    # Slide 5 — Mitigations
+    _slide_mitigations(prs, case_id, W, H, narrative=narrative)
+
+    # Slide 6 — Recommendations & Next Steps
+    _slide_recommendations(prs, recs, case_id, W, H, narrative=narrative)
+
+    # Slide 7 — Investigation Coverage
     _slide_coverage(prs, data, case_id, W, H)
 
     prs.save(str(out_path))
@@ -903,28 +1076,235 @@ def generate(
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
+def generate_board_deck(
+    case_id: str,
+    module: str = "fame",
+    hostname: str = "",
+    description: str = "",
+    output_path: Path | None = None,
+    reports_dir: Path | None = None,
+) -> Path:
+    """Build the 7-slide board deck from narrative + research notes only.
+
+    No FAN pcap data required. Works for FAME, FAST, and FAN cases.
+    Reads {case_id}_narrative.md and {case_id}_research_notes.md from reports_dir.
+    """
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches
+    except ImportError:
+        raise SystemExit("[pptx] python-pptx not installed. Install: pip3 install python-pptx")
+
+    sys.path.insert(0, str(PROJECT_ROOT / "lib"))
+
+    rpts_dir = reports_dir or (PROJECT_ROOT / "reports")
+    narrative = _load_pptx_narrative(case_id, rpts_dir)
+
+    # Load research note steps and attacker events for timelines
+    from research_notes import parse_steps
+    steps  = parse_steps(case_id, str(rpts_dir))
+    # Determine output path
+    if output_path is None:
+        suffix = f"_{module}_board_deck.pptx"
+        output_path = rpts_dir / f"{case_id}{suffix}"
+
+    # Severity from narrative (scan for keywords)
+    nar_text = " ".join(narrative.values()).upper()
+    overall_sev = "info"
+    for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        if sev in nar_text:
+            overall_sev = sev.lower()
+            break
+
+    # Module coverage: derive from step titles
+    skip_prefixes = ("evidence preserved:", "sha256")
+    analysis_steps = [
+        s["title"] for s in steps
+        if not any(s["title"].lower().startswith(p) for p in skip_prefixes)
+    ]
+
+    module_label = module.upper()
+    cover_title  = f"Security Incident Briefing — {module_label}"
+    date_str     = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    prs = Presentation()
+    prs.slide_width  = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+    W = prs.slide_width
+    H = prs.slide_height
+
+    # Slide 1 — Cover
+    _slide_cover(prs,
+                 title=cover_title,
+                 case_id=case_id,
+                 description=description or (f"Host: {hostname}" if hostname else ""),
+                 date_str=date_str,
+                 W=W, H=H)
+
+    # Slide 2 — Executive Summary (narrative-only variant)
+    _slide_exec_summary_narrative(prs, case_id, overall_sev, hostname, narrative, W, H)
+
+    # Slide 4 — Risk & Impact
+    _slide_risk_impact(prs, case_id, W, H, narrative=narrative)
+
+    # Slide 5 — Mitigations
+    _slide_mitigations(prs, case_id, W, H, narrative=narrative)
+
+    # Slide 6 — Recommendations
+    _slide_recommendations(prs, [], case_id, W, H, narrative=narrative)
+
+    # Slide 7 — Module Coverage (analysis steps run)
+    _slide_coverage_steps(prs, case_id, module_label, analysis_steps, W, H)
+
+    prs.save(str(output_path))
+    print(f"[pptx] Board deck written: {output_path}")
+    return output_path
+
+
+def _slide_exec_summary_narrative(prs, case_id: str, overall_sev: str,
+                                   hostname: str, narrative: dict, W, H) -> None:
+    """Slide 2 variant for FAME/FAST: narrative bullets + key stat placeholders."""
+    from pptx.util import Inches
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide, _DARK_NAVY)
+    _header_bar(slide, "Executive Summary", case_id, W, H)
+
+    CONTENT_TOP = Inches(0.82)
+    CONTENT_L   = Inches(0.4)
+    CONTENT_W   = Inches(12.5)
+
+    # Severity badge
+    _sev_badge(slide, overall_sev, CONTENT_L, CONTENT_TOP, width=Inches(1.3), height=Inches(0.32))
+
+    sev_sentences = {
+        "critical": "CRITICAL threats identified — immediate action required.",
+        "high":     "HIGH-severity threats identified — prompt investigation required.",
+        "medium":   "MEDIUM-severity anomalies — further examination recommended.",
+        "low":      "LOW-severity findings — routine follow-up recommended.",
+        "info":     "No significant threat indicators at this time.",
+    }
+    _text(slide, sev_sentences.get(overall_sev, ""),
+          CONTENT_L + Inches(1.45), CONTENT_TOP - Inches(0.01),
+          CONTENT_W - Inches(1.5), Inches(0.35),
+          size=13, bold=True, color=_WHITE)
+
+    if hostname:
+        _text(slide, f"Host: {hostname}",
+              CONTENT_L + Inches(1.45), CONTENT_TOP + Inches(0.3),
+              CONTENT_W - Inches(1.5), Inches(0.28),
+              size=10, color=_LIGHT)
+
+    # Narrative bullets
+    KF_TOP = CONTENT_TOP + Inches(0.72)
+    _text(slide, "KEY FINDINGS",
+          CONTENT_L, KF_TOP, CONTENT_W, Inches(0.28),
+          size=9, bold=True, color=_ELECTRIC)
+    _rect(slide, CONTENT_L, KF_TOP + Inches(0.28), CONTENT_W, Inches(0.02), fill=_ELECTRIC)
+
+    nar = narrative.get("pptx_executive_summary", "")
+    if nar:
+        bullets = [(ln, 11, False, _WHITE) for ln in nar.splitlines() if ln.strip()]
+    else:
+        bullets = [("Refer to the full technical report for detailed findings.", 11, False, _LIGHT)]
+
+    _text_lines(slide, bullets[:6],
+                CONTENT_L, KF_TOP + Inches(0.35), CONTENT_W, Inches(5.0))
+
+
+def _slide_coverage_steps(prs, case_id: str, module_label: str,
+                           analysis_steps: list[str], W, H) -> None:
+    """Slide 7 for board deck: show which analysis steps were run."""
+    from pptx.util import Inches
+    from pptx.enum.text import PP_ALIGN
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide, _DARK_NAVY)
+    _header_bar(slide, f"Investigation Coverage — {module_label} Analysis", case_id, W, H)
+
+    CONTENT_TOP = Inches(0.82)
+    CONTENT_L   = Inches(0.35)
+
+    if not analysis_steps:
+        _text(slide, "No analysis steps recorded in research notes.",
+              CONTENT_L, CONTENT_TOP + Inches(0.5), Inches(12), Inches(0.5),
+              size=12, color=_LIGHT)
+        return
+
+    COLS = 2
+    items_per_col = (len(analysis_steps) + COLS - 1) // COLS
+    COL_W = Inches(6.1)
+    ROW_H = Inches(0.34)
+
+    for idx, step_title in enumerate(analysis_steps[:20]):
+        col = idx // items_per_col
+        row = idx % items_per_col
+        lx  = CONTENT_L + col * (COL_W + Inches(0.2))
+        ly  = CONTENT_TOP + Inches(0.1) + row * ROW_H
+
+        _rect(slide, lx, ly + Inches(0.1), Inches(0.12), Inches(0.12), fill=_ELECTRIC)
+        _text(slide, step_title,
+              lx + Inches(0.2), ly, COL_W - Inches(0.25), ROW_H - Inches(0.04),
+              size=9.5, color=_WHITE)
+
+    _text(slide, f"{len(analysis_steps)} investigation steps completed. Full details in research notes.",
+          CONTENT_L, H - Inches(0.5), Inches(12), Inches(0.35),
+          size=9, italic=True, color=_LIGHT)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Generate a management PowerPoint briefing from PCAP analysis results"
+        description="Generate a management PowerPoint briefing"
     )
-    p.add_argument("--stem",        required=True, metavar="STEM", help="PCAP stem name")
-    p.add_argument("--case-id",     default="",    metavar="ID",   help="Case ID")
-    p.add_argument("--description", default="",    metavar="DESC", help="Incident description (cover subtitle)")
-    p.add_argument("--output-dir",  default="",    metavar="DIR",  help="Output directory for PPTX")
-    p.add_argument("--base-dir",    default="",    metavar="DIR",  help="Analysis base directory (default: ./analysis)")
+    sub = p.add_subparsers(dest="command")
+
+    # Legacy FAN subcommand (default when no subcommand given)
+    pfan = sub.add_parser("fan", help="FAN PCAP-based board deck")
+    pfan.add_argument("--stem",        required=True, metavar="STEM")
+    pfan.add_argument("--case-id",     default="",    metavar="ID")
+    pfan.add_argument("--description", default="",    metavar="DESC")
+    pfan.add_argument("--output-dir",  default="",    metavar="DIR")
+    pfan.add_argument("--base-dir",    default="",    metavar="DIR")
+
+    # Narrative-only board deck (FAME/FAST/FAN — no analysis data required)
+    pboard = sub.add_parser("board-deck", help="7-slide board deck from narrative file")
+    pboard.add_argument("--case-id",     required=True, metavar="ID")
+    pboard.add_argument("--module",      default="fame", choices=["fame", "fast", "fan"])
+    pboard.add_argument("--hostname",    default="",    metavar="NAME")
+    pboard.add_argument("--description", default="",    metavar="DESC")
+    pboard.add_argument("--output",      default="",    metavar="PATH",
+                        help="Output PPTX path (default: reports/{case_id}_{module}_board_deck.pptx)")
+    pboard.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports"), metavar="DIR")
+
     return p
 
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
 
-    sys.path.insert(0, str(PROJECT_ROOT / "lib"))
-    from generate_pcap_report import load_all_data, ANALYSIS_DIR
-    import generate_pcap_report as _rpt
+    if args.command == "board-deck":
+        out = Path(args.output) if args.output else None
+        generate_board_deck(
+            case_id     = args.case_id,
+            module      = args.module,
+            hostname    = args.hostname,
+            description = args.description,
+            output_path = out,
+            reports_dir = Path(args.reports_dir),
+        )
+    else:
+        # Legacy FAN path (or no subcommand: --stem required)
+        sys.path.insert(0, str(PROJECT_ROOT / "lib"))
+        from generate_pcap_report import load_all_data, ANALYSIS_DIR
+        import generate_pcap_report as _rpt
 
-    if args.base_dir:
-        _rpt.ANALYSIS_DIR = Path(args.base_dir)
+        if not hasattr(args, "stem"):
+            _build_parser().print_help()
+            sys.exit(1)
 
-    data = load_all_data(args.stem)
-    out_dir = Path(args.output_dir) if args.output_dir else None
-    generate(data, args.stem, args.case_id, out_dir, args.description)
+        if args.base_dir:
+            _rpt.ANALYSIS_DIR = Path(args.base_dir)
+
+        data = load_all_data(args.stem)
+        out_dir = Path(args.output_dir) if args.output_dir else None
+        generate(data, args.stem, args.case_id, out_dir, args.description)

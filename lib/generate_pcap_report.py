@@ -40,6 +40,8 @@ except ImportError:
 from pathlib import Path
 from typing import Any
 
+from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+
 PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
 REPORTS_DIR  = PROJECT_ROOT / "reports"
@@ -2452,8 +2454,15 @@ def sec_recommendations(recs: list[str]) -> list[str]:
     return lines
 
 
-def sec_appendix(stem: str, data: dict) -> list[str]:
-    lines = ["## Appendix A: Analysis Source Files", ""]
+def sec_appendix(stem: str, data: dict, case_id: str = "") -> list[str]:
+    ev_note = (
+        f"All artifact files are preserved in `./{case_id}_evidence/analysis/` "
+        "and uploaded to the investigations vault alongside this report. "
+        "SHA-256 hashes are recorded in the research notes (Appendix B) for chain-of-custody verification."
+        if case_id else
+        "Analysis source files listed below."
+    )
+    lines = ["## Appendix A: Analysis Source Files", "", ev_note, ""]
 
     sources = []
     if data["has_pcap"]:
@@ -3321,6 +3330,119 @@ def convert_to_pdf(
     return False
 
 
+# ── Narrative loader ──────────────────────────────────────────────────────────
+
+def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
+    """Load Claude-generated narrative sections from {case_id}_narrative.md."""
+    if not case_id:
+        return {}
+    path = reports_dir / f"{case_id}_narrative.md"
+    if not path.exists():
+        return {}
+    sections: dict[str, str] = {}
+    current: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = ""
+        elif line.startswith("<!--"):
+            continue
+        elif current is not None:
+            sections[current] += line + "\n"
+    return {k: v.strip() for k, v in sections.items()}
+
+
+# ── Evidence trail ────────────────────────────────────────────────────────────
+
+def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
+    if not case_id:
+        return []
+    steps  = _parse_research_steps(case_id, str(reports_dir))
+    events = _parse_research_events(case_id, str(reports_dir))
+    if not steps and not events:
+        return []
+
+    lines: list[str] = [
+        "---", "",
+        "## Appendix B — Investigation Evidence Trail", "",
+    ]
+
+    # Attacker timeline — events sorted by evidence timestamp
+    if events:
+        def _ev_sort(ev: dict) -> tuple:
+            ts = ev.get("timestamp", "")
+            if ts:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
+                    return (0, dt.replace(tzinfo=timezone.utc))
+                except ValueError:
+                    pass
+            from datetime import datetime, timezone
+            return (1, datetime.min.replace(tzinfo=timezone.utc))
+
+        sorted_events = sorted(events, key=_ev_sort)
+        lines += [
+            "### Attacker Timeline", "",
+            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
+            "| Timestamp (UTC) | Severity | Event | Source |",
+            "|-----------------|----------|-------|--------|",
+        ]
+        for ev in sorted_events:
+            ts   = ev.get("timestamp", "") or "—"
+            sev  = ev.get("severity", "info").upper()
+            desc = ev.get("description", "")[:160].replace("|", "\\|")
+            if len(ev.get("description", "")) > 160:
+                desc += "…"
+            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
+            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
+        lines += ["", ""]
+
+    # Analysis timeline — analyst investigation steps
+    if steps:
+        lines += [
+            "### Analysis Timeline", "",
+            "Steps recorded in the research notes during this investigation. "
+            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
+            "| Step ID | Timestamp | Analysis Step | Outcome |",
+            "|---------|-----------|---------------|---------|",
+        ]
+        for s in steps:
+            sid = f"`{s['id']}`" if s["id"] else "—"
+            outcome = s["outcome"].replace("|", "\\|")
+            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} |")
+        lines += [
+            "",
+            "*Cross-reference step IDs with the research notes and preserved artifacts "
+            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
+            "",
+        ]
+    return lines
+
+
+def _sec_incident_timeline(case_id: str, out_dir: Path) -> list[str]:
+    """Incident Timeline section sourced from Claude-generated narrative."""
+    narrative = _load_narrative(case_id, out_dir)
+    timeline_text = narrative.get("attack_timeline", "")
+    lines = [
+        "---", "",
+        "## Incident Timeline", "",
+        "> Chronological reconstruction of the attack path. Each finding references",
+        "> the investigation step (RN-NNN) and the preserved source file in",
+        f"> `{case_id}_evidence/`.",
+        "",
+    ]
+    if timeline_text:
+        lines.append(timeline_text)
+    else:
+        lines += [
+            "> *Incident timeline not yet generated. Run the FAN skill to produce*",
+            f"> *`{case_id}_narrative.md` with the `attack_timeline` section.*",
+        ]
+    lines.append("")
+    return lines
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def generate_report(
@@ -3384,6 +3506,7 @@ def generate_report(
     sections: list[str] = []
     sections.extend(sec_header(stem, case_id, overall_sev, now, first_ts, last_ts, duration, report_version))
     sections.extend(sec_management_summary(data, overall_sev, first_ts, last_ts, duration))
+    sections.extend(_sec_incident_timeline(case_id, out_dir))
     sections.extend(sec_findings_icmp(data))
     sections.extend(sec_findings_dns(data))
     sections.extend(sec_findings_ntp(data))
@@ -3411,7 +3534,8 @@ def generate_report(
     sections.extend(sec_iocs(iocs))
     sections.extend(sec_mitre(coverage))
     sections.extend(sec_recommendations(recs))
-    sections.extend(sec_appendix(stem, data))
+    sections.extend(sec_appendix(stem, data, case_id))
+    sections.extend(_build_evidence_trail(case_id, out_dir))
 
     md_content = "\n".join(sections) + "\n"
 

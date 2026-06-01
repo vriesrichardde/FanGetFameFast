@@ -76,6 +76,8 @@ def write_note(folder: str, title: str, frontmatter: dict[str, Any], body: str) 
     path = _note_path(folder, title)
     now = _now_utc()
 
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     if path.exists():
         existing_fm, _ = _parse_note(path.read_text(encoding="utf-8"))
         frontmatter.setdefault("date_created", existing_fm.get("date_created", now))
@@ -94,6 +96,8 @@ def append_to_note(folder: str, title: str, md_content: str) -> Path:
     """
     path = _note_path(folder, title)
     now = _now_utc()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.exists():
         text = path.read_text(encoding="utf-8")

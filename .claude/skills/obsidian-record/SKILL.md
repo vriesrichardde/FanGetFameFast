@@ -4,12 +4,62 @@
 
 Use this skill to write confirmed forensic findings into the Obsidian vault
 (`./vault/`) after an investigation or at any point a fact is established.
-Every `record_*` call is **idempotent**: calling it again with the same identifier
-updates the existing note rather than creating a duplicate.
+Most `record_*` calls are **idempotent**: `record_ioc`, `record_ttp`, and
+`record_threat_actor` append a new timestamped observation block on each call
+rather than replacing existing content. `record_risk`, `record_malware`, and
+`record_concept` replace the note body on each call.
 
 > **Rule:** Only record confirmed, tool-verified findings. Never write speculation,
 > raw evidence paths, or content from `/cases/`, `/mnt/`, or `/media/` into the vault.
 > All IOC values must be defanged before storage (the library handles this automatically).
+
+---
+
+## Automatic vault write from a report (primary use)
+
+**Automatic for FAME; manual for FAST and FAN.** `fame_analyze.sh` calls
+`lib/vault_writer.py` automatically at the end of its pipeline. `fast_analyze.sh`
+and `analyze_pcap.sh` do not — run the commands below manually after those
+investigations complete.
+Vault entries are parsed directly from the finalised report Markdown — the
+analyst's reviewed output — so only confirmed findings are recorded.
+
+Run this manually when:
+- You edited the report Markdown after the pipeline finished and want the vault
+  to reflect the updated findings.
+- A pipeline ran with `--no-vault` and you want to record findings now.
+- You want to add a finding that isn't captured in the report tables (threat
+  actor attribution, a new concept, a manual risk note).
+
+```bash
+# Re-run vault write after editing a FAME report
+python3 lib/vault_writer.py --module fame --case-id FAME-2026-001
+
+# Explicit paths (when the case ID doesn't match the default filename pattern)
+python3 lib/vault_writer.py --module fame \
+    --report ./reports/FAME-2026-001_fame_report.md \
+    --notes  ./reports/FAME-2026-001_research_notes.md
+
+# FAST and FAN work identically
+python3 lib/vault_writer.py --module fast --case-id FAST-2026-001
+python3 lib/vault_writer.py --module fan  --case-id FAN-2026-001
+```
+
+**What `vault_writer.py` records automatically:**
+
+| Source in report | Vault record |
+|---|---|
+| Header table (`Case ID`, `Hostname`) | `open_case()` → `vault/Cases/<case_id>.md` |
+| §Management Summary body text | Case summary text |
+| MITRE ATT&CK coverage table — confirmed rows | `record_ttp()` → `vault/TTPs/<ID> <Name>.md` |
+| Indicators of Compromise table — non-Informational rows | `record_ioc()` → `vault/IOCs/<type>-<value>.md` |
+| Recommendations / numbered list | `record_risk()` → `vault/Risks/<case_id>-<hostname>.md` |
+| Research notes Investigation Summary | `close_case()` closing text |
+
+**What is skipped automatically:**
+- MITRE rows marked "Not confirmed" in the observation
+- IOC rows with Severity = Informational
+- IOC rows of type Event or Condition (analytical observations, not indicators)
 
 ---
 
@@ -238,6 +288,30 @@ close_case("CASE-2025-042",
 
 ---
 
+## Checking what was written
+
+```bash
+# Open cases
+python3 lib/vault_query.py --cases
+
+# Specific TTP across all cases
+python3 lib/vault_query.py --ttp T1014
+
+# IOC lookup
+python3 lib/vault_query.py --ioc 104.201.158.26
+
+# Top risks
+python3 lib/vault_query.py --risks
+
+# Full-text search
+python3 lib/vault_query.py --search DKOM
+
+# Dashboard (auto-maintained index)
+cat vault/Dashboard.md
+```
+
+---
+
 ## Defanging Reference
 
 The library defangs automatically for `ioc_type` values of `ip`, `domain`, `url`, and `email`.
@@ -269,9 +343,10 @@ read at any time for a current snapshot of vault state.
 
 ## Notes
 
-- All note writes are idempotent — re-running with the same `case_id` and core identifier
-  appends a new timestamped observation block rather than replacing existing content
-- Severity is propagated at the **maximum** level: recording a `high` hit on a previously
-  `medium` IOC promotes it to `high`; recording `low` on a `high` IOC leaves it at `high`
-- Note titles become wikilink targets — keep them stable; avoid renaming after creation
-- The vault is version-controllable — commit `./vault/` to git alongside investigation scripts
+- `record_ioc`, `record_ttp`, and `record_threat_actor` are idempotent — re-running
+  appends a new timestamped observation block. `record_risk`, `record_malware`, and
+  `record_concept` replace the existing note body on each call.
+- Severity is propagated at the **maximum** level: a second recording at `high`
+  promotes a `medium` note; a `low` recording does not demote a `high` note.
+- Note titles become Obsidian wikilink targets — keep them stable; avoid renaming after creation.
+- The vault is plain Markdown and version-controllable alongside the scripts.

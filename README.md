@@ -80,7 +80,7 @@ sudo ./scripts/install_dependencies.sh
 sudo ./scripts/setup_sudoers.sh
 
 # 5. Set API credentials
-cp scripts/set_env_template.sh ~/.soc_env
+cp templates/set_env_template.sh ~/.soc_env
 # Edit ~/.soc_env and add your keys, then:
 echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env

@@ -281,7 +281,7 @@ The generated `settings.json` contains absolute paths. No manual editing is need
 
 ```bash
 # Copy the template
-cp scripts/set_env_template.sh ~/.soc_env
+cp templates/set_env_template.sh ~/.soc_env
 
 # Fill in the values
 nano ~/.soc_env
