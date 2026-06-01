@@ -89,6 +89,27 @@ ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
 
 Full setup details: [Deployment Guide](DEPLOYMENT_GUIDE.md).
 
+### Alternative — VS Code Dev Container
+
+Instead of the one-time setup above, open the repository in the bundled
+[Dev Container](../.devcontainer/) (Dev Containers extension → **Reopen in
+Container**, or `devcontainer up`). The image builds the full forensic toolchain
+— tshark, Volatility 3, The Sleuth Kit, EWF tools, bulk_extractor, YARA,
+Suricata, WeasyPrint — plus the Claude Code CLI, on both amd64 and arm64.
+
+To analyze your own evidence inside the container, point `FGFF_EVIDENCE_INPUT` at
+a directory of images on the **host** before building it:
+
+```bash
+export FGFF_EVIDENCE_INPUT="/path/to/your/evidence"   # then build / rebuild the container
+```
+
+That directory is mounted read-only at `/home/vscode/evidence`. If the variable
+is unset the container still builds and starts — the mount falls back to a
+placeholder, so nothing breaks and you can supply evidence paths by hand. API
+credentials are still set via `~/.soc_env` inside the container as in step 4
+above.
+
 ### Analyze network traffic
 
 ```bash

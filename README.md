@@ -86,6 +86,32 @@ echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env
 ```
 
+### Alternative: VS Code Dev Container
+
+A ready-to-use [Dev Container](.devcontainer/) builds the full toolchain (tshark,
+Volatility 3, The Sleuth Kit, EWF tools, bulk_extractor, YARA, Suricata,
+WeasyPrint, and the Claude Code CLI) on Debian Bookworm — amd64 and arm64 both
+supported.
+
+```bash
+git clone <repo-url> FanGetFameFast
+cd FanGetFameFast
+code .
+# Then: "Reopen in Container" (Dev Containers extension), or `devcontainer up`.
+```
+
+**Mounting evidence (optional):** set `FGFF_EVIDENCE_INPUT` on the **host** to a
+directory of memory/disk images **before** building the container. It is mounted
+read-only at `/home/vscode/evidence` inside the container.
+
+```bash
+export FGFF_EVIDENCE_INPUT="/path/to/your/evidence"   # then rebuild the container
+```
+
+If the variable is unset the container still builds and starts normally — the
+evidence mount simply falls back to a harmless placeholder, so you can explore
+the solution and supply evidence paths manually later.
+
 ### Required API credentials
 
 | Variable | Purpose |
