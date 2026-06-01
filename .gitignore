@@ -44,5 +44,9 @@ __pycache__/
 *.img
 *.evtx
 
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
 # Logs
 *.log
