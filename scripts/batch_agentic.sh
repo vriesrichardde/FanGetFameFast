@@ -146,8 +146,9 @@ with open(path, "w") as f:
 PYEOF
 }
 
-# Mark a stem as processed (prevents duplicate analysis when both archive and
-# pre-extracted file coexist in the evidence directory)
+# Mark a module:stem.ext triplet as processed (prevents re-analysis of the same
+# file extracted from an archive, while still allowing different evidence types
+# with the same stem — e.g. host.mem and host.E01 — to each be analyzed)
 _mark_processed() {
     echo "$1" >> "$PROCESSED_FILE"
 }
@@ -182,11 +183,13 @@ _process_file() {
         return 0
     fi
 
-    local stem
+    local stem ext
     stem="$(basename "$file" | sed 's/\.[^.]*$//')"
+    ext="${file##*.}"
+    local processed_key="${module}:${stem}.${ext}"
 
-    if _is_processed "$stem"; then
-        echo "[batch] Skipping already-processed stem: $stem"
+    if _is_processed "$processed_key"; then
+        echo "[batch] Skipping already-processed ${module} stem: $stem"
         return 0
     fi
 
@@ -238,7 +241,7 @@ _process_file() {
             ;;
     esac
 
-    _mark_processed "$stem"
+    _mark_processed "$processed_key"
     _manifest_add_case \
         "$case_id" \
         "${source_archive:-$file}" \
