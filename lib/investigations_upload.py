@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -40,7 +41,7 @@ def _ssh_opts(key: str) -> list[str]:
 
 def _ssh_mkdir(host: str, key: str, remote_dir: str) -> None:
     subprocess.run(
-        ["ssh", *_ssh_opts(key), host, f"mkdir -p {remote_dir}"],
+        ["ssh", *_ssh_opts(key), host, f"mkdir -p {shlex.quote(remote_dir)}"],
         check=True,
         capture_output=True,
     )
