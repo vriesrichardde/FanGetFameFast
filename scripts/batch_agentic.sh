@@ -183,6 +183,20 @@ _process_file() {
         return 0
     fi
 
+    # Guard against filenames that could break out of the `claude -p` prompt
+    # string or inject instructions into the agentic prompt (the basename flows
+    # into the natural-language prompt via $stem/$case_id below). Names may
+    # originate inside extracted archives, so they are not fully trusted.
+    # Legitimate evidence basenames use only alphanumerics, space, dot, dash,
+    # underscore — anything else is skipped and recorded in the manifest.
+    local base
+    base="$(basename "$file")"
+    if [[ "$base" =~ [^[:alnum:][:space:]._-] ]]; then
+        echo "[batch] Skipping file with unsafe characters in name: $base" >&2
+        _manifest_add_error "Unsafe filename skipped (prompt-injection guard): $file"
+        return 0
+    fi
+
     local stem ext
     stem="$(basename "$file" | sed 's/\.[^.]*$//')"
     ext="${file##*.}"

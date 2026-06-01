@@ -42,11 +42,21 @@ except ImportError:
 from pathlib import Path
 from typing import Any
 
-from research_notes import (
-    parse_steps as _parse_research_steps,
-    parse_events as _parse_research_events,
-    parse_reflections as _parse_research_reflections,
-)
+try:
+    from research_notes import (
+        parse_steps as _parse_research_steps,
+        parse_events as _parse_research_events,
+        parse_reflections as _parse_research_reflections,
+    )
+except ModuleNotFoundError:
+    # Imported as a package (e.g. `from lib.generate_fast_report import generate`)
+    # rather than run as a script — put lib/ on the path for the sibling import.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from research_notes import (
+        parse_steps as _parse_research_steps,
+        parse_events as _parse_research_events,
+        parse_reflections as _parse_research_reflections,
+    )
 
 PROJECT_ROOT = Path(__file__).parent.parent
 

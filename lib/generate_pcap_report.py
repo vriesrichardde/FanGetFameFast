@@ -40,7 +40,13 @@ except ImportError:
 from pathlib import Path
 from typing import Any
 
-from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+try:
+    from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+except ModuleNotFoundError:
+    # Imported as a package (e.g. `from lib.generate_pcap_report import ...`)
+    # rather than run as a script — put lib/ on the path for the sibling import.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
 
 PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
