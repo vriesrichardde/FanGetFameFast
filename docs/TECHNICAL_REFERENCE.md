@@ -1,9 +1,21 @@
 # FanGetFameFast — Technical reference
 
-**Version:** 1.2 · May 2026
+**Version:** 2.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
 **Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
 **Classification:** Internal — SOC Operations
+
+> **Presenting this to the hackathon panel?** The diagram companion to this reference is
+> [Architecture diagrams (presentation deck)](ARCHITECTURE_DIAGRAM.md) — projector-ready Mermaid
+> renderings of the agentic loop, the trust layer, the audit chain, and the guardrails, each
+> mapped to a judging criterion.
+
+> **What's new in v2.0:** this release adds the **trust & reliability subsystem** — the
+> research-notes audit trail, failure-handling and self-correction across all three pipelines,
+> the anti-hallucination controls (confirmed-vs-inferred labelling, confidence-and-gaps scoring),
+> and the architectural guardrails. See the new [Section 11](#11-trust--reliability-subsystem).
+> Batch/campaign scale-out (`batch_analyze.sh`, `batch_agentic.sh`, the `correlate` and
+> `investigate-all` skills) and the library modules behind it are documented throughout.
 
 ---
 
@@ -19,7 +31,9 @@
 8. [Obsidian vault schema](#8-obsidian-vault-schema)
 9. [Configuration reference](#9-configuration-reference)
 10. [Dependency map](#10-dependency-map)
-11. [License and disclaimer](#11-license-and-disclaimer)
+11. [Trust & reliability subsystem](#11-trust--reliability-subsystem)
+12. [Batch & campaign orchestration](#12-batch--campaign-orchestration)
+13. [License and disclaimer](#13-license-and-disclaimer)
 
 ---
 
@@ -71,6 +85,10 @@ All three modules are live. FAME and FAST auto-detect sibling module reports for
 **Idempotent recording.** `record_*` functions in `knowledge_extractor.py` update existing notes rather than creating duplicates. Multiple module passes against the same indicator converge on a single vault note. The `case_refs` list in each note accumulates all cases where that indicator has appeared.
 
 **SSH/SCP for report upload.** `lib/investigations_upload.py` uses the key at `~/.ssh/id_ed25519`. The path is hardcoded in the library. If the deployment uses a different key path, edit `_SSH_OPTS` in `investigations_upload.py` before running investigations.
+
+**Agentic coordination, not a fixed script.** Claude is the coordinator, not a hard-coded runbook. It reads each tool's output, decides the next pivot from what it found, and stops when no pivots remain. The investigation is a *reason → act → read → log → verify → (self-correct)* loop, drawn in full in [Architecture diagrams §2](ARCHITECTURE_DIAGRAM.md#2-the-agentic-investigation-loop). The loop is held honest by the trust subsystem in [Section 11](#11-trust--reliability-subsystem): the agent may not advance to the next step until the current one is logged, and every deviation from the standard path is itself a logged step.
+
+**Trust is a subsystem, not a prompt.** The properties the platform is judged on — failure handling, self-correction, distinguishing confirmed findings from inferences, catching hallucinations, and tracing every finding to the tool that produced it — are enforced in code (`lib/research_notes.py`, `lib/vault_writer.py`, the confidence/gaps logic in the report generators, and the `_safe_path()` jail in the MCP servers), not asserted in natural language. [Section 11](#11-trust--reliability-subsystem) documents each mechanism and its enforcement point.
 
 ---
 
@@ -429,6 +447,9 @@ Autopsy is located via `$PATH`, `/opt/autopsy/bin/autopsy`, or `/usr/share/autop
 | `pcap_analyze.sh` | Lightweight IP/FQDN extractor (input: PCAP file; outputs netflow + IP/FQDN lists only, no full module pipeline) |
 | `fame_analyze.sh` | Orchestrates the FAME pipeline (Volatility + MemProcFS + AutoTimeliner + EVTXtract) |
 | `fast_analyze.sh` | Orchestrates the FAST pipeline (TSK + bulk_extractor + Autopsy) |
+| `batch_analyze.sh` | Walks an evidence directory, routes each file to FAME/FAST/FAN (direct shell pipelines), writes a batch manifest + aggregate report. See [Section 12](#12-batch--campaign-orchestration) |
+| `batch_agentic.sh` | Same routing, but each FAME/FAST/FAN case runs through the Claude **agentic** path (`claude -p "/fame …"`) so research notes and interpreted findings are produced; adds a campaign-report phase. Filename prompt-injection guard at the input. See [Section 12](#12-batch--campaign-orchestration) |
+| `batch_regenerate.sh` | Regenerates new-format narratives / board decks / PDFs for all cases already in `./reports/` (`--dry-run`, `--only-pptx`, `--case-id`); optionally re-runs the campaign report |
 | `generate_pcap_report.sh` | Assembles FAN module outputs into Markdown + PDF incident report |
 | `generate_pcap_presentation.sh` | Generates FAN management PowerPoint briefing (wraps `lib/generate_presentation.py`) |
 | `bundle_artifacts.sh` | Zips all investigation artifacts for a completed case (reports + per-module outputs) |
@@ -762,6 +783,137 @@ Also accessible via shell wrapper: `scripts/bundle_artifacts.sh --stem <stem> --
 
 ---
 
+### `lib/research_notes.py` — investigative audit trail (trust subsystem)
+
+The audit-trail engine. Claude calls it via Bash at every step of every FAME / FAST / FAN investigation to produce a timestamped, numbered, step-by-step log at `./reports/<case_id>_research_notes.md`. This is the artifact that makes any finding traceable back to the exact tool execution that produced it. See [Section 11.1](#111-audit-trail--researchnotespy) for the full role.
+
+Six subcommands (CLI; all take `--case-id`):
+
+```bash
+# Create the notes file with a case header (once, before any plugin runs)
+python3 lib/research_notes.py init   --case-id <id> --module fame|fast|fan \
+    [--evidence <path>] [--hostname <name>]
+
+# Append one timestamped step after reading a tool's output (RN-NNN)
+python3 lib/research_notes.py step   --case-id <id> \
+    --title "Process List (windows.pslist)" \
+    --action "vol -f image.mem windows.pslist → <id>_evidence/memory/pslist.txt" \
+    --why "Forensic rationale for this step" \
+    --outcome "Findings … [source: <id>_evidence/memory/pslist.txt]" \
+    [--dismissed "What was inspected and judged not significant, and why"] \
+    [--assumption]            # prefixes the outcome with [ASSUMPTION] for the report generator
+    [--raw "key excerpt"] [--raw-file <path>]   # --raw-file wins; avoids shell arg-size limits
+
+# Log a confirmed attacker action observed in the evidence (EVT-NNN)
+python3 lib/research_notes.py event  --case-id <id> \
+    --description "What the attacker did" --severity critical|high|medium|low|info \
+    --module FAN|FAME|FAST [--timestamp "YYYY-MM-DD HH:MM:SS UTC"] \
+    [--source "IP/PID/path"] [--detail "context"] [--no-timestamp]
+
+# Log a structured mid-investigation reflection (RF-NNN)
+python3 lib/research_notes.py reflect --case-id <id> --trigger "post-netscan review" \
+    [--reinterpret "how new findings change earlier steps"] [--open-leads "what needs follow-up"]
+
+# Record a standalone analytical assumption
+python3 lib/research_notes.py assumption --case-id <id> --text "The assumption statement"
+
+# Replace the summary placeholder with a closing paragraph (once, before upload)
+python3 lib/research_notes.py finalize --case-id <id> --summary "Closing summary"
+```
+
+Importable parsing API, used by the narrative, timeline, campaign, and vault writers:
+
+```python
+from lib.research_notes import parse_steps, parse_events, parse_reflections
+
+parse_steps(case_id)        # → list[{id, step_num, timestamp, title, action, why, outcome, dismissed}]
+parse_events(case_id)       # → list[{id, event_num, timestamp, severity, module, description, source_detail}]
+parse_reflections(case_id)  # → list[{id, reflect_num, timestamp, trigger, reinterpret, open_leads}]
+```
+
+Step IDs are `RN-001`, `RN-002`, …; events `EVT-NNN`; reflections `RF-NNN` — each auto-incremented and stable for cross-referencing from report sections and vault records. Raw artifacts are preserved individually under `./reports/<case_id>_evidence/` with SHA-256 hashes. `./reports/` is in `.gitignore`; notes are never committed.
+
+---
+
+### `lib/vault_writer.py` — report → vault (confirmed-findings-only)
+
+Parses a finished module report's Markdown tables and writes the **analyst-reviewed** findings to the Obsidian vault via `knowledge_extractor`. The report Markdown — not raw tool output — is the authoritative source, so only findings that survived analyst review are recorded. This is the anti-fabrication boundary described in [Section 11.2](#112-anti-hallucination--ir-accuracy).
+
+```bash
+python3 lib/vault_writer.py --module fame|fast|fan \
+    [--case-id <id> | --report <path>] [--reports-dir ./reports]
+```
+
+Main functions: `write_fame_to_vault()`, `write_fast_to_vault()`, `write_fan_to_vault()`. Helpers parse the management summary, the MITRE ATT&CK table (→ `record_ttp`), the IOC table (→ `record_ioc`), and recommendations (→ `record_risk`). Rows marked *"not confirmed"* or `Informational` are skipped. Every vault entry is written with a source attribution (`source: FAME report`, `… RN-NNN`). `_refang()` reverses defanging so `knowledge_extractor` can re-defang consistently before storage. On first use it calls `init_vault()` to bootstrap the folder tree.
+
+---
+
+### `lib/narrative_generator.py` — report → narrative sections
+
+Derives the narrative prose sections (`attack_timeline`, `section_processes`, `section_network`, `section_malware`, the `pptx_*` blocks) from the existing module report plus the research notes. Pure text extraction and reformatting — no API calls. Output: `./reports/<case_id>_narrative.md`, consumed by the report and board-deck generators.
+
+```bash
+python3 lib/narrative_generator.py --case-id <id> [--reports-dir ./reports]
+```
+
+---
+
+### `lib/correlate_findings.py` — cross-module correlation engine
+
+Computes the actual FAN↔FAME, FAME↔FAST, and FAN↔FAST matches from the raw artifact files (netscan / pslist / cmdline for FAME; `fls_output` and carved URLs/domains for FAST; the per-protocol threat JSON for FAN). Must run **after** the modules complete but **before** `./analysis/` is cleaned up. Assigns confidence by the number of independent corroborating matches (3+ High, 2 Medium, 1 "verify manually").
+
+```bash
+python3 lib/correlate_findings.py --case-id <id> [--hostname <host>] \
+    [--reports-dir ./reports] [--analysis-dir ./analysis]
+# or:  from lib.correlate_findings import correlate; correlate(case_id="...", hostname="...")
+```
+
+Output: `./reports/<case_id>_correlation.md` (narrative) + `<case_id>_correlation.json` (machine-readable). `generate_combined_report.py` embeds the `.md` in Section 2 automatically when present. Exposed to Claude via the `/correlate` skill.
+
+---
+
+### `lib/generate_timeline.py` — swimlane attack/defender timelines
+
+Renders vertical swimlane timelines (paginated PNG + interactive HTML) from the research-notes events and steps: an attacker view (timestamped `EVT-NNN`), a defender view (analyst `RN-NNN`), and a combined key-events view. Severity drives colour and font size; events without a confirmed timestamp are excluded from the visual timeline (they still appear in the untimed-findings section). PNGs paginate at 12 events per page so text never overlaps. Invoked by the narrative and campaign generators. PNG output requires `matplotlib` (optional); interactive HTML requires `plotly` (in `requirements.txt`); both degrade gracefully to a placeholder when absent.
+
+---
+
+### `lib/generate_batch_report.py` — batch aggregate report
+
+Aggregates the per-case reports produced by `batch_analyze.sh` / `batch_agentic.sh` into a single batch investigation report (MD + PDF + PPTX + DOCX), surfacing cross-host patterns.
+
+```bash
+python3 lib/generate_batch_report.py --batch-id BATCH-20260528 \
+    --manifest ./batch_work/BATCH-*/manifest.json \
+    [--reports-dir ./reports] [--output-dir ./reports] [--no-upload]
+# or:  from lib.generate_batch_report import generate; generate(batch_id="...", manifest_path=Path("..."))
+```
+
+Reads the batch `manifest.json` (per-case status + errors) and discovers each case's report. Output: `./reports/BATCH_<id>_batch_report.*`.
+
+---
+
+### `lib/generate_campaign_report.py` — unified campaign report
+
+Reads every `<case_id>_narrative.md` + `<case_id>_research_notes.md` in a batch folder and produces a unified cross-case campaign report (`CAMPAIGN_<id>_report.md` + `.pdf` + `_board_deck.pptx` + `_timeline.png`). Detects per-case severity by keyword scan (rootkit, mimikatz, ransomware, C2, …). Generated at the end of an agentic batch and by the `investigate-all` skill.
+
+```bash
+python3 lib/generate_campaign_report.py --campaign-id SHIELDBASE-2026 \
+    [--title "Operation ShieldBase"] [--reports-dir ./reports] [--output-dir ./reports]
+```
+
+---
+
+### `lib/init_vault.py` — vault bootstrap
+
+Creates the `vault/` folder tree (`TTPs/`, `IOCs/`, `ThreatActors/`, `Malware/`, `Concepts/`, `Risks/`, `Cases/`, `Templates/`) and `Dashboard.md` with its AUTO section markers. Idempotent — existing notes are never overwritten. Called automatically the first time `vault_writer` runs.
+
+```bash
+python3 lib/init_vault.py [--vault /path/to/vault]    # default: ./vault/
+```
+
+---
+
 ## 7. MCP server API
 
 All servers implement JSON-RPC 2.0 over stdio (MCP protocol v2024-11-05). They are registered in `.claude/settings.json` and started automatically by Claude Code when it opens the project. Each server runs as a subprocess; failures are isolated and do not affect the other servers.
@@ -770,7 +922,7 @@ All servers implement JSON-RPC 2.0 over stdio (MCP protocol v2024-11-05). They a
 
 Root: `$EVIDENCE_ROOT` (default: `~/evidence`)
 
-All paths are validated to stay within `EVIDENCE_ROOT`. Write operations are rejected at the server level — the server has no write handlers.
+All paths are validated to stay within `EVIDENCE_ROOT` by `_safe_path()` (`evidence_server.py:119`), which resolves the request to an absolute path and rejects it with `ValueError` if it does not start with the resolved root — defeating `../` traversal. Write operations are not "denied" but **unimplemented**: the server defines only the four read-only tools below, with no write handlers at all. This is an *architectural* guardrail, not a prompt instruction — see [Section 11.3](#113-architectural-guardrails).
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
@@ -786,6 +938,8 @@ All paths are validated to stay within `EVIDENCE_ROOT`. Write operations are rej
 ### `mcp/investigations_server.py` — read-write investigations vault
 
 Root: `$INVESTIGATIONS_ROOT` (default: `~/cases`)
+
+Read **and** write, but every operation — read, write, mkdir, delete — first passes through the same `_safe_path()` jail (`investigations_server.py:145`); a path that escapes the root raises `ValueError` before any filesystem call. Writes are therefore confined to the case vault by construction.
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
@@ -924,13 +1078,6 @@ All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`
 | `INVESTIGATIONS_ROOT` | No | Remote path for case output (default: `/home/sansforensics/cases`) |
 | `EVIDENCE_ROOT` | No | Override local evidence root (default: `~/evidence`) |
 | `PYTHONPATH` | AutoTimeliner | Must include Volatility 3 source path for AutoTimeliner to work |
-| `SENTINEL_TENANT_ID` | Sentinel | Azure AD tenant GUID |
-| `SENTINEL_CLIENT_ID` | Sentinel | App registration client GUID |
-| `SENTINEL_CLIENT_SECRET` | Sentinel | App registration secret |
-| `SENTINEL_SUBSCRIPTION_ID` | Sentinel | Azure subscription GUID |
-| `SENTINEL_RESOURCE_GROUP` | Sentinel | Resource group containing the workspace |
-| `SENTINEL_WORKSPACE_NAME` | Sentinel | Log Analytics workspace name |
-| `SENTINEL_WORKSPACE_ID` | Sentinel | Log Analytics workspace GUID |
 
 ### `.claude/settings.json` — MCP and permissions
 
@@ -1073,7 +1220,164 @@ fast_analyze.sh  (FAST)
 
 ---
 
-## 11. License and disclaimer
+## 11. Trust & reliability subsystem
+
+This is the subsystem the *FIND EVIL!* judging criteria target directly: autonomous execution
+quality (failure handling + self-correction), IR accuracy (confirmed vs. inferred, hallucinations
+flagged), constraint implementation (architectural guardrails), and audit-trail quality. Every
+mechanism below is enforced in code; none of it is prompt-only. The companion diagrams are
+[Architecture §3–§7](ARCHITECTURE_DIAGRAM.md#3-trust--reliability-layer).
+
+### 11.1 Audit trail — `research_notes.py`
+
+The audit trail makes any finding traceable to the tool execution that produced it. Its API is in
+[Section 6](#libresearchnotespy--investigative-audit-trail-trust-subsystem); here is how it is wired
+into the investigation.
+
+**Enforcement.** The FAME / FAST / FAN skills carry a **MANDATORY RULE**: *"Do NOT proceed to the
+next analysis step until the current step has been documented via `research_notes.py step`."*
+Running a plugin and immediately launching the next without logging is not permitted. The agent
+reads the output, interprets it, calls `step`, and only then advances. Because the step counter is
+derived from the file (`_step_count()`), the numbering is gap-free and tamper-evident.
+
+**Four record types, each timestamped (UTC) and ID-stamped:**
+
+| Type | ID | Captures | Used for |
+|------|----|----------|----------|
+| Step | `RN-NNN` | action · why · outcome · optional `dismissed` · optional raw excerpt | The investigative workflow, one entry per tool run |
+| Event | `EVT-NNN` | timestamped attacker action · severity · observing module · source artifact | The attack timeline |
+| Reflect | `RF-NNN` | trigger · re-interpretations of earlier steps · open leads | Mid-investigation re-assessment (self-correction of conclusions) |
+| Assumption | — | a standalone working hypothesis | Surfacing unproven premises |
+
+**The traceability chain** (diagram: [Architecture §4](ARCHITECTURE_DIAGRAM.md#4-audit-trail-traceability-chain)):
+
+```
+tool execution → preserved artifact (<case>_evidence/…  + SHA-256)
+              → research note RN-NNN  ("[source: <artifact>]" in the outcome)
+              → report section (cites RN-NNN)
+              → vault record (record_ttp(... "source: FAME report, RN-NNN"))
+```
+
+A reviewer can pick any vault IOC/TTP, read its `source: … RN-NNN` attribution, open the matching
+research note, follow the `[source: …]` tag to the preserved artifact, and re-run the command in the
+`Action` field. The chain is bidirectional and complete. Raw artifacts are preserved per-step under
+`./reports/<case_id>_evidence/` with SHA-256 hashes; `./reports/` is git-ignored so notes and
+evidence are never committed.
+
+### 11.2 Anti-hallucination & IR accuracy
+
+The platform's stance: a claim is reported at its true epistemic status — confirmed, inferred, or
+unknown — and a value is never invented to fill a gap.
+
+| Control | Mechanism | Enforcement point |
+|---------|-----------|-------------------|
+| **Confirmed vs. inferred** | `--assumption` prefixes the outcome with `[ASSUMPTION]`; the report generator collects these into the §17 *Assumptions* list | `research_notes.py:294`, `generate_fame_report.py` §17 builder |
+| **Unconfirmed timestamps** | `event --no-timestamp` marks the finding `— (unconfirmed)` and **excludes it from the visual timeline** while keeping it in the untimed-findings section | `research_notes.py:379–402`, `parse_events()` |
+| **False-positive discipline** | `step --dismissed` records what was inspected and deliberately *not* flagged, and why (e.g. "malfind hits are clr.dll JIT regions — confirmed .NET FPs") | `research_notes.py:295` |
+| **Confidence scoring** | `_score_overall_confidence()` returns `(HIGH\|MEDIUM\|LOW, reasoning)`; the reasoning names the specific gap (YARA unavailable, baseline missing, DKOM active) | `generate_fame_report.py:310` |
+| **Completeness & gaps** | `_build_confidence_gaps_section()` emits a §17 *Confidence & gaps* section: a completeness table (which steps ran vs. were skipped), data gaps, assumptions, the reflection log, and recommended follow-up | `generate_fame_report.py:382` |
+| **Degrade, don't guess (DKOM)** | When `psscan` returns more processes than `pslist`, a rootkit is hiding processes; `_is_dkom_active()` flags it, marks `pslist` *not authoritative*, elevates `psscan`/`netscan`/`modscan`, and drops overall confidence to MEDIUM | `generate_fame_report.py:186, 195` |
+| **Confirmed-only vault writes** | `vault_writer` records findings **only** from the analyst-reviewed report tables — never from raw tool output. Rows marked *"not confirmed"* or `Informational` are skipped | `vault_writer.py` `_parse_ioc_table()` |
+| **Corroboration confidence** | `correlate_findings._confidence()` rates a cross-module finding by independent matches: 3+ High, 2 Medium, 1 "verify manually" | `correlate_findings.py` |
+| **Vault → Perplexity → record-back** | The vault is queried before any external lookup; Perplexity fires only on a cache miss; only confirmed results are written back — preventing a web guess from becoming canonical | `CLAUDE.md` decision order; `fan_ip_lookup.py` |
+
+### 11.3 Architectural guardrails
+
+Security boundaries are enforced at the server and kernel level, where the agent cannot talk its way
+past them — not in the prompt. Diagram: [Architecture §5](ARCHITECTURE_DIAGRAM.md#5-architectural-guardrails).
+
+| Guardrail | What it stops | Enforcement point |
+|-----------|---------------|-------------------|
+| **MCP path jail** | Path traversal out of the evidence/cases root | `_safe_path()` resolves to absolute + `startswith(ROOT)` check; `evidence_server.py:119`, `investigations_server.py:145` |
+| **Read-only evidence server** | Any modification of evidence via MCP | `evidence_server.py` defines **no write handlers** — a write is unimplemented, not merely refused |
+| **Kernel read-only mount** | Pipeline bugs altering the original disk image | `mount -o ro,loop,norecovery` in `fast_analyze.sh`; Volatility 3 / YARA open the memory image read-only |
+| **Prompt-injection filename whitelist** | Adversarial evidence filenames injecting instructions into `claude -p` | `batch_agentic.sh:186` — basename must match `[[:alnum:][:space:]._-]`; otherwise skipped and logged to the manifest |
+| **IOC defanging** | Live indicators leaking to the vault or to Perplexity | defang before any vault write / external call; `fan_ip_lookup.py`, `vault_writer._refang()` round-trip |
+| **No-daemon / explicit start** | Un-auditable automated evidence processing | every investigation begins with a deliberate analyst command — chain-of-custody requires it |
+
+**Bypass-testing note for the panel:** the evidence server's read-only property is structural (no
+write code path exists), and traversal is blocked by absolute-path prefix comparison rather than
+string filtering, so `../`, symlinks resolved by `.resolve()`, and absolute-path arguments all land
+inside the jail or are rejected.
+
+### 11.4 Failure handling & self-correction
+
+The governing principle: **an optional stage never aborts the pipeline, and every skip or fallback
+is logged so the gap is visible rather than hidden.** Diagram:
+[Architecture §7](ARCHITECTURE_DIAGRAM.md#7-failure-handling--self-correction-map).
+
+**Shell-level.** Orchestrators run `set -euo pipefail` for fail-fast on *critical* steps; *optional*
+steps use `|| true` plus a logged warning. `analyze_pcap.sh`'s `run_step` wrapper aggregates
+per-step pass/fail without halting and prints a summary.
+
+**Python-level.** Integrations return structured error objects instead of raising, so the
+coordinator observes the failure and continues: `fame_memprocfs.run_memprocfs()` returns a dict with
+`error` set (never raises); `perplexity_client` returns `{... "error": "HTTP 401: …"}`;
+`investigations_upload` catches `CalledProcessError` and prints a remediation tip.
+
+**Self-correcting fallback chains:**
+
+| Pipeline | Trigger | Fallback |
+|----------|---------|----------|
+| FAME | No ISF symbols for a Linux image | strings-based extraction (`strings` + grep for auth/syslog) |
+| FAME | `pslist` empty / DKOM | switch to `psscan`-authoritative workflow, logged as a *Deviation* step |
+| FAME | MemProcFS init fails | record error, continue with Volatility pathway |
+| FAST | Filesystem mount fails | retry `norecovery` → fall back to TSK-only mode (`SKIP_MOUNT`) |
+| FAST | `fls` fails | retry with explicit `-o <offset>` |
+| FAST | Autopsy absent | write `AUTOPSY_NOT_RUN.txt`, continue |
+| FAST | Image > 20 GB | skip `bulk_extractor`, note it |
+| FAN | Suricata rule update fails | continue with existing rules |
+| Shared | Vault miss | Perplexity lookup, then record back |
+| Shared | Upload fails | reports retained in `./reports/`/`./analysis/`, re-runnable manually |
+| Batch | A case fails | log to manifest, continue, retry failed cases at the end |
+
+**Mandatory deviation logging.** Whenever the analysis leaves the standard path — a step skipped, a
+fallback used, a plugin returning unexpected results — the skills require it to be recorded as its
+own `step --title "Deviation: <what changed>"`. The deviation log is what lets a reviewer see *where*
+and *why* the agent self-corrected, and challenge or reproduce that decision.
+
+**Interrupted-run recovery.** `fast_analyze.sh` writes a `.fast_session.json` and, on an evidence
+switch, uploads the previous case's artifacts before cleaning up. Batch runs record processed stems
+and skip already-completed evidence, so an interrupted batch resumes without redoing work. A
+non-empty `./analysis/` at pipeline start is itself a signal that the previous run was interrupted.
+
+---
+
+## 12. Batch & campaign orchestration
+
+Scale-out for "how much case data can the agent handle". Diagram:
+[Architecture §9](ARCHITECTURE_DIAGRAM.md#9-batch--campaign-scale-out).
+
+| Script | Path taken per case | Produces |
+|--------|---------------------|----------|
+| `batch_analyze.sh` | Direct shell pipelines (`fame_analyze.sh` / `fast_analyze.sh`) — fast, non-agentic | Per-case reports + `manifest.json` + aggregate batch report |
+| `batch_agentic.sh` | Claude agentic skills (`claude -p "/fame …"`) — produces research notes + interpreted findings + MITRE context, then a campaign report | Per-case reports + research notes + `CAMPAIGN_*` report |
+| `batch_regenerate.sh` | Re-renders narratives / board decks / PDFs for cases already in `./reports/` | Regenerated artifacts (no re-analysis) |
+
+```bash
+./scripts/batch_analyze.sh  [evidence_dir] [--batch-id BATCH-2026-001] [--no-vault] [--no-upload]
+./scripts/batch_agentic.sh  [evidence_dir] [--batch-id BATCH-2026-001] [--no-vault] [--no-upload]
+./scripts/batch_regenerate.sh [--dry-run] [--only-pptx] [--case-id CASE-ID]
+```
+
+**Routing.** Files are routed by extension — FAME: `.mem .img .raw .lime .vmem .dmp`; FAST:
+`.E01 .ewf .vmdk .vdi .qcow2 .vhd .vhdx`; FAN: `.pcap .pcapng .cap`. `.7z`/`.zip` archives are
+extracted first. When both an archive and a pre-extracted image share a stem, the archive wins and
+the duplicate is skipped. Default evidence directory: `/home/vscode/evidence`.
+
+**Manifest.** `batch_work/<BATCH_ID>/manifest.json` records one entry per file
+(`case_id, source_file, extracted_as, module, hostname, status`) plus an `errors` list, and is the
+input to `generate_batch_report.py`.
+
+**Skills.** `/investigate-all [evidence_dir]` runs the same batch in-session via `/fame` and `/fast`,
+with a post-batch synthesis step (common IOCs/TTPs, outlier case, highest-severity leads, revised
+campaign conclusion) before the unified report. `/correlate` runs `correlate_findings.py`.
+`/archive-reports` moves a finished campaign folder from `./reports/` to `./archive/` (move only,
+never delete; never overwrites an existing archive).
+
+---
+
+## 13. License and disclaimer
 
 Fan Get Fame Fast is released under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for the full terms.
 
@@ -1083,4 +1387,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — May 2026 — v1.2*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — June 2026 — v2.0*
