@@ -585,4 +585,7 @@ def _self_test() -> None:
 
 
 if __name__ == "__main__":
+    # `--test` is the documented invocation; a bare call runs the same self-test.
+    if len(sys.argv) > 1 and sys.argv[1] not in ("--test", "-t"):
+        sys.exit(f"usage: {sys.argv[0]} [--test]")
     _self_test()

@@ -233,4 +233,4 @@ For indicators not found in OpenCTI, pass them to `/fan-ip-lookup` for Perplexit
 - Never query OpenCTI with RFC-1918 addresses, loopback addresses, or link-local addresses
 - Never query with internal hostnames (`.local`, `.internal`, `.corp` TLDs)
 - Results are written only to the case folder — not to shared reports unless `/fan-report` is run
-- TLP:RED or TLP:AMBER results from OpenCTI are flagged clearly in output; do not include in Teams notifications or shared outputs
+- TLP:RED or TLP:AMBER results from OpenCTI are flagged clearly in output; do not include in shared outputs

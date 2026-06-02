@@ -35,7 +35,7 @@ In the devcontainer, evidence files are located at `/home/vscode/evidence`.
 | Module | Domain | Status |
 |--------|--------|--------|
 | FAN | Network forensics (PCAP) | Live |
-| FAME | Memory forensics (Volatility 3 / Memory Baseliner) | Live |
+| FAME | Memory forensics (Volatility 3 + optional Memory Baseliner) | Live |
 | FAST | Storage forensics (disk images — TSK / EWF tools) | Live |
 
 All three modules are live. FAME and FAST auto-detect sibling module reports for the
@@ -121,7 +121,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
 | Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerate all FAME + FAST evidence files and run them sequentially in-session; default dir: `/home/vscode/evidence` |
-| Memory Forensics (FAME) | `/fame` | Run Volatility 3 + Memory Baseliner; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
+| Memory Forensics (FAME) | `/fame` | Run Volatility 3 (+ Memory Baseliner when a baseline is supplied); generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Storage Forensics (FAST) | `/fast` | Run TSK / EWF tools; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Cross-module correlation | `/correlate` | Compute actual FAN↔FAME / FAME↔FAST / FAN↔FAST matches from raw artifact files; run before `./analysis/` is cleaned up |
 | CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Check extracted IPs and FQDNs against OpenCTI; write `opencti_lookup.md` to investigations vault |
@@ -130,10 +130,11 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Unknown artifact / live threat intel | `/perplexity-lookup` | Live threat intel search for an unknown artifact |
 | Markdown to PDF | `/md-to-pdf` | Convert any Markdown file to a styled PDF |
 | Remove Case | `/remove-case` | Remove a case directory from the investigations vault |
+| Archive reports | `/archive-reports [campaign_id]` | Move a completed campaign folder from `./reports/<id>/` to `./archive/<id>/` (also migrates legacy flat files); interactive if no id given |
 
 FAN analysis skills: `fan-arp-threats`, `fan-cert-inspector`, `fan-dhcp-threats`, `fan-dns-threats`, `fan-extract-ip-fqdn`, `fan-file-hashes`, `fan-http-threats`, `fan-icmp-threats`, `fan-ip-lookup`, `fan-llmnr-threats`, `fan-mdns-threats`, `fan-nbns-threats`, `fan-netbios-threats`, `fan-ntp-threats`, `fan-opencti-lookup`, `fan-quic-threats`, `fan-report`, `fan-snmp-threats`, `fan-ssdp-threats`, `fan-stun-threats`, `fan-suricata`, `fan-tcp-threats`, `fan-tls-inspector`, `fan-udp-threats`, `fan-yara-pcap`.
 
-FAME skill: `fame` — memory forensics pipeline (Volatility 3 + Memory Baseliner + report generation + upload).
+FAME skill: `fame` — memory forensics pipeline (Volatility 3 + optional Memory Baseliner + report generation + upload).
 
 FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact extraction + report generation + upload).
 
@@ -160,7 +161,7 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 
 ## Forensic analysis memory (FAME)
 
-**FAME** is a manual memory forensics pipeline built on Volatility 3 and Memory Baseliner.
+**FAME** is a manual memory forensics pipeline built on Volatility 3, with optional Memory Baseliner comparison. Baseliner runs only when a clean-system baseline is supplied at `baselines/baseline.json` (and `/opt/memory-baseliner/baseline.py` is installed); otherwise it is skipped and the rest of the pipeline proceeds normally.
 
 ```bash
 # Start a memory investigation (interactive — prompts for case ID)
@@ -172,7 +173,7 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 
 **Pipeline:**
 1. Analyst provides a memory image path.
-2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline) and Memory Baseliner (proc/drv/svc comparison). Linux images fall back to strings-based extraction when ISF symbols are unavailable.
+2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline). If a `baselines/baseline.json` is present, it also runs Memory Baseliner (proc/drv/svc comparison); without one this step is skipped. Linux images fall back to strings-based extraction when ISF symbols are unavailable.
 3. Reports are generated: Markdown + PDF + PPTX (Microsoft PowerPoint, 8 slides) + DOCX (Microsoft Word).
 4. If FAN or FAST reports exist for the same case ID, a combined unified report is also generated.
 5. All reports are uploaded to the investigations vault via MCP (`investigations_write_file`).
@@ -203,6 +204,8 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 MCP servers for vault access:
 - `evidence` (read-only, SSH to `sansforensics@ubuntudesktop`, root: `/home/sansforensics/evidence/`): `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`
 - `investigations` (read-write): `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`
+
+The SSH-to-`ubuntudesktop` form above is the canonical (production) registration and is not committed. For local development you can register the same servers as plain local processes (`"command": "python3"`, `args: [".../mcp/evidence_server.py"]`) and point them at a local directory via the `EVIDENCE_ROOT` env var — keep this in your gitignored `.claude/settings.local.json`, not the committed `settings.json`.
 
 ## OpenCTI integration (MCP server)
 

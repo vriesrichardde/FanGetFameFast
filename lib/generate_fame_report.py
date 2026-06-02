@@ -473,6 +473,41 @@ def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
     return {k: v.strip() for k, v in sections.items()}
 
 
+def _narr_bullets(narrative: dict, key: str) -> list[str]:
+    """Return the bullet lines of a narrative pptx_* section as clean strings.
+
+    Accepts '-', '*' or '•' bullet markers; falls back to non-empty paragraph
+    lines if the section has no explicit bullets. Returns [] when absent."""
+    text = (narrative or {}).get(key, "") or ""
+
+    def _clean(s: str) -> str:
+        return re.sub(r"\*\*(.*?)\*\*", r"\1", s).replace("**", "").strip()
+
+    bullets: list[str] = []
+    # A real bullet marker is '-', '*' or '•' FOLLOWED BY whitespace. A line such
+    # as "-testing tooling" (a hyphenated word wrapped across lines) is NOT a bullet.
+    marker = re.compile(r"^([-*•])\s+(.*)$")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = marker.match(line)
+        if m:
+            item = m.group(2).strip()
+            if item:
+                bullets.append(item)
+        elif bullets:
+            # continuation of a wrapped bullet — join onto the previous one
+            bullets[-1] = (bullets[-1] + " " + line).strip()
+    if not bullets:
+        # No explicit bullet markers: treat blank-line-separated paragraphs as items.
+        for para in re.split(r"\n\s*\n", text):
+            p = " ".join(l.strip() for l in para.splitlines() if l.strip())
+            if p:
+                bullets.append(p)
+    return [_clean(b) for b in bullets]
+
+
 # ── Evidence trail ────────────────────────────────────────────────────────────
 
 def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
@@ -608,28 +643,44 @@ def _build_markdown(
     a("> context while keeping language free of IPs, ports, file sizes, and workstation IDs.")
     a("")
     shutdown_md = data.get("shutdown_report", "")
+    exec_bullets = _narr_bullets(narrative, "pptx_executive_summary")
+    impact_bullets = _narr_bullets(narrative, "pptx_impact")
     if shutdown_md:
-        # Extract the root cause summary paragraph
+        # Legacy "unexpected shutdown" scenario.
         for line in shutdown_md.splitlines():
             if "deliberately" in line.lower() or "intentionally" in line.lower() or "root cause" in line.lower():
                 a(f"> {line.strip()}")
                 a("")
                 break
-    a("Memory forensic analysis of the subject server was conducted to determine")
-    a("the cause of an unexpected shutdown event. The analysis examined the memory")
-    a("image captured from the server and reconstructed system activity leading up")
-    a("to the shutdown.")
-    a("")
-    if "msfadmin" in shutdown_md:
-        a("**Finding:** The shutdown was deliberately triggered by a person at the physical")
-        a("server console. Two failed login attempts with unknown credentials were made before")
-        a("a successful login. The authenticated user immediately obtained elevated (administrator)")
-        a("privileges and issued a shutdown command. All system services halted in the expected")
-        a("orderly sequence and the server restarted approximately 30 seconds later.")
+        a("Memory forensic analysis of the subject server was conducted to determine")
+        a("the cause of an unexpected shutdown event. The analysis examined the memory")
+        a("image captured from the server and reconstructed system activity leading up")
+        a("to the shutdown.")
         a("")
-        a("**Business Impact:** The event indicates either an undocumented maintenance action")
-        a("or unauthorized physical access to the server room. No evidence of a remote attacker,")
-        a("hardware failure, or software crash was found in the memory image.")
+        if "msfadmin" in shutdown_md:
+            a("**Finding:** The shutdown was deliberately triggered by a person at the physical")
+            a("server console. Two failed login attempts with unknown credentials were made before")
+            a("a successful login. The authenticated user immediately obtained elevated (administrator)")
+            a("privileges and issued a shutdown command. All system services halted in the expected")
+            a("orderly sequence and the server restarted approximately 30 seconds later.")
+            a("")
+            a("**Business Impact:** The event indicates either an undocumented maintenance action")
+            a("or unauthorized physical access to the server room. No evidence of a remote attacker,")
+            a("hardware failure, or software crash was found in the memory image.")
+    elif exec_bullets:
+        # Narrative-driven management summary (general case).
+        a(f"Memory forensic analysis of host **{hostname}** was performed to establish what")
+        a("activity occurred on the workstation. The key business-level findings are:")
+        a("")
+        for b in exec_bullets:
+            a(f"- {b}")
+        a("")
+        if impact_bullets:
+            a("**Business impact:**")
+            a("")
+            for b in impact_bullets:
+                a(f"- {b}")
+            a("")
     else:
         a("Refer to the Technical Body below for detailed findings extracted from the memory image.")
     a("")
@@ -1019,6 +1070,12 @@ def _extract_iocs(data: dict[str, Any], shutdown_md: str) -> list[dict]:
 
 
 def _build_recommendations(data: dict[str, Any], shutdown_md: str) -> list[str]:
+    # Prefer the Claude-authored, case-specific recommendations when this is not
+    # the legacy shutdown scenario.
+    if not shutdown_md:
+        narr_recs = _narr_bullets(data.get("_narrative", {}), "pptx_recommendations")
+        if narr_recs:
+            return narr_recs
     recs = []
     if "physical" in shutdown_md.lower() or "tty1" in shutdown_md or "console" in shutdown_md.lower():
         recs.append(
@@ -1074,6 +1131,7 @@ def _build_pptx(
         return
 
     shutdown_md = data.get("shutdown_report", "")
+    narrative = data.get("_narrative", {})
 
     prs = Presentation()
     prs.slide_width  = Inches(13.33)
@@ -1147,7 +1205,11 @@ def _build_pptx(
             "The event is consistent with either undocumented maintenance or unauthorized physical access."
         )
     else:
-        findings_text = "See technical report for detailed findings."
+        exec_bullets = _narr_bullets(narrative, "pptx_executive_summary")
+        if exec_bullets:
+            findings_text = "\n\n".join(f"•  {b}" for b in exec_bullets[:7])
+        else:
+            findings_text = "See technical report for detailed findings."
     _add_text(s2, findings_text, M, Inches(1.3), W - 2*M, Inches(5.5), 14, color=_TEXT_DARK)
 
     # ── Slide 3 — Timeline ────────────────────────────────────────────────────
@@ -1164,11 +1226,46 @@ def _build_pptx(
                 parts = [p.strip().strip("*") for p in line.strip("|").split("|")]
                 if len(parts) >= 2:
                     timeline_events.append((parts[0], parts[1]))
+    if not timeline_events:
+        # Preferred fallback: the clean, confirmed-timestamp events from the
+        # research notes (one row per attacker action with an evidence timestamp).
+        try:
+            reports_dir = PROJECT_ROOT / "reports"
+            for ev in _parse_research_events(case_id, str(reports_dir)):
+                ts = ev.get("timestamp", "").replace(" UTC", " UTC").strip()
+                desc = ev.get("description", "").strip()
+                if ts and desc:
+                    timeline_events.append((ts, desc))
+            timeline_events.sort(key=lambda x: x[0])
+        except Exception:
+            pass
+    if not timeline_events:
+        # Last resort: pull "TIME — event" lines out of the attack_timeline prose.
+        tl = narrative.get("attack_timeline", "")
+        ts_re = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?(?:\s*[–-]\s*\d{1,2}:\d{2}(?::\d{2})?)?\s*(?:UTC|EDT|CET)?")
+        for raw in tl.splitlines():
+            line = raw.strip().lstrip("-*• ").replace("**", "").strip()
+            if not line or not re.search(r"\d{1,2}:\d{2}", line[:45]):
+                continue
+            m = ts_re.search(line)
+            if not m:
+                continue
+            tstamp = m.group(0).strip()
+            rest = line[m.end():].lstrip(" —-:,").strip()
+            rest = re.sub(r"\(\[?(RN|EVT|RF)-[0-9]+\]?[^)]*\)", "", rest).strip(" .")
+            if tstamp and len(rest) > 8:
+                timeline_events.append((tstamp, rest))
+        seen = set(); deduped = []
+        for t, e in timeline_events:
+            k = (t, e[:40])
+            if k not in seen:
+                seen.add(k); deduped.append((t, e))
+        timeline_events = deduped
     if timeline_events:
         row_h = Inches(0.46)
         _add_rect(s3, M, Inches(1.15), Inches(2.2), row_h - Inches(0.04), _MID_NAVY)
         _add_rect(s3, M + Inches(2.2), Inches(1.15), W - M - Inches(2.2) - M, row_h - Inches(0.04), _MID_NAVY)
-        _add_text(s3, "Time (CET)", M + Inches(0.1), Inches(1.2), Inches(2.0), row_h,
+        _add_text(s3, "Time", M + Inches(0.1), Inches(1.2), Inches(2.0), row_h,
                   12, bold=True, color=_WHITE)
         _add_text(s3, "Event", M + Inches(2.3), Inches(1.2), W - M - Inches(3.0), row_h,
                   12, bold=True, color=_WHITE)
@@ -1204,8 +1301,27 @@ def _build_pptx(
              "No external network connections or remote login sessions found in the memory image."),
         ]
     else:
-        evidence_items = [("Memory analysis completed",
-                           "See technical report for detailed evidence items.")]
+        risk_bullets = _narr_bullets(narrative, "pptx_risk")
+        impact_bullets = _narr_bullets(narrative, "pptx_impact")
+        evidence_items = []
+
+        def _split_label(b: str) -> tuple:
+            for sep in (":", " — ", " - "):
+                if sep in b:
+                    lab, desc = b.split(sep, 1)
+                    if 2 < len(lab) < 48:
+                        return (lab.strip(" *"), desc.strip())
+            words = b.split()
+            return (" ".join(words[:4]), b)
+
+        for b in impact_bullets[:3]:
+            evidence_items.append(_split_label(b))
+        for b in risk_bullets[:2]:
+            lab, desc = _split_label(b)
+            evidence_items.append((lab if "risk" in lab.lower() else f"Risk: {lab}", desc))
+        if not evidence_items:
+            evidence_items = [("Memory analysis completed",
+                               "See technical report for detailed evidence items.")]
     row_h = Inches(1.0)
     for i, (label, desc) in enumerate(evidence_items[:5]):
         y = Inches(1.25) + i * row_h
@@ -1982,7 +2098,33 @@ def _build_docx(
             "procedures should be reviewed."
         )
     else:
-        _para("See the technical sections below for detailed findings.")
+        narrative = data.get("_narrative", {})
+        exec_bullets = _narr_bullets(narrative, "pptx_executive_summary")
+        impact_bullets = _narr_bullets(narrative, "pptx_impact")
+        risk_bullets = _narr_bullets(narrative, "pptx_risk")
+        if exec_bullets:
+            _para(
+                f"A memory forensic analysis of host {hostname} was conducted to establish "
+                "what activity took place on the workstation. The business-level findings are "
+                "summarised below; precise technical detail (identifiers, addresses, ports, "
+                "process IDs) is contained in the technical sections and appendices."
+            )
+            _para("Key findings:", bold=True)
+            for b in exec_bullets:
+                p = doc.add_paragraph(style="List Bullet")
+                run = p.add_run(b); run.font.name = "Arial"
+            if impact_bullets:
+                _para("Business impact:", bold=True)
+                for b in impact_bullets:
+                    p = doc.add_paragraph(style="List Bullet")
+                    run = p.add_run(b); run.font.name = "Arial"
+            if risk_bullets:
+                _para("Business risk:", bold=True)
+                for b in risk_bullets:
+                    p = doc.add_paragraph(style="List Bullet")
+                    run = p.add_run(b); run.font.name = "Arial"
+        else:
+            _para("See the technical sections below for detailed findings.")
 
     # ── C.2 Cross-module intelligence ─────────────────────────────────────────
     if fan_summary or fast_summary or opencti_findings:
@@ -2109,6 +2251,11 @@ def generate(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data = _load_analysis(analysis_dir)
+    # Make the Claude-authored narrative available to the PPTX/DOCX builders too
+    # (the Markdown builder loads it separately). This lets the management-facing
+    # outputs fall back to the narrative's pptx_* sections for cases that are not
+    # the legacy "unexpected shutdown" scenario.
+    data["_narrative"] = _load_narrative(case_id, output_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")
     stem = case_id.replace(" ", "_")
 
