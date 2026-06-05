@@ -370,6 +370,19 @@ run_step "Upload report" \
     $( [[ -f "$REPORT_ZIP"   ]] && echo "--zip $REPORT_ZIP" ) \
     $( [[ -f "$EVIDENCE_ZIP" ]] && echo "--zip $EVIDENCE_ZIP" )
 
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl) and upload it. The transcript is
+# written to ./reports (which survives WIP cleanup) and captures the analytical
+# reasoning behind every finding, feeding workflow optimisation.
+header "Recording Session Transcript"
+
+run_step "Session transcript (chain of evidence)" \
+    python3 "$PROJECT_ROOT/lib/chat_recorder.py" \
+    --case-id "$CASE_ID" \
+    --output-dir "$PROJECT_ROOT/reports" \
+    --upload
+
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"
 

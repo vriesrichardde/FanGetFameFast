@@ -499,6 +499,19 @@ else
     echo "[fast] Upload skipped (--no-upload)."
 fi
 
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl). It captures the analytical
+# reasoning behind every finding and feeds workflow optimisation. This step
+# must never fail the investigation, and runs before local cleanup so the
+# transcript is uploaded with the rest of the artefacts.
+echo "[fast] Recording session transcript (chain of evidence)..."
+python3 "$PROJECT_ROOT/lib/chat_recorder.py" \
+    --case-id    "$CASE_ID" \
+    --output-dir "$REPORTS_DIR" \
+    $([[ $SKIP_UPLOAD -eq 0 ]] && echo "--upload" || true) \
+    || echo "[fast] WARNING: Session transcript recording failed (analysis unaffected)."
+
 # ── Clean up local artifacts ───────────────────────────────────────────────────
 echo "[fast] Cleaning up local artifacts (preserved in investigations vault)..."
 _cleanup_local_artifacts

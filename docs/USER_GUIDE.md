@@ -171,7 +171,8 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 7. All artifacts (MD, PDF, PPTX, and all module outputs) are packaged into a single timestamped ZIP
 8. The ZIP goes to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
 9. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
-10. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
+10. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside the report
+11. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
 
 ### Output files per investigation
 
@@ -180,6 +181,8 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 | `<stem>_incident_report.md` | Analyst | Full technical findings, all protocol sections |
 | `<stem>_incident_report.pdf` | Analyst / Legal | Styled PDF of the technical report |
 | `<stem>_management_briefing.pptx` | CISO / Management | 7-slide PowerPoint: executive summary, threat landscape, IDS alerts, IOCs, recommendations, module coverage |
+| `<case_id>_chat_transcript.md` / `.pdf` | Legal / Internal Audit | Chain-of-evidence record of the full Claude Code coordination session (verbatim, nothing truncated) |
+| `<case_id>_chat_transcript.jsonl` | Chain of evidence | Raw session transcript, preserved verbatim; its SHA-256 is recorded in the MD/PDF |
 | `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above + raw module JSON/CSV outputs |
 
 ### Analysis folder
@@ -604,6 +607,7 @@ Open Claude Code in the project directory and type the skill name preceded by `/
 | Obsidian query | `/obsidian-query` | Queries the vault for known context before starting an investigation |
 | Obsidian record | `/obsidian-record` | Records confirmed findings into the vault and pushes them to OpenCTI |
 | Markdown to PDF | `/md-to-pdf` | Converts any Markdown file to a styled PDF with cover page and pagination |
+| Session transcript | `/record-chat` | Records the current Claude Code session as a chain-of-evidence MD + PDF + verbatim `.jsonl`; runs automatically at the end of FAN/FAME/FAST, invoke to re-record |
 | Remove case | `/remove-case` | Removes a case directory from the investigations vault |
 
 Individual detection module skills (`/fan-dns-threats`, `/fan-http-threats`, `/fan-tls-inspector`, etc.) run one module at a time against the current PCAP.
@@ -844,6 +848,23 @@ python3 lib/case_packager.py \
 ```bash
 ./scripts/md_to_pdf.sh /path/to/report.md /path/to/output.pdf
 ```
+
+### Recording the session transcript (chain of evidence)
+
+This runs automatically at the end of every FAN/FAME/FAST pipeline. To
+re-record manually (e.g. the session continued after the analysis finished):
+
+```bash
+# Auto-detect the active session → ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+python3 lib/chat_recorder.py --case-id FAN-2026-001
+
+# Also upload the transcript to the investigations vault
+python3 lib/chat_recorder.py --case-id FAN-2026-001 --upload
+```
+
+The rendering is complete and verbatim — tool outputs are never truncated. The
+raw `.jsonl` is preserved as the authoritative record and its SHA-256 is printed
+in the MD/PDF.
 
 The PDF includes a styled cover page, running header stripe, and "Page X of Y" pagination. Requires WeasyPrint (installed by `install_dependencies.sh`).
 

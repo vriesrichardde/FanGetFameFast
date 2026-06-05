@@ -407,6 +407,19 @@ ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
 
 Without this setup, the final upload step of every investigation fails. The finished report stays in `./analysis/_reports/<stem>/` and `./analysis/` is not cleared.
 
+### Session transcript recording (chain of evidence)
+
+At the end of every pipeline, `lib/chat_recorder.py` records the full Claude Code
+coordination session as `./reports/<case_id>_chat_transcript.{md,pdf,jsonl}` and
+uploads it with the rest of the artefacts. It reads the active session from the
+Claude Code transcript directory (`~/.claude/projects/<encoded-project-dir>/`),
+which is derived automatically from `CLAUDE_PROJECT_DIR` or the working
+directory — no configuration is needed, and it adapts to whichever user the
+solution runs as. Recording (and its upload) is best-effort: any failure is
+logged as a warning and never aborts the investigation. The rendering is
+verbatim — tool outputs are never truncated — and the raw `.jsonl` is preserved
+with its SHA-256 recorded in the document.
+
 ---
 
 ## 10. Verify the installation
@@ -537,7 +550,7 @@ the diagram is [Architecture §5](ARCHITECTURE_DIAGRAM.md#5-architectural-guardr
 | **Evidence MCP server is read-only** | Claude cannot modify evidence through MCP | `mcp/evidence_server.py` defines only read tools — no write handler exists | `grep -i "write\|delete\|mkdir" mcp/evidence_server.py` returns no tool handlers |
 | **MCP path jail** | No access outside the evidence / cases root, including `../` traversal | `_safe_path()` in both file servers resolves to an absolute path and rejects anything not under the root | `grep -n "_safe_path" mcp/evidence_server.py mcp/investigations_server.py` |
 | **Read-only evidence mounts** | The original disk/memory image is never altered, even by a pipeline bug | `mount -o ro,loop,norecovery` in `fast_analyze.sh`, verified by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis runs; Volatility 3 / YARA open images read-only | inspect the `mount` invocation in `scripts/fast_analyze.sh`; `bash -c 'source scripts/pathguard.sh; fgff_assert_ro_mount /'` aborts (rw) |
-| **Library write-path policy** | No library code can write a report or note into evidence, `/mnt`, `/media`, or outside the approved output folders — even via a buggy `--output-dir` | `lib/path_guard.py` hard-fails (`WritePolicyError`); wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` generator, `case_packager`; `investigations_server._assert_writable` rejects the same roots over MCP | `python3 lib/path_guard.py --test` |
+| **Library write-path policy** | No library code can write a report or note into evidence, `/mnt`, `/media`, or outside the approved output folders — even via a buggy `--output-dir` | `lib/path_guard.py` hard-fails (`WritePolicyError`); wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` generator, `chat_recorder`, `case_packager`; `investigations_server._assert_writable` rejects the same roots over MCP | `python3 lib/path_guard.py --test` |
 | **Prompt-injection filename whitelist** | A hostile evidence filename cannot inject instructions into the agentic prompt | `batch_agentic.sh` skips any basename outside `[[:alnum:][:space:]._-]` and logs it | `grep -n "unsafe characters" scripts/batch_agentic.sh` |
 | **IOC defanging** | Live indicators never leak to the vault or to Perplexity | values are defanged before any vault write or external call | inspect `record_ioc` / `_refang` in `lib/vault_writer.py` |
 | **No daemon / explicit start** | No un-audited automated evidence processing — chain of custody requires every action be deliberate | there is no file watcher; every investigation starts with an analyst command | — |

@@ -573,6 +573,18 @@ if [[ $NO_VAULT -eq 0 ]]; then
     fi
 fi
 
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl). It captures the analytical
+# reasoning behind every finding and feeds workflow optimisation. This step
+# must never fail the investigation.
+echo "[fame] Recording session transcript (chain of evidence)..."
+python3 "$PROJECT_ROOT/lib/chat_recorder.py" \
+    --case-id    "$CASE_ID" \
+    --output-dir "$REPORTS_DIR" \
+    $([[ $SKIP_UPLOAD -eq 0 ]] && echo "--upload" || true) \
+    || echo "[fame] WARNING: Session transcript recording failed (analysis unaffected)."
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"

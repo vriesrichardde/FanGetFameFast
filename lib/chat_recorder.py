@@ -56,9 +56,9 @@ DEFAULT_REPORTS_DIR = PROJECT_ROOT / "reports"
 # file-history-snapshot, …) is harness bookkeeping and is skipped.
 _MESSAGE_TYPES = {"user", "assistant"}
 
-# Per-block truncation for the human-readable rendering only. The raw .jsonl
-# is preserved verbatim and remains the authoritative, full-fidelity record.
-_MAX_BLOCK_CHARS = 6000
+# The PDF/Markdown rendering is complete and verbatim — tool outputs are NEVER
+# truncated, however long, so the document stands on its own as chain of
+# evidence. The raw .jsonl is preserved alongside as the authoritative record.
 
 
 # ── Transcript discovery ────────────────────────────────────────────────────
@@ -145,17 +145,6 @@ def parse_transcript(jsonl_path: Path) -> list[dict]:
     return entries
 
 
-def _truncate(text: str) -> str:
-    if len(text) <= _MAX_BLOCK_CHARS:
-        return text
-    dropped = len(text) - _MAX_BLOCK_CHARS
-    return (
-        text[:_MAX_BLOCK_CHARS]
-        + f"\n[… truncated {dropped:,} characters — see the raw .jsonl for the "
-        "full record …]"
-    )
-
-
 def _result_to_text(content) -> str:
     """Flatten a tool_result ``content`` (str | list of blocks) to plain text."""
     if isinstance(content, str):
@@ -207,7 +196,7 @@ def _render_blocks(content) -> list[str]:
     out: list[str] = []
     if isinstance(content, str):
         if content.strip():
-            out.append(_truncate(content.strip()))
+            out.append(content.strip())
         return out
 
     if not isinstance(content, list):
@@ -220,22 +209,22 @@ def _render_blocks(content) -> list[str]:
         if btype == "text":
             text = str(block.get("text", "")).strip()
             if text:
-                out.append(_truncate(text))
+                out.append(text)
         elif btype == "thinking":
             thinking = str(block.get("thinking", "")).strip()
             if thinking:  # encrypted/redacted thinking is empty — skip silently
-                out.append("> **Reasoning**\n>\n> " + _truncate(thinking).replace("\n", "\n> "))
+                out.append("> **Reasoning**\n>\n> " + thinking.replace("\n", "\n> "))
         elif btype == "tool_use":
             name = block.get("name", "tool")
             try:
                 pretty = json.dumps(block.get("input", {}), indent=2, ensure_ascii=False)
             except (TypeError, ValueError):
                 pretty = str(block.get("input", ""))
-            out.append(f"**🔧 Tool call → `{name}`**\n\n```json\n{_truncate(pretty)}\n```")
+            out.append(f"**🔧 Tool call → `{name}`**\n\n```json\n{pretty}\n```")
         elif btype == "tool_result":
             text = _result_to_text(block.get("content", "")).strip()
             err = " (error)" if block.get("is_error") else ""
-            body = _truncate(text) if text else "(no output)"
+            body = text if text else "(no output)"
             out.append(f"**↳ Result{err}:**\n\n```\n{body}\n```")
     return out
 
@@ -284,8 +273,8 @@ def render_markdown(
     lines.append(
         "The authoritative raw record is the session transcript JSON-Lines file "
         f"(`{source_path.name}`, SHA-256 above), preserved verbatim alongside "
-        "this document. This PDF is a human-readable rendering; long tool "
-        "outputs are truncated here but retained in full in the `.jsonl`."
+        "this document. This is a complete, verbatim rendering — tool outputs "
+        "are reproduced in full, regardless of length, and nothing is truncated."
     )
     lines.append("")
     lines.append("---")

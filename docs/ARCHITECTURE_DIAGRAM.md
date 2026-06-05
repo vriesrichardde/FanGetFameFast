@@ -67,7 +67,7 @@ flowchart TB
         PPLX["Perplexity.ai<br/>live threat intel"]:::know
     end
 
-    OUT["📄 Reports<br/>Markdown · PDF · PPTX · DOCX<br/>Management summary + technical body"]:::out
+    OUT["📄 Reports<br/>Markdown · PDF · PPTX · DOCX<br/>Management summary + technical body<br/>+ chain-of-evidence session transcript (MD · PDF · raw .jsonl)"]:::out
 
     A --> COORD
     COORD --> MODS
@@ -220,6 +220,13 @@ A judge can pick **any** IOC or TTP in the vault, read its `source: … RN-NNN` 
 matching research note, follow the `[source: …]` tag to the preserved artifact file, and re-run the
 exact command in the `Action` field. The chain is bidirectional and complete.
 
+Wrapping the whole chain is the **chain-of-evidence session transcript**
+(`lib/chat_recorder.py` → `<case>_chat_transcript.{md,pdf,jsonl}`): a verbatim,
+SHA-256-fingerprinted record of the entire Claude Code coordination session —
+every analyst question, every pivot, every tool execution and its full output.
+It is produced automatically at the end of each pipeline and shows not just
+*what* was concluded but *how* the coordinator reasoned its way there.
+
 ### ASCII fallback
 
 ```
@@ -262,7 +269,7 @@ flowchart TB
     end
 
     subgraph G5["Guardrail 5 — library write-path policy (code-enforced)"]
-        PG["lib/path_guard.py<br/>assert_writable / guard_output_dir<br/>WritePolicyError outside approved folders<br/>wired into obsidian_bridge, md_to_pdf, generate_*, case_packager"]
+        PG["lib/path_guard.py<br/>assert_writable / guard_output_dir<br/>WritePolicyError outside approved folders<br/>wired into obsidian_bridge, md_to_pdf, generate_*, chat_recorder, case_packager"]
     end
 
     AGENT --> G1 --> G2 --> G3 --> G4 --> G5 --> ALLOW["✅ Action permitted<br/>inside the boundary only"]:::ok

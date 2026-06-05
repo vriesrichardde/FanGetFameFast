@@ -146,7 +146,12 @@ Analyst
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
         │     Also pushes to OpenCTI via mcp/opencti_server.py
         │
-        └── [11] WIP cleanup
+        ├── [11] Session transcript (chain of evidence)
+        │     lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
+        │     Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+        │     Uploaded to the investigations vault alongside the report
+        │
+        └── [12] WIP cleanup
               rm -rf ./analysis/<module>/<pcap-stem>/  (all 22 modules)
               rm -rf ./analysis/suricata/<pcap-stem>/
               rm -rf ./analysis/yara_pcap/<pcap-stem>/
@@ -262,8 +267,13 @@ Analyst
         ├── [13] Upload to investigations vault
         │     lib/investigations_upload.py (SSH/SCP to ubuntudesktop)
         │
-        └── [14] Vault recording
-              lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
+        ├── [14] Vault recording
+        │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
+        │
+        └── [15] Session transcript (chain of evidence)
+              lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
+              Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+              Uploaded to the investigations vault alongside the reports
 ```
 
 ---
@@ -341,8 +351,13 @@ Analyst
         ├── [13] Upload to investigations vault
         │     lib/investigations_upload.py (SSH/SCP to ubuntudesktop)
         │
-        └── [14] Vault recording
-              lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
+        ├── [14] Vault recording
+        │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
+        │
+        └── [15] Session transcript (chain of evidence)
+              lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
+              Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+              Uploaded to the investigations vault alongside the reports
 ```
 
 ---
@@ -507,7 +522,8 @@ root (read-only roots win). Matching is by resolved path prefix — never substr
   devcontainer/production defaults, `<project>/evidence` if present, and `FGFF_READONLY_ROOTS`).
 
 Wired into: `obsidian_bridge` (all vault writes), `md_to_pdf.convert` (all PDFs), every `generate_*`
-report generator (output-dir resolution), and `case_packager` (staging dir + ZIP). The `investigations`
+report generator (output-dir resolution), `chat_recorder` (transcript MD/PDF/JSONL), and
+`case_packager` (staging dir + ZIP). The `investigations`
 MCP server enforces the same read-only roots independently; the analyze shell scripts use the parallel
 `scripts/pathguard.sh`.
 
@@ -633,6 +649,40 @@ convert(
     classification="CONFIDENTIAL",             # footer text (optional)
 )
 ```
+
+---
+
+### `lib/chat_recorder.py` — session transcript (chain of evidence)
+
+Records the Claude Code coordination session that drove the investigation as a
+chain-of-evidence document set. It is the analytical counterpart to the
+incident report: where the report states the findings, the transcript shows how
+they were reached (questions asked, pivots taken, tools invoked, and their
+outputs). Runs automatically at the end of every FAN/FAME/FAST pipeline; also
+invokable via `/record-chat`.
+
+The active session transcript is auto-detected from
+`~/.claude/projects/<encoded-project-dir>/` (resolution order: `--transcript` →
+`CLAUDE_TRANSCRIPT_PATH` → `CLAUDE_SESSION_ID` → most-recently-modified
+`.jsonl`). The rendering is **complete and verbatim — tool outputs are never
+truncated**. The raw `.jsonl` is preserved verbatim and its SHA-256 is recorded
+in the MD/PDF, so the rendering always ties back to the original bytes.
+
+```python
+from lib.chat_recorder import record_chat
+
+paths = record_chat(
+    case_id="FAME-2026-001",
+    output_dir="./reports",   # default; path_guard-enforced
+    md_only=False,            # set True to skip the PDF
+    upload=False,             # True → SSH/SCP to the investigations vault
+)
+# paths: {"md": Path, "pdf": Path, "jsonl": Path}
+```
+
+Outputs: `./reports/<case_id>_chat_transcript.{md,pdf,jsonl}`. The step never
+fails an investigation — the analyze scripts treat any recording or upload error
+as a warning and continue.
 
 ---
 

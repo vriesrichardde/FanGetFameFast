@@ -135,7 +135,8 @@ the solution and supply evidence paths manually later.
 2. 22 protocol threat-detection modules run (ARP, DHCP, DNS, HTTP/S, ICMP, LLMNR, mDNS, NetBIOS, NBNS, NTP, QUIC, SNMP, SSDP, STUN, TCP, TLS, UDP, YARA sweep, Suricata IDS, certificate inspection, IP reputation, file hash extraction).
 3. A versioned incident report (Markdown + PDF) is generated.
 4. The report is uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
-5. All `./analysis/` working directories are deleted — the folder is left empty after a completed investigation.
+5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside the report.
+6. All `./analysis/` working directories are deleted — the folder is left empty after a completed investigation.
 
 ## How FAME works
 
@@ -144,6 +145,7 @@ the solution and supply evidence paths manually later.
 3. Reports are generated: Markdown + PDF + PPTX + DOCX.
 4. If FAN or FAST reports exist for the same case ID, a combined unified report is generated automatically.
 5. All reports are uploaded to the investigations vault.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside the reports.
 
 ## How FAST works
 
@@ -152,6 +154,7 @@ the solution and supply evidence paths manually later.
 3. Reports are generated: Markdown + PDF + PPTX + DOCX.
 4. If FAN or FAME reports exist for the same case ID, a combined unified report is generated automatically.
 5. All reports are uploaded to the investigations vault.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside the reports.
 
 ---
 
@@ -236,6 +239,7 @@ Privacy rule: never include live case hostnames, usernames, or internal IPs in P
 | `lib/vault_query.py` | Read-path queries: `get_context_for_ioc`, `get_context_for_ttp`, `get_active_cases`, `get_top_risks`, `search_context` |
 | `lib/perplexity_client.py` | Real-time threat intel via Perplexity.ai |
 | `lib/md_to_pdf.py` | Markdown → styled PDF (WeasyPrint, cover page, CONFIDENTIAL footer, pagination) |
+| `lib/chat_recorder.py` | Chain-of-evidence session recorder: renders the Claude Code session to verbatim MD + PDF and preserves the SHA-256-fingerprinted raw `.jsonl`; runs at the end of every pipeline (also `/record-chat`) |
 | `lib/generate_pptx_report.py` | Management PowerPoint (7 slides, CISO language) |
 | `lib/generate_fame_report.py` | FAME report generator (MD + PDF + PPTX + DOCX) |
 | `lib/generate_fast_report.py` | FAST report generator (MD + PDF + PPTX + DOCX) |

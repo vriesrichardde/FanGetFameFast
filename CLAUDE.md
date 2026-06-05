@@ -106,6 +106,7 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 | `lib/vault_query.py` | Read-path queries: `get_context_for_ioc`, `get_context_for_ttp`, `get_active_cases`, `get_top_risks`, `get_related_notes`, `search_context` |
 | `lib/perplexity_client.py` | Real-time threat intel via Perplexity.ai: `lookup_ioc`, `lookup_malware`, `lookup_ttp`, `lookup_cve`, `lookup_actor`, `lookup_tool`, `search` |
 | `lib/md_to_pdf.py` | Markdown → styled PDF converter: cover page, running page-header stripe, "Page X of Y" pagination, CONFIDENTIAL footer — wraps WeasyPrint, no pandoc required |
+| `lib/chat_recorder.py` | Chain-of-evidence session recorder: locates the active Claude Code transcript (`~/.claude/projects/<encoded>/<uuid>.jsonl`), renders it to Markdown + PDF, and preserves the raw `.jsonl` verbatim (SHA-256 recorded in the document so the rendering ties back to the original bytes). `record_chat(case_id, upload=False)` → `{md, pdf, jsonl}`. Runs automatically at the end of every FAN/FAME/FAST pipeline; also invokable via `/record-chat` |
 | `lib/generate_pptx_report.py` | Management PowerPoint generator (7 slides, CISO language, python-pptx): cover, executive summary, threat landscape, IDS/YARA alerts, IOCs, recommendations, module coverage |
 | `lib/case_packager.py` | Package all artifacts (MD + PDF + PPTX + module JSON/CSV) into a timestamped ZIP and upload via SSH/SCP to the investigations vault |
 | `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop) — supports MD, PDF, PPTX, DOCX, ZIP |
@@ -130,6 +131,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Vault recording (post-investigation) | `/obsidian-record` | Record confirmed findings into the vault (also pushes to OpenCTI) |
 | Unknown artifact / live threat intel | `/perplexity-lookup` | Live threat intel search for an unknown artifact |
 | Markdown to PDF | `/md-to-pdf` | Convert any Markdown file to a styled PDF |
+| Session transcript (chain of evidence) | `/record-chat` | Record the current Claude Code session as MD + PDF + verbatim `.jsonl` (SHA-256 fingerprinted). Runs automatically at the end of FAN/FAME/FAST; invoke manually to re-record |
 | Remove Case | `/remove-case` | Remove a case directory from the investigations vault |
 | Archive reports | `/archive-reports [campaign_id]` | Move a completed campaign folder from `./reports/<id>/` to `./archive/<id>/` (also migrates legacy flat files); interactive if no id given |
 
@@ -156,7 +158,8 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 2. `analyze_pcap.sh` runs 22 protocol threat-detection modules. All WIP output goes to `./analysis/`.
 3. A versioned incident report (Markdown + PDF) is generated.
 4. The report is copied to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
-5. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
+5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the report.
+6. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
 
 **Investigations vault** — case folders live at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
 
@@ -178,6 +181,7 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 3. Reports are generated: Markdown + PDF + PPTX (Microsoft PowerPoint, 8 slides) + DOCX (Microsoft Word).
 4. If FAN or FAST reports exist for the same case ID, a combined unified report is also generated.
 5. All reports are uploaded to the investigations vault via MCP (`investigations_write_file`).
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAME report section.
 
@@ -199,6 +203,7 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 3. Reports are generated: Markdown + PDF + PPTX (8 slides) + DOCX.
 4. If FAN or FAME reports exist for the same case ID, a combined unified report is also generated.
 5. All reports are uploaded to the investigations vault via MCP.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAST report section.
 
