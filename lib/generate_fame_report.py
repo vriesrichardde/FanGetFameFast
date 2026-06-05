@@ -35,6 +35,8 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 try:
@@ -2248,7 +2250,7 @@ def generate(
     """
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "memory")
     output_dir   = output_dir   or (PROJECT_ROOT / "reports")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
 
     data = _load_analysis(analysis_dir)
     # Make the Claude-authored narrative available to the PPTX/DOCX builders too

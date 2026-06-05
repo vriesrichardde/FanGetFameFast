@@ -33,6 +33,8 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -1029,7 +1031,7 @@ def generate(
     )
 
     out_dir = output_dir or (PROJECT_ROOT / "analysis" / "_reports" / stem)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out_dir)
     out_path = out_dir / f"{stem}_management_briefing.pptx"
 
     rpts_dir = reports_dir or (PROJECT_ROOT / "reports")

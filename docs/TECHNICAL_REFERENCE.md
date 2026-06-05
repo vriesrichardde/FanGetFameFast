@@ -478,6 +478,43 @@ source .venv/bin/activate
 
 ---
 
+### `lib/path_guard.py` — write-path policy (single source of truth)
+
+Enforces the rule *output is written only to approved folders; evidence, `/mnt`, `/media` and
+everything else are read-only.* Every file-writing chokepoint in the library routes through it, and
+a write outside policy raises `WritePolicyError` (a `PermissionError`) — nothing is written.
+
+```python
+from lib.path_guard import (
+    assert_writable,    # assert_writable(path) → resolved Path; raises WritePolicyError if blocked
+    guard_output_dir,   # guard_output_dir(path) → resolved Path; assert + mkdir(parents, exist_ok)
+    is_writable,        # is_writable(path) → bool
+    safe_write_text,    # safe_write_text(path, text, **kw) → Path  (policy-checked Path.write_text)
+    safe_write_bytes,   # safe_write_bytes(path, data) → Path
+    safe_open,          # safe_open(path, mode, **kw) → IO  (asserts only for write/append modes)
+    WritePolicyError,
+)
+```
+
+Policy: a path is writable **iff** it resolves inside an approved root **and not** inside a read-only
+root (read-only roots win). Matching is by resolved path prefix — never substring — so
+`reports/<case>_evidence` stays writable while a real evidence root does not.
+
+- **Approved roots** (under the project root): `analysis`, `exports`, `reports`, `archive`, `vault`,
+  `cases`, `demo`, `docs`, plus the OS temp dir. Extend with `FGFF_APPROVED_ROOTS` (a `:`-separated
+  list of absolute paths).
+- **Read-only roots**: `/mnt`, `/media`, and any evidence root (`EVIDENCE_ROOT`, the
+  devcontainer/production defaults, `<project>/evidence` if present, and `FGFF_READONLY_ROOTS`).
+
+Wired into: `obsidian_bridge` (all vault writes), `md_to_pdf.convert` (all PDFs), every `generate_*`
+report generator (output-dir resolution), and `case_packager` (staging dir + ZIP). The `investigations`
+MCP server enforces the same read-only roots independently; the analyze shell scripts use the parallel
+`scripts/pathguard.sh`.
+
+Self-test: `python3 lib/path_guard.py --test`
+
+---
+
 ### `lib/obsidian_bridge.py` — vault I/O
 
 Low-level read/write operations on `./vault/`. All paths are relative to `./vault/`.
@@ -1290,7 +1327,8 @@ past them — not in the prompt. Diagram: [Architecture §5](ARCHITECTURE_DIAGRA
 |-----------|---------------|-------------------|
 | **MCP path jail** | Path traversal out of the evidence/cases root | `_safe_path()` resolves to absolute + `startswith(ROOT)` check; `evidence_server.py:119`, `investigations_server.py:145` |
 | **Read-only evidence server** | Any modification of evidence via MCP | `evidence_server.py` defines **no write handlers** — a write is unimplemented, not merely refused |
-| **Kernel read-only mount** | Pipeline bugs altering the original disk image | `mount -o ro,loop,norecovery` in `fast_analyze.sh`; Volatility 3 / YARA open the memory image read-only |
+| **Library write-path policy** | Any library code (a buggy `--output-dir`, a refactor) writing a report/note into evidence, `/mnt`, `/media`, or outside the approved output folders | `lib/path_guard.py` — `assert_writable`/`guard_output_dir` hard-fail with `WritePolicyError`; wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` report generator, and `case_packager`. The `investigations` MCP server independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT` (`investigations_server.py:_assert_writable`). Validate with `python3 lib/path_guard.py --test` |
+| **Kernel read-only mount** | Pipeline bugs altering the original disk image | `mount -o ro,loop,norecovery` in `fast_analyze.sh`; mount verified read-only by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis; Volatility 3 / YARA open the memory image read-only |
 | **Prompt-injection filename whitelist** | Adversarial evidence filenames injecting instructions into `claude -p` | `batch_agentic.sh:186` — basename must match `[[:alnum:][:space:]._-]`; otherwise skipped and logged to the manifest |
 | **IOC defanging** | Live indicators leaking to the vault or to Perplexity | defang before any vault write / external call; `fan_ip_lookup.py`, `vault_writer._refang()` round-trip |
 | **No-daemon / explicit start** | Un-auditable automated evidence processing | every investigation begins with a deliberate analyst command — chain-of-custody requires it |

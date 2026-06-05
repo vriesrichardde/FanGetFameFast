@@ -38,6 +38,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 try:
@@ -3463,7 +3465,7 @@ def generate_report(
         ANALYSIS_DIR = base_dir
 
     out_dir = output_dir or REPORTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out_dir)
 
     print(f"[report] Loading analysis data for stem: {stem}")
     data = load_all_data(stem)

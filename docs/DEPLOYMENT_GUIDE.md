@@ -536,14 +536,16 @@ the diagram is [Architecture §5](ARCHITECTURE_DIAGRAM.md#5-architectural-guardr
 |-----------|------------------|-------|---------------|
 | **Evidence MCP server is read-only** | Claude cannot modify evidence through MCP | `mcp/evidence_server.py` defines only read tools — no write handler exists | `grep -i "write\|delete\|mkdir" mcp/evidence_server.py` returns no tool handlers |
 | **MCP path jail** | No access outside the evidence / cases root, including `../` traversal | `_safe_path()` in both file servers resolves to an absolute path and rejects anything not under the root | `grep -n "_safe_path" mcp/evidence_server.py mcp/investigations_server.py` |
-| **Read-only evidence mounts** | The original disk/memory image is never altered, even by a pipeline bug | `mount -o ro,loop,norecovery` in `fast_analyze.sh`; Volatility 3 / YARA open images read-only | inspect the `mount` invocation in `scripts/fast_analyze.sh` |
+| **Read-only evidence mounts** | The original disk/memory image is never altered, even by a pipeline bug | `mount -o ro,loop,norecovery` in `fast_analyze.sh`, verified by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis runs; Volatility 3 / YARA open images read-only | inspect the `mount` invocation in `scripts/fast_analyze.sh`; `bash -c 'source scripts/pathguard.sh; fgff_assert_ro_mount /'` aborts (rw) |
+| **Library write-path policy** | No library code can write a report or note into evidence, `/mnt`, `/media`, or outside the approved output folders — even via a buggy `--output-dir` | `lib/path_guard.py` hard-fails (`WritePolicyError`); wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` generator, `case_packager`; `investigations_server._assert_writable` rejects the same roots over MCP | `python3 lib/path_guard.py --test` |
 | **Prompt-injection filename whitelist** | A hostile evidence filename cannot inject instructions into the agentic prompt | `batch_agentic.sh` skips any basename outside `[[:alnum:][:space:]._-]` and logs it | `grep -n "unsafe characters" scripts/batch_agentic.sh` |
 | **IOC defanging** | Live indicators never leak to the vault or to Perplexity | values are defanged before any vault write or external call | inspect `record_ioc` / `_refang` in `lib/vault_writer.py` |
 | **No daemon / explicit start** | No un-audited automated evidence processing — chain of custody requires every action be deliberate | there is no file watcher; every investigation starts with an analyst command | — |
 
 These boundaries hold regardless of what the agent is asked to do. A path-traversal request raises
 `ValueError` at the server; an evidence write has no code path to execute; the kernel enforces the
-read-only mount. When briefing a security reviewer, this table is the answer to *"are the guardrails
+read-only mount; a library write outside the approved folders raises `WritePolicyError` before any
+bytes are written. When briefing a security reviewer, this table is the answer to *"are the guardrails
 architectural or prompt-based?"* — they are architectural.
 
 ---

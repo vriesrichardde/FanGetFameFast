@@ -23,6 +23,8 @@ import argparse
 import sys
 from datetime import date
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 try:
     from docx import Document
@@ -269,7 +271,10 @@ def _section_1_introduction(doc):
         "The following constraints are enforced in code and cannot be overridden by the analyst:")
     for item in [
         "No write operations are ever performed on /mnt/, /media/, or any directory under the "
-        "evidence mount root.",
+        "evidence mount root. This is enforced programmatically: the lib/path_guard.py policy "
+        "module hard-fails (WritePolicyError) any write outside the approved output folders, and "
+        "the analyze scripts source scripts/pathguard.sh to verify evidence mounts are read-only "
+        "before analysis begins.",
         "Disk images are always mounted read-only (mount -o ro,loop,norecovery).",
         "E01 images are verified with ewfverify before any analysis begins; the verification "
         "result is written to ewfverify.txt and included in the report.",
@@ -1428,7 +1433,7 @@ def main():
     args = ap.parse_args()
 
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_path.parent)
 
     build_document(output_path, args.author, args.classification)
 

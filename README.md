@@ -256,7 +256,7 @@ python3 lib/vault_query.py --search powershell
 
 ## Constraints
 
-- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory.
+- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. This is **enforced in code** by `lib/path_guard.py`: every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail (`WritePolicyError`) on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). The `investigations` MCP server independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`, and the analyze scripts source `scripts/pathguard.sh` to verify evidence mounts are read-only before any analysis runs. Validate the policy with `python3 lib/path_guard.py --test`.
 - Analysis working files go to `./analysis/` only. That folder must be empty after a completed investigation.
 - Finalized reports are stored in the investigations vault, not in the project directory.
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.

@@ -39,6 +39,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -887,7 +889,7 @@ def generate(
 ) -> dict[str, Path | None]:
     reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     output_dir  = output_dir  or reports_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
 
     manifest = _load_manifest(manifest_path)
 

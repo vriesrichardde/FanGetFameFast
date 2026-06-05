@@ -40,6 +40,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 try:
@@ -1588,7 +1590,7 @@ def generate(
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "storage")
     exports_dir  = exports_dir  or (PROJECT_ROOT / "exports")
     output_dir   = output_dir   or (PROJECT_ROOT / "reports")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
 
     data = _load_analysis(analysis_dir, exports_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")

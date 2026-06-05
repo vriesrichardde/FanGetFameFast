@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 sys.path.insert(0, "/home/richard/Documents/SecurityOperationsCenterOnSteroids/.venv/lib/python3.12/site-packages")
 
@@ -1754,7 +1756,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out)
 
     pptx_path = out / "AI-based attack demonstration.pptx"
     docx_path = out / "AI-based attack demonstration.docx"

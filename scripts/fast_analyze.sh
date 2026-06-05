@@ -24,6 +24,7 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/pathguard.sh"
 
 DISK_IMAGE=""
 CASE_ID=""
@@ -225,7 +226,9 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
         { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
 
-        [[ $SKIP_MOUNT -eq 0 ]] && MOUNTED_FS=1 && echo "[fast] Mounted at $FS_MOUNT"
+        # Verify the mount really is read-only before any analysis touches it.
+        [[ $SKIP_MOUNT -eq 0 ]] && fgff_assert_ro_mount "$FS_MOUNT"
+        [[ $SKIP_MOUNT -eq 0 ]] && MOUNTED_FS=1 && echo "[fast] Mounted at $FS_MOUNT (verified read-only)"
     fi
 fi
 

@@ -37,6 +37,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
+
 SSH_HOST    = os.environ.get("INVESTIGATIONS_SSH_HOST", "sansforensics@ubuntudesktop")
 REMOTE_ROOT = os.environ.get("INVESTIGATIONS_ROOT",     "/home/sansforensics/cases")
 
@@ -69,11 +72,11 @@ def package(
     analysis_dir = Path(analysis_dir) if analysis_dir else reports_dir.parent.parent
     output_dir   = Path(output_dir)   if output_dir   else reports_dir
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = path_guard.guard_output_dir(output_dir)
 
     ts       = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     zip_name = f"{case_id}_{ts}.zip"
-    zip_path = output_dir / zip_name
+    zip_path = path_guard.assert_writable(output_dir / zip_name)
 
     print(f"[package] Creating {zip_path.name} ...")
 

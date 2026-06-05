@@ -24,6 +24,7 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/pathguard.sh"
 VOL="${VOL:-/opt/volatility3-2.20.0/vol.py}"
 [[ -x "$VOL" ]] || VOL="/opt/volatility3/vol.py"
 BASELINE="/opt/memory-baseliner/baseline.py"

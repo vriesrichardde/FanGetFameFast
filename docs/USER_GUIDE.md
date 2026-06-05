@@ -717,7 +717,7 @@ Fan Get Fame Fast uses three Model Context Protocol (MCP) servers. They run as l
 
 The evidence and investigations roots are set in `.claude/settings.json` via the `env` block. Re-run `setup_folder_structure.sh` to regenerate this file if you move the project or change the evidence/cases paths.
 
-**These are architectural guardrails, not prompt rules.** The `evidence` server is read-only because it has *no write code at all* — a write isn't refused, it's unimplemented. Both file servers confine every request to their root with a `_safe_path()` check that defeats `../` traversal at the server, before any file is touched. Claude cannot talk its way past either boundary. See [Technical Reference §11.3](TECHNICAL_REFERENCE.md#113-architectural-guardrails).
+**These are architectural guardrails, not prompt rules.** The `evidence` server is read-only because it has *no write code at all* — a write isn't refused, it's unimplemented. Both file servers confine every request to their root with a `_safe_path()` check that defeats `../` traversal at the server, before any file is touched. The `investigations` server additionally rejects any write that resolves under `/mnt`, `/media`, or `EVIDENCE_ROOT`. On the library side, `lib/path_guard.py` is the single source of truth for the write-path policy: every Python write chokepoint hard-fails (`WritePolicyError`) on any write outside the approved output folders, so even a buggy `--output-dir` cannot land a report in evidence. Claude cannot talk its way past any of these boundaries. See [Technical Reference §11.3](TECHNICAL_REFERENCE.md#113-architectural-guardrails).
 
 Credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from environment variables sourced via `~/.soc_env`, not from `settings.json`.
 
@@ -915,7 +915,7 @@ All checks report `[PASS]` on a healthy installation. The smoke test exits 0 on 
 
 ## 19. Evidence integrity rules
 
-1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. Those paths are read-only by platform policy.
+1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. Those paths are read-only by platform policy, enforced in code by `lib/path_guard.py` (Python writes) and `scripts/pathguard.sh` (analyze scripts) — a forbidden write raises `WritePolicyError` / aborts the script rather than silently succeeding. Output may only land in the approved folders: `analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
 2. Analysis WIP goes to `./analysis/` only. It is deleted automatically after each investigation completes.
 3. Finalized reports go to the investigations vault (`~/cases/<case_id>/reports/` via SSH/SCP).
 4. All timestamps are UTC internally. Reports use the timezone of the incident location (UTC if unknown, stated explicitly).

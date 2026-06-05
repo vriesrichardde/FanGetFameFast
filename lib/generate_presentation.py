@@ -22,6 +22,8 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from textwrap import wrap
 
 from pptx import Presentation
@@ -929,7 +931,7 @@ def build_presentation(stem: str, case_id: str, output_path: Path,
     page += 1; _slide_iocs(prs, data, case_id, page)
     page += 1; _slide_recommendations(prs, data, case_id, overall_sev, page)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_path.parent)
     prs.save(str(output_path))
     return output_path
 

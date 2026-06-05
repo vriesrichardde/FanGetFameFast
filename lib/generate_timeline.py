@@ -18,6 +18,9 @@ import shutil
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -198,7 +201,7 @@ def _render_swimlane_page(
         ax.text(0.5, 0.5, "No events recorded.",
                 ha="center", va="center", color=_SUBLABEL, fontsize=10,
                 transform=ax.transAxes)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        path_guard.guard_output_dir(output_path.parent)
         plt.tight_layout(pad=0)
         fig.savefig(str(output_path), dpi=DPI, bbox_inches="tight",
                     facecolor=_BG, edgecolor="none")
@@ -288,7 +291,7 @@ def _render_swimlane_page(
     ax.legend(handles=sev_patches, loc="lower right",
               bbox_to_anchor=(0.99, y_leg), ncol=4, **kw)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_path.parent)
     plt.tight_layout(pad=0)
     fig.savefig(str(output_path), dpi=DPI, bbox_inches="tight",
                 facecolor=_BG, edgecolor="none")
@@ -368,7 +371,7 @@ def _render_unconfirmed_table(events: list[dict], output_path: Path, title: str)
                     ha="right", va="center", color=_module_color(module),
                     fontsize=7, fontweight="bold", transform=ax.transAxes)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_path.parent)
     plt.tight_layout(pad=0)
     fig.savefig(str(output_path), dpi=DPI, bbox_inches="tight",
                 facecolor=_BG, edgecolor="none")
@@ -493,7 +496,7 @@ def generate_timeline_html(
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
     except ImportError:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        path_guard.guard_output_dir(output_dir)
         output_path.write_text(
             "<html><body><p>Interactive timeline unavailable — "
             "install plotly: <code>pip install plotly</code></p></body></html>",
@@ -578,7 +581,7 @@ def generate_timeline_html(
                          gridcolor=_DIVIDER, zeroline=False, row=i, col=1)
         fig.update_xaxes(gridcolor=_DIVIDER, row=i, col=1)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
     fig.write_html(str(output_path), include_plotlyjs="cdn", full_html=True)
     return output_path
 
@@ -619,7 +622,7 @@ if __name__ == "__main__":
     _events = parse_events(_case_id, _notes_dir)
     print(f"Loaded {len(_steps)} steps, {len(_events)} events")
 
-    _out_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(_out_dir)
     _a = generate_attacker_timeline(_events, _out_dir, _case_id)
     _d = generate_defender_timeline(_steps,  _out_dir, _case_id)
     _c = generate_combined_timeline(_events, _steps, _out_dir, _case_id)

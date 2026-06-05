@@ -100,6 +100,7 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 
 | Module | Purpose |
 |--------|---------|
+| `lib/path_guard.py` | Write-path policy (single source of truth): `assert_writable`, `guard_output_dir`, `safe_write_text/bytes/open`, `is_writable` — hard-fails (`WritePolicyError`) any write outside the approved output folders; evidence, `/mnt`, `/media` are read-only. Self-test: `python3 lib/path_guard.py --test` |
 | `lib/obsidian_bridge.py` | Low-level vault I/O: `write_note`, `read_note`, `append_to_note`, `search_vault`, `patch_section` |
 | `lib/knowledge_extractor.py` | High-level record functions: `record_ioc`, `record_ttp`, `record_threat_actor`, `record_malware`, `record_risk`, `record_concept`, `open_case`, `close_case` — each also pushes new intel to OpenCTI |
 | `lib/vault_query.py` | Read-path queries: `get_context_for_ioc`, `get_context_for_ttp`, `get_active_cases`, `get_top_risks`, `get_related_notes`, `search_context` |
@@ -258,7 +259,7 @@ python3 lib/vault_query.py --search powershell
 
 ## Constraints
 
-- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory.
+- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. This is **enforced in code**, not just convention: `lib/path_guard.py` is the single source of truth — every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail (`WritePolicyError`) on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). The MCP `investigations_server` independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`. The shell analyze scripts source `scripts/pathguard.sh`, which verifies evidence mounts are read-only (`fgff_assert_ro_mount`) before any analysis runs. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
 - Analysis WIP goes to `./analysis/` only. The analysis folder must be empty after a completed investigation.
 - Finalized reports are stored in the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop).
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.

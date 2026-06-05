@@ -27,6 +27,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
+
 _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto+Mono:wght@400;600&display=swap');
 
@@ -440,8 +443,8 @@ def convert(
         raise FileNotFoundError(f"Markdown file not found: {md_path}")
 
     out = output_path or md_path.with_suffix(".pdf")
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = path_guard.assert_writable(out)
+    path_guard.guard_output_dir(out.parent)
 
     inferred_title = title or md_path.stem.replace("_", " ").replace("-", " ").title()
 

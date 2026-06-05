@@ -246,11 +246,11 @@ flowchart TB
 
     subgraph G1["Guardrail 1 — MCP path jail (server-enforced)"]
         EV["evidence_server.py<br/>_safe_path(): resolve() + startswith(ROOT)<br/>READ-ONLY — no write handlers exist"]
-        INV["investigations_server.py<br/>every write validates _safe_path()<br/>ValueError on escape"]
+        INV["investigations_server.py<br/>every write validates _safe_path()<br/>+ _assert_writable() rejects /mnt, /media, EVIDENCE_ROOT<br/>ValueError on escape"]
     end
 
     subgraph G2["Guardrail 2 — kernel-enforced read-only evidence"]
-        MNT["fast_analyze.sh<br/>mount -o ro,loop,norecovery<br/>Volatility/YARA open image read-only"]
+        MNT["fast_analyze.sh<br/>mount -o ro,loop,norecovery<br/>fgff_assert_ro_mount verifies RO before analysis<br/>Volatility/YARA open image read-only"]
     end
 
     subgraph G3["Guardrail 3 — prompt-injection filename whitelist"]
@@ -261,10 +261,15 @@ flowchart TB
         DF["IOC defanging before any vault write<br/>or external (Perplexity) call"]
     end
 
-    AGENT --> G1 --> G2 --> G3 --> G4 --> ALLOW["✅ Action permitted<br/>inside the boundary only"]:::ok
+    subgraph G5["Guardrail 5 — library write-path policy (code-enforced)"]
+        PG["lib/path_guard.py<br/>assert_writable / guard_output_dir<br/>WritePolicyError outside approved folders<br/>wired into obsidian_bridge, md_to_pdf, generate_*, case_packager"]
+    end
 
-    G1 -.->|"path escapes root"| DENY["❌ ValueError —<br/>rejected at server"]:::deny
+    AGENT --> G1 --> G2 --> G3 --> G4 --> G5 --> ALLOW["✅ Action permitted<br/>inside the boundary only"]:::ok
+
+    G1 -.->|"path escapes root"| DENY["❌ ValueError / WritePolicyError —<br/>rejected before any write"]:::deny
     G3 -.->|"unsafe characters"| DENY
+    G5 -.->|"write outside approved folders"| DENY
 
     classDef agent fill:#1f2937,stroke:#60a5fa,color:#fff
     classDef ok fill:#064e3b,stroke:#34d399,color:#fff
@@ -275,7 +280,9 @@ flowchart TB
 write is not "denied", it is *unimplemented*. Path traversal (`../../etc/passwd`) is rejected by
 `_safe_path()` because the resolved absolute path fails the `startswith(EVIDENCE_ROOT)` check.
 Evidence is mounted read-only at the **block-device level**, so even a bug in the pipeline cannot
-modify the original image.
+modify the original image. And even a buggy `--output-dir` cannot land a report in evidence:
+`lib/path_guard.py` hard-fails (`WritePolicyError`) any library write outside the approved output
+folders, validated by `python3 lib/path_guard.py --test`.
 
 ---
 
@@ -415,7 +422,7 @@ interrupted batch resumes without re-analyzing completed evidence.
 | **Autonomous Execution Quality** | §2 agentic loop, §7 failure map | FAME/FAST/FAN skills (mandatory step + deviation logging); fallback chains in `fast_analyze.sh`, `fame_memprocfs.py` |
 | **IR Accuracy** | §3 trust layer, §6 anti-hallucination | `_score_overall_confidence()`, `[ASSUMPTION]`/`--no-timestamp`/`--dismissed` in `research_notes.py`; `vault_writer._parse_ioc_table()` confirmed-only rule |
 | **Breadth & Depth** | §1 overview, §8 correlation, §9 batch | 22 FAN detectors + FAME + FAST; `correlate_findings.py`; `batch_agentic.sh` |
-| **Constraint Implementation** | §5 guardrails | `_safe_path()` in both MCP servers; read-only mount; filename whitelist in `batch_agentic.sh` |
+| **Constraint Implementation** | §5 guardrails | `_safe_path()` in both MCP servers; `lib/path_guard.py` write-path policy (`WritePolicyError`) + `scripts/pathguard.sh`; read-only mount; filename whitelist in `batch_agentic.sh` |
 | **Audit Trail Quality** | §4 traceability chain | `research_notes.py` (RN/EVT/RF IDs); preserved `<case>_evidence/` + SHA-256; source attribution in `vault_writer.py` |
 | **Usability & Documentation** | This file + [User Guide](USER_GUIDE.md), [Deployment Guide](DEPLOYMENT_GUIDE.md), [Technical Reference](TECHNICAL_REFERENCE.md) | One-command pipelines; dev-container; self-tests |
 

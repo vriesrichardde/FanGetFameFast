@@ -26,6 +26,8 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -882,7 +884,7 @@ def generate(
     output_dir: Path | None = None,
 ) -> dict[str, Path]:
     rpts_dir = reports_dir or REPORTS_DIR
-    out_dir  = output_dir  or rpts_dir
+    out_dir  = path_guard.guard_output_dir(output_dir or rpts_dir)
 
     print(f"[campaign] Loading cases from {rpts_dir} ...")
     cases = _load_all_cases(rpts_dir)
