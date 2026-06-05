@@ -33,7 +33,10 @@ SSH_KEY     = os.environ.get("INVESTIGATIONS_SSH_KEY",  str(Path.home() / ".ssh"
 
 
 def _ssh_opts(key: str) -> list[str]:
-    opts = ["-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+    # accept-new trusts a host on first contact but rejects a *changed* key,
+    # preserving MITM protection on the evidence-upload channel ("no" would
+    # silently accept any key, including an attacker's).
+    opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes"]
     if Path(key).exists():
         opts += ["-i", key]
     return opts

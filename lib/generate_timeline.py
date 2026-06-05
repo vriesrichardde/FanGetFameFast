@@ -14,6 +14,7 @@ each event occupies a fixed row).
 """
 from __future__ import annotations
 
+import html
 import shutil
 import textwrap
 from datetime import datetime, timezone
@@ -514,15 +515,23 @@ def generate_timeline_html(
             mod    = ev.get("module", "")
             desc   = ev.get("description", "")
             src    = ev.get("source_detail", "")
+            # Plotly renders text/hover labels as HTML; evidence-derived strings
+            # (desc, src, module, timestamp) must be escaped to prevent stored
+            # XSS when the analyst opens the timeline HTML in a browser.
+            e_sev  = html.escape(sev.upper())
+            e_mod  = html.escape(str(mod))
+            e_desc = html.escape(str(desc))
+            e_src  = html.escape(str(src))
+            e_ts   = html.escape(str(ev.get("timestamp")))
             pts.append({
                 "x":    dt.isoformat(),
                 "y":    i,
-                "text": f"{sev.upper()}: {desc[:55]}",
+                "text": f"{e_sev}: {e_desc[:55]}",
                 "hover": (
-                    f"<b>{sev.upper()}</b> [{mod}]<br>"
-                    f"<b>Time:</b> {ev.get('timestamp')}<br>"
-                    f"<b>Event:</b> {desc}<br>"
-                    f"{'<b>Source:</b> ' + src if src else ''}"
+                    f"<b>{e_sev}</b> [{e_mod}]<br>"
+                    f"<b>Time:</b> {e_ts}<br>"
+                    f"<b>Event:</b> {e_desc}<br>"
+                    f"{'<b>Source:</b> ' + e_src if src else ''}"
                 ),
                 "size":  _SEVERITY_SIZE.get(sev, 5) * 2,
                 "color": _module_color(mod),

@@ -252,7 +252,7 @@ flowchart TB
     AGENT["🤖 Agent / pipeline<br/>requests an action"]:::agent
 
     subgraph G1["Guardrail 1 — MCP path jail (server-enforced)"]
-        EV["evidence_server.py<br/>_safe_path(): resolve() + startswith(ROOT)<br/>READ-ONLY — no write handlers exist"]
+        EV["evidence_server.py<br/>_safe_path(): resolve() + is_relative_to(ROOT)<br/>READ-ONLY — no write handlers exist"]
         INV["investigations_server.py<br/>every write validates _safe_path()<br/>+ _assert_writable() rejects /mnt, /media, EVIDENCE_ROOT<br/>ValueError on escape"]
     end
 
@@ -260,8 +260,8 @@ flowchart TB
         MNT["fast_analyze.sh<br/>mount -o ro,loop,norecovery<br/>fgff_assert_ro_mount verifies RO before analysis<br/>Volatility/YARA open image read-only"]
     end
 
-    subgraph G3["Guardrail 3 — prompt-injection filename whitelist"]
-        FN["batch_agentic.sh<br/>basename must match [alnum space . _ -]<br/>else skipped + logged"]
+    subgraph G3["Guardrail 3 — prompt-injection path whitelist"]
+        FN["batch_agentic.sh<br/>basename must match [alnum space . _ -]<br/>+ full path must match [alnum space . / _ -]<br/>else skipped + logged"]
     end
 
     subgraph G4["Guardrail 4 — output safety"]
@@ -284,8 +284,9 @@ flowchart TB
 ```
 
 **Test-for-bypass talking point:** the evidence MCP server has **no write handlers at all** — a
-write is not "denied", it is *unimplemented*. Path traversal (`../../etc/passwd`) is rejected by
-`_safe_path()` because the resolved absolute path fails the `startswith(EVIDENCE_ROOT)` check.
+write is not "denied", it is *unimplemented*. Path traversal (`../../etc/passwd`) and sibling-prefix
+escape (`evidence_exfil`) are rejected by `_safe_path()` because the resolved absolute path fails the
+`Path.is_relative_to(EVIDENCE_ROOT)` containment check.
 Evidence is mounted read-only at the **block-device level**, so even a bug in the pipeline cannot
 modify the original image. And even a buggy `--output-dir` cannot land a report in evidence:
 `lib/path_guard.py` hard-fails (`WritePolicyError`) any library write outside the approved output

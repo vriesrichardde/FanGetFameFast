@@ -260,11 +260,18 @@ When the vault returns no answer for an unknown artifact, CVE, malware family, t
 python3 lib/obsidian_bridge.py          # write/read/search round-trip
 python3 lib/knowledge_extractor.py --test   # all record types + Dashboard refresh
 python3 lib/vault_query.py --search powershell
+python3 lib/path_guard.py --test        # write-path allow/deny matrix
+python3 scripts/generate_sbom.py --check    # SBOM (sbom.json) is up to date
 ```
+
+A CycloneDX SBOM of the Python dependency set lives at `sbom.json` (human-readable
+summary in `sbom.md`). Regenerate it with `python3 scripts/generate_sbom.py` after any
+change to `requirements.txt`.
 
 ## Constraints
 
 - Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. This is **enforced in code**, not just convention: `lib/path_guard.py` is the single source of truth — every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail (`WritePolicyError`) on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). The MCP `investigations_server` independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`. The shell analyze scripts source `scripts/pathguard.sh`, which verifies evidence mounts are read-only (`fgff_assert_ro_mount`) before any analysis runs. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
+- Untrusted input is validated before it reaches a path, shell, or renderer sink: `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` (`validate_case_id` in `lib/case_manager.py`; `fgff_validate_case_id` in `scripts/pathguard.sh`) so it cannot traverse out of the output/cases root; `batch_agentic.sh` rejects unsafe characters in the full evidence path (not just the basename) before it enters the agentic prompt; report PDF rendering uses `md_to_pdf.safe_url_fetcher` to block `file://`/SSRF resource fetches triggered by malicious evidence text; and vault uploads use SSH `StrictHostKeyChecking=accept-new`. The MCP file servers jail paths with `Path.is_relative_to` (not a string prefix). See [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md) for the full guardrail table.
 - Analysis WIP goes to `./analysis/` only. The analysis folder must be empty after a completed investigation.
 - Finalized reports are stored in the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop).
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.

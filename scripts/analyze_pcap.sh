@@ -82,6 +82,7 @@ STEM="${STEM%.pcapng}"
 STEM="${STEM%.pcap}"
 
 [[ -z "$CASE_ID" ]] && CASE_ID="FAN-$(date -u +%Y%m%d-%H%M%S)"
+fgff_validate_case_id "$CASE_ID" >/dev/null
 
 # ── Research notes initialisation ─────────────────────────────────────────────
 python3 "$PROJECT_ROOT/lib/research_notes.py" init \

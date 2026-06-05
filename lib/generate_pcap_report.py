@@ -3328,7 +3328,12 @@ def convert_to_pdf(
             f'<!DOCTYPE html><html><head><meta charset="utf-8">'
             f"<style>{_PLAIN_CSS}</style></head><body>{body}</body></html>"
         )
-        weasyprint.HTML(string=full).write_pdf(str(pdf_path), presentational_hints=True)
+        # Restrict resource fetching so attacker-influenced evidence text cannot
+        # trigger local-file disclosure or SSRF via file://, <img>, or url().
+        from md_to_pdf import safe_url_fetcher
+        weasyprint.HTML(string=full, url_fetcher=safe_url_fetcher).write_pdf(
+            str(pdf_path), presentational_hints=True
+        )
         return pdf_path.exists()
     except ImportError:
         pass

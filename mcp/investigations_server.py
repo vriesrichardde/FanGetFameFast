@@ -143,8 +143,11 @@ TOOLS = [
 # ── Path safety ────────────────────────────────────────────────────────────────
 
 def _safe_path(rel: str) -> Path:
-    resolved = (INVESTIGATIONS_ROOT / (rel or "")).resolve()
-    if not str(resolved).startswith(str(INVESTIGATIONS_ROOT.resolve())):
+    root = INVESTIGATIONS_ROOT.resolve()
+    resolved = (root / (rel or "")).resolve()
+    # Use path-relative containment, not str.startswith: a string prefix match
+    # would accept a sibling like ``<root>_backup`` that escapes the root.
+    if resolved != root and not resolved.is_relative_to(root):
         raise ValueError(f"Path outside investigations root: {rel!r}")
     return resolved
 

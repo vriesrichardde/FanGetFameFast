@@ -1375,17 +1375,21 @@ past them — not in the prompt. Diagram: [Architecture §5](ARCHITECTURE_DIAGRA
 
 | Guardrail | What it stops | Enforcement point |
 |-----------|---------------|-------------------|
-| **MCP path jail** | Path traversal out of the evidence/cases root | `_safe_path()` resolves to absolute + `startswith(ROOT)` check; `evidence_server.py:119`, `investigations_server.py:145` |
+| **MCP path jail** | Path traversal out of the evidence/cases root, including sibling-prefix escape (`evidence_exfil`) | `_safe_path()` resolves to absolute + `Path.is_relative_to(ROOT)` containment check (not a string prefix); `evidence_server.py:119`, `investigations_server.py:145` |
 | **Read-only evidence server** | Any modification of evidence via MCP | `evidence_server.py` defines **no write handlers** — a write is unimplemented, not merely refused |
 | **Library write-path policy** | Any library code (a buggy `--output-dir`, a refactor) writing a report/note into evidence, `/mnt`, `/media`, or outside the approved output folders | `lib/path_guard.py` — `assert_writable`/`guard_output_dir` hard-fail with `WritePolicyError`; wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` report generator, and `case_packager`. The `investigations` MCP server independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT` (`investigations_server.py:_assert_writable`). Validate with `python3 lib/path_guard.py --test` |
+| **Case ID validation** | An analyst/manifest `case_id` traversing out of the output/cases root (e.g. `../../tmp/x`) into `mkdir`/`rsync`/`zip`/`rmtree` | `validate_case_id()` in `lib/case_manager.py` (gates `case_dir`/`archive_case`/`remove_case`) and `fgff_validate_case_id` in `scripts/pathguard.sh` (called by all three analyze scripts) restrict it to `[A-Za-z0-9._-]{1,64}` |
 | **Kernel read-only mount** | Pipeline bugs altering the original disk image | `mount -o ro,loop,norecovery` in `fast_analyze.sh`; mount verified read-only by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis; Volatility 3 / YARA open the memory image read-only |
-| **Prompt-injection filename whitelist** | Adversarial evidence filenames injecting instructions into `claude -p` | `batch_agentic.sh:186` — basename must match `[[:alnum:][:space:]._-]`; otherwise skipped and logged to the manifest |
+| **Prompt-injection path whitelist** | Adversarial evidence filenames — or crafted sub-directory names inside extracted archives — injecting instructions into `claude -p` | `batch_agentic.sh:186` — basename must match `[[:alnum:][:space:]._-]` **and** the full path must match `[[:alnum:][:space:]./_-]`; otherwise skipped and logged to the manifest |
+| **Report renderer resource isolation** | Malicious evidence text in a report causing the PDF renderer to read local files (`file://`) or make outbound requests (SSRF) | `md_to_pdf.safe_url_fetcher` restricts WeasyPrint to inline `data:` URIs + an allowlist of web-font hosts; used by `md_to_pdf` and the `generate_pcap_report` PDF fallback |
+| **SSH host-key verification** | A MITM substituting a host key on report/evidence uploads to the investigations vault | `StrictHostKeyChecking=accept-new` (trust-on-first-use, reject-on-change) in `lib/investigations_upload.py` and `lib/case_packager.py` |
 | **IOC defanging** | Live indicators leaking to the vault or to Perplexity | defang before any vault write / external call; `fan_ip_lookup.py`, `vault_writer._refang()` round-trip |
 | **No-daemon / explicit start** | Un-auditable automated evidence processing | every investigation begins with a deliberate analyst command — chain-of-custody requires it |
 
 **Bypass-testing note for the panel:** the evidence server's read-only property is structural (no
-write code path exists), and traversal is blocked by absolute-path prefix comparison rather than
-string filtering, so `../`, symlinks resolved by `.resolve()`, and absolute-path arguments all land
+write code path exists), and traversal is blocked by *path-relative containment* (`Path.is_relative_to`
+on the `.resolve()`-canonicalized path) rather than a string-prefix comparison, so `../`, symlinks,
+absolute-path arguments, and sibling directories that merely share the root as a name prefix all land
 inside the jail or are rejected.
 
 ### 11.4 Failure handling & self-correction

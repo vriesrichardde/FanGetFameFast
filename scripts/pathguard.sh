@@ -36,6 +36,21 @@ fgff_assert_writable() {
     done
 }
 
+# fgff_validate_case_id <case_id>
+# Abort unless <case_id> is a safe single path component. The case id is used
+# to build output directories, zip names and upload paths; an unvalidated value
+# such as "../../tmp/x" or one containing "/" causes path traversal in mkdir,
+# rsync and zip. Echoes the validated id on success.
+fgff_validate_case_id() {
+    local cid="$1"
+    if [[ ! "$cid" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+        echo "[pathguard] FATAL: invalid case id '$cid'." >&2
+        echo "[pathguard]        Allowed: 1-64 chars of [A-Za-z0-9._-], no '/' or '..'." >&2
+        exit 1
+    fi
+    printf '%s' "$cid"
+}
+
 # fgff_assert_ro_mount <mountpoint>
 # Abort if <mountpoint> is mounted read-write (or is not a mount point at all).
 fgff_assert_ro_mount() {

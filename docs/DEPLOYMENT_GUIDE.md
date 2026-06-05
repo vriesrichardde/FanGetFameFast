@@ -535,6 +535,22 @@ Emerging Threats rules change frequently. Automate weekly updates via cron:
 (crontab -l 2>/dev/null; echo "0 2 * * 0 $INSTALL_DIR/scripts/update_suricata_rules.sh --et-only >> /var/log/suricata_update.log 2>&1") | crontab -
 ```
 
+### Dependency inventory (SBOM)
+
+A CycloneDX 1.5 Software Bill of Materials for the Python dependency set is checked in at
+[`sbom.json`](../sbom.json), with a human-readable summary in [`sbom.md`](../sbom.md). Regenerate it
+after any change to `requirements.txt` or a dependency upgrade:
+
+```bash
+python3 scripts/generate_sbom.py            # rewrite sbom.json + sbom.md
+python3 scripts/generate_sbom.py --check    # CI gate: non-zero exit if stale
+```
+
+The generator resolves each declared dependency to the concrete installed version and SPDX license.
+Note the copyleft components flagged in `sbom.md` — `sslyze` and `memprocfs` (AGPL-3.0), `CairoSVG`
+(LGPL-3.0), and `volatility3` (VSL) — when redistributing a combined work; they are invoked as
+separate tools / optional modules, not statically linked into the Apache-2.0/MIT core.
+
 ---
 
 ## 13. Architectural guardrails (deployer's view)
@@ -548,10 +564,13 @@ the diagram is [Architecture §5](ARCHITECTURE_DIAGRAM.md#5-architectural-guardr
 | Guardrail | What it enforces | Where | How to verify |
 |-----------|------------------|-------|---------------|
 | **Evidence MCP server is read-only** | Claude cannot modify evidence through MCP | `mcp/evidence_server.py` defines only read tools — no write handler exists | `grep -i "write\|delete\|mkdir" mcp/evidence_server.py` returns no tool handlers |
-| **MCP path jail** | No access outside the evidence / cases root, including `../` traversal | `_safe_path()` in both file servers resolves to an absolute path and rejects anything not under the root | `grep -n "_safe_path" mcp/evidence_server.py mcp/investigations_server.py` |
+| **MCP path jail** | No access outside the evidence / cases root, including `../` traversal and sibling-prefix escape (e.g. `evidence_exfil`) | `_safe_path()` in both file servers resolves to an absolute path and tests containment with `Path.is_relative_to(root)` (not a string prefix) | `grep -n "is_relative_to" mcp/evidence_server.py mcp/investigations_server.py` |
 | **Read-only evidence mounts** | The original disk/memory image is never altered, even by a pipeline bug | `mount -o ro,loop,norecovery` in `fast_analyze.sh`, verified by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis runs; Volatility 3 / YARA open images read-only | inspect the `mount` invocation in `scripts/fast_analyze.sh`; `bash -c 'source scripts/pathguard.sh; fgff_assert_ro_mount /'` aborts (rw) |
 | **Library write-path policy** | No library code can write a report or note into evidence, `/mnt`, `/media`, or outside the approved output folders — even via a buggy `--output-dir` | `lib/path_guard.py` hard-fails (`WritePolicyError`); wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` generator, `chat_recorder`, `case_packager`; `investigations_server._assert_writable` rejects the same roots over MCP | `python3 lib/path_guard.py --test` |
-| **Prompt-injection filename whitelist** | A hostile evidence filename cannot inject instructions into the agentic prompt | `batch_agentic.sh` skips any basename outside `[[:alnum:][:space:]._-]` and logs it | `grep -n "unsafe characters" scripts/batch_agentic.sh` |
+| **Case ID validation** | An analyst- or manifest-supplied `case_id` cannot traverse out of the output/cases root (e.g. `../../tmp/x`) into `mkdir`/`rsync`/`zip`/`rmtree` | restricted to `[A-Za-z0-9._-]{1,64}`: `validate_case_id()` in `lib/case_manager.py` (gates `case_dir`/`archive`/`remove`), `fgff_validate_case_id` in `scripts/pathguard.sh` (called by all three analyze scripts) | `python3 -c "import sys;sys.path.insert(0,'lib');from case_manager import validate_case_id as v;v('../../etc')"` raises `ValueError` |
+| **Prompt-injection path whitelist** | A hostile evidence filename — *or a crafted sub-directory name inside an extracted archive* — cannot inject instructions into the agentic prompt | `batch_agentic.sh` skips any basename outside `[[:alnum:][:space:]._-]` **and** any full path containing characters outside `[[:alnum:][:space:]./_-]`, logging both | `grep -n "unsafe characters\|unsafe characters in path" scripts/batch_agentic.sh` |
+| **Report renderer resource isolation** | Attacker-influenced evidence text in a report cannot cause the PDF renderer to read local files (`file://`) or make outbound requests (SSRF) | `md_to_pdf.safe_url_fetcher` restricts WeasyPrint to inline `data:` URIs and an allowlist of web-font hosts; used by `md_to_pdf` and the `generate_pcap_report` fallback | `grep -n "safe_url_fetcher" lib/md_to_pdf.py lib/generate_pcap_report.py` |
+| **SSH host-key verification** | Report/evidence uploads to the investigations vault reject a *changed* host key (MITM), rather than blindly trusting any key | `StrictHostKeyChecking=accept-new` in `lib/investigations_upload.py` and `lib/case_packager.py` (trust-on-first-use, reject-on-change) | `grep -n "StrictHostKeyChecking" lib/investigations_upload.py lib/case_packager.py` |
 | **IOC defanging** | Live indicators never leak to the vault or to Perplexity | values are defanged before any vault write or external call | inspect `record_ioc` / `_refang` in `lib/vault_writer.py` |
 | **No daemon / explicit start** | No un-audited automated evidence processing — chain of custody requires every action be deliberate | there is no file watcher; every investigation starts with an analyst command | — |
 

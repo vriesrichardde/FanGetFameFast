@@ -196,6 +196,16 @@ _process_file() {
         _manifest_add_error "Unsafe filename skipped (prompt-injection guard): $file"
         return 0
     fi
+    # The FULL path (not just the basename) is interpolated into the `claude -p`
+    # prompt below. Directory components can originate inside extracted archives,
+    # so validate the whole path too — allow '/' as separator but reject any
+    # quote/backtick/$/; metacharacter that could break out of the prompt string
+    # or inject agent instructions via a crafted sub-directory name.
+    if [[ "$file" =~ [^[:alnum:][:space:]./_-] ]]; then
+        echo "[batch] Skipping file with unsafe characters in path: $file" >&2
+        _manifest_add_error "Unsafe path skipped (prompt-injection guard): $file"
+        return 0
+    fi
 
     local stem ext
     stem="$(basename "$file" | sed 's/\.[^.]*$//')"

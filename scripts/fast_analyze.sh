@@ -76,6 +76,7 @@ if [[ -z "$CASE_ID" ]]; then
     echo -n "[fast] Case ID (e.g. FAST-2026-001): "
     read -r CASE_ID
 fi
+fgff_validate_case_id "$CASE_ID" >/dev/null
 
 if [[ "$HOSTNAME_ARG" == "unknown" ]]; then
     HOSTNAME_ARG="$(basename "$DISK_IMAGE" | sed 's/\.[^.]*$//')"
@@ -468,31 +469,33 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     PPTX_PATH="$REPORTS_DIR/${STEM}_fast_presentation.pptx"
     DOCX_PATH="$REPORTS_DIR/${STEM}_fast_report.docx"
 
-    UPLOAD_ARGS="--case-id $CASE_ID --md $MD_PATH"
-    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=" --pdf $PDF_PATH"
-    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=" --pptx $PPTX_PATH"
-    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=" --docx $DOCX_PATH"
+    # Use an array so paths/case-id with spaces or glob chars cannot word-split
+    # or inject extra --flags into investigations_upload.py.
+    UPLOAD_ARGS=(--case-id "$CASE_ID" --md "$MD_PATH")
+    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=(--pdf "$PDF_PATH")
+    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=(--pptx "$PPTX_PATH")
+    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=(--docx "$DOCX_PATH")
 
     # Upload evidence folder as ZIP
     EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
     if [[ -d "$EVIDENCE_DIR" ]]; then
         (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
-            UPLOAD_ARGS+=" --zip $EVIDENCE_ZIP"
+            UPLOAD_ARGS+=(--zip "$EVIDENCE_ZIP")
     fi
 
-    python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
+    python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
         echo "[fast] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
     COMBINED_MD="$REPORTS_DIR/${STEM}_combined_report.md"
     if [[ -f "$COMBINED_MD" ]]; then
-        COMB_ARGS="--case-id $CASE_ID --md $COMBINED_MD"
+        COMB_ARGS=(--case-id "$CASE_ID" --md "$COMBINED_MD")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.pdf"  ]] && \
-            COMB_ARGS+=" --pdf $REPORTS_DIR/${STEM}_combined_report.pdf"
+            COMB_ARGS+=(--pdf "$REPORTS_DIR/${STEM}_combined_report.pdf")
         [[ -f "$REPORTS_DIR/${STEM}_combined_presentation.pptx" ]] && \
-            COMB_ARGS+=" --pptx $REPORTS_DIR/${STEM}_combined_presentation.pptx"
+            COMB_ARGS+=(--pptx "$REPORTS_DIR/${STEM}_combined_presentation.pptx")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.docx" ]] && \
-            COMB_ARGS+=" --docx $REPORTS_DIR/${STEM}_combined_report.docx"
-        python3 "$PROJECT_ROOT/lib/investigations_upload.py" $COMB_ARGS || \
+            COMB_ARGS+=(--docx "$REPORTS_DIR/${STEM}_combined_report.docx")
+        python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}" || \
             echo "[fast] WARNING: Combined report upload failed."
     fi
 else

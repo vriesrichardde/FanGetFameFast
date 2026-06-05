@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import zipfile
@@ -148,12 +149,16 @@ def upload_zip(case_id: str, zip_path: Path) -> None:
 
     print(f"[upload] {zip_path.name} → {SSH_HOST}:{remote_dir}/")
 
+    # accept-new preserves MITM protection (rejects changed host keys) instead
+    # of silently trusting any key. remote_dir is shell-quoted: it is built from
+    # the operator-supplied case_id and runs in a remote shell via `ssh`.
+    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes"]
     subprocess.run(
-        ["ssh", SSH_HOST, f"mkdir -p {remote_dir}"],
+        ["ssh", *ssh_opts, SSH_HOST, f"mkdir -p {shlex.quote(remote_dir)}"],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["scp", str(zip_path), f"{SSH_HOST}:{remote_path}"],
+        ["scp", *ssh_opts, str(zip_path), f"{SSH_HOST}:{remote_path}"],
         check=True, capture_output=True,
     )
     print(f"[upload] Done — {SSH_HOST}:{remote_path}")

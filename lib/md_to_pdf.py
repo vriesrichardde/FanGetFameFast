@@ -30,6 +30,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import path_guard  # noqa: E402  write-path policy enforcement
 
+# Hosts allowed for remote resource fetches during PDF rendering (web fonts only).
+_ALLOWED_FETCH_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+
+
+def safe_url_fetcher(url: str):
+    """Restricted WeasyPrint URL fetcher.
+
+    Reports are rendered from attacker-influenced evidence text (filenames,
+    process names, URIs, certificate fields). WeasyPrint's default fetcher
+    resolves ``<img src>``, CSS ``url()`` and ``@import`` — including
+    ``file://`` (local file disclosure) and arbitrary ``http(s)://`` (SSRF /
+    out-of-band exfiltration). This fetcher permits only inline ``data:`` URIs
+    and a fixed allowlist of trusted web-font hosts; everything else is blocked.
+    """
+    import urllib.parse
+
+    import weasyprint
+
+    if url.startswith("data:"):
+        return weasyprint.default_url_fetcher(url)
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname in _ALLOWED_FETCH_HOSTS:
+        return weasyprint.default_url_fetcher(url)
+    raise ValueError(f"[md_to_pdf] blocked external resource during render: {url!r}")
+
 _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto+Mono:wght@400;600&display=swap');
 
@@ -466,9 +491,9 @@ def convert(
         logo_data_uri=logo_data_uri,
     )
 
-    weasyprint.HTML(string=html, base_url=str(md_path.parent)).write_pdf(
-        str(out), presentational_hints=True
-    )
+    weasyprint.HTML(
+        string=html, base_url=str(md_path.parent), url_fetcher=safe_url_fetcher
+    ).write_pdf(str(out), presentational_hints=True)
     return out
 
 
