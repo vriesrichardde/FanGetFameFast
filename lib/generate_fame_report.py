@@ -43,6 +43,12 @@ try:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
 except ModuleNotFoundError:
     # Imported as a package (e.g. `from lib.generate_fame_report import generate`)
     # rather than run as a script — put lib/ on the path for the sibling import.
@@ -51,6 +57,12 @@ except ModuleNotFoundError:
         parse_steps as _parse_research_steps,
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
+    )
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
     )
 try:
     from zoneinfo import ZoneInfo
@@ -451,6 +463,155 @@ def _build_confidence_gaps_section(
     a("")
 
     return lines
+
+
+# ── Hallucination Guard ────────────────────────────────────────────────────────
+
+def _build_hallucination_guard_section(
+    data: dict[str, Any],
+    case_id: str,
+    reports_dir: Path,
+    dkom: bool,
+) -> str:
+    """
+    Build the Hallucination Guard section for FAME reports.
+
+    Tags each key conclusion with a ConfidenceTier based on which Volatility
+    plugins ran and what they produced. Tiers are assigned by code logic, not
+    by Claude prompt instructions.
+    """
+    _hg_reset()
+    findings = []
+    steps = _parse_research_steps(case_id, str(reports_dir))
+    step_ids = [s["id"] for s in steps if s.get("id")]
+
+    def _rn(n: int) -> list[str]:
+        """Return RN-NNN id for the nth step if it exists."""
+        return [step_ids[n - 1]] if n <= len(step_ids) else []
+
+    # Process scan findings
+    if data.get("psscan"):
+        findings.append(tag_finding(
+            "Process pool scan (psscan) produced process list — authoritative even under DKOM",
+            ConfidenceTier.CONFIRMED,
+            _rn(1) or [],
+            ["volatility3/psscan"],
+            ["fame"],
+        ))
+    if data.get("pslist"):
+        proc_lines = [l for l in data["pslist"].splitlines() if l.strip() and l.strip()[0].isdigit()]
+        if proc_lines:
+            findings.append(tag_finding(
+                f"Active process list (pslist) returned {len(proc_lines)} process row(s)",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["volatility3/pslist"],
+                ["fame"],
+            ))
+        elif dkom:
+            findings.append(tag_finding(
+                "pslist returned empty — DKOM active (rootkit unlinked EPROCESS list)",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["volatility3/pslist"],
+                ["fame"],
+            ))
+
+    # Network connections
+    for plugin in ("netscan", "netstat"):
+        if data.get(plugin):
+            findings.append(tag_finding(
+                f"Network connection data present from {plugin}",
+                ConfidenceTier.CONFIRMED,
+                [],
+                [f"volatility3/{plugin}"],
+                ["fame"],
+            ))
+            break
+
+    # YARA scan
+    if data.get("yara_scan"):
+        yara_hits = data.get("yara_summary", {})
+        if yara_hits:
+            findings.append(tag_finding(
+                f"YARA scan matched {len(yara_hits)} rule(s): {', '.join(list(yara_hits.keys())[:3])}",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["yara-python"],
+                ["fame"],
+            ))
+        else:
+            findings.append(tag_finding(
+                "YARA scan ran — no rule matches detected",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["yara-python"],
+                ["fame"],
+            ))
+    else:
+        findings.append(tag_finding(
+            "YARA scan not run — malware signature detection unavailable",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["yara-python"],
+            ["fame"],
+        ))
+
+    # Code injection (malfind is heuristic → INFERRED)
+    if data.get("malfind"):
+        findings.append(tag_finding(
+            "Code injection candidates found by malfind (heuristic — requires analyst triage)",
+            ConfidenceTier.INFERRED,
+            [],
+            ["volatility3/malfind"],
+            ["fame"],
+        ))
+
+    # DKOM-suppressed plugins
+    if dkom:
+        for plugin in ("cmdline", "svcscan", "filescan", "hivelist"):
+            if not data.get(plugin):
+                findings.append(tag_finding(
+                    f"{plugin} unavailable — DKOM rootkit suppressed this plugin (T1014)",
+                    ConfidenceTier.UNVERIFIABLE,
+                    [],
+                    [f"volatility3/{plugin}"],
+                    ["fame"],
+                ))
+
+    # Baseline comparison
+    if data.get("proc_baseline"):
+        findings.append(tag_finding(
+            "Memory Baseliner baseline comparison completed",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["memory_baseliner"],
+            ["fame"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "Memory Baseliner not run — anomalous-but-legitimate processes cannot be distinguished",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["memory_baseliner"],
+            ["fame"],
+        ))
+
+    # Assumptions from research notes
+    for s in steps:
+        outcome = s.get("outcome", "")
+        if "[ASSUMPTION]" in outcome or s.get("confidence") == "assumed":
+            text = outcome.replace("[ASSUMPTION]", "").strip()
+            if text:
+                findings.append(tag_finding(
+                    text,
+                    ConfidenceTier.ASSUMED,
+                    [s["id"]] if s.get("id") else [],
+                    [s.get("source_tool", "")] if s.get("source_tool") else [],
+                    ["fame"],
+                ))
+
+    return render_confidence_summary(findings, module_label="FAME")
 
 
 # ── Narrative loader ──────────────────────────────────────────────────────────
@@ -975,6 +1136,13 @@ def _build_markdown(
     a("")
     a("*All findings derived from memory image analysis as stated. Evidence integrity preserved.*")
     a("")
+
+    # ── Hallucination Guard ───────────────────────────────────────────────────
+    dkom_flag = _is_dkom_active(data)
+    hg_section = _build_hallucination_guard_section(data, case_id, reports_dir, dkom_flag)
+    if hg_section:
+        a(hg_section)
+        a("")
 
     # ── Evidence Trail ────────────────────────────────────────────────────────
     lines.extend(_build_evidence_trail(case_id, reports_dir))

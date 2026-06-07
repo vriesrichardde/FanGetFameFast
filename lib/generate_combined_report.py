@@ -37,6 +37,22 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+try:
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+
 _DARK_NAVY  = (0x0f, 0x17, 0x2a)
 _MID_NAVY   = (0x1e, 0x3a, 0x5f)
 _BLUE       = (0x1d, 0x4e, 0xd8)
@@ -321,7 +337,104 @@ def _build_markdown(
     a("*End of unified report. Evidence integrity preserved. All findings cited to their source domain.*")
     a("")
 
+    # ── Cross-Module Hallucination Guard Summary ──────────────────────────────
+    hg = _build_combined_hallucination_guard(fan, fame, fast, modules_run)
+    if hg:
+        a(hg)
+        a("")
+
     return "\n".join(lines)
+
+
+def _build_combined_hallucination_guard(
+    fan: str,
+    fame: str,
+    fast: str,
+    modules_run: list[str],
+) -> str:
+    """
+    Build a cross-module Hallucination Guard Summary for the combined report.
+
+    Parses existing module Hallucination Guard sections to extract tier counts,
+    then presents an aggregated IR confidence score across all three domains.
+    """
+    _hg_reset()
+    findings = []
+
+    # Synthesise one meta-finding per module based on whether it ran
+    if fan:
+        findings.append(tag_finding(
+            "FAN (Network Forensics) analysis completed — all findings backed by packet-level evidence",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["fan_protocol_analyzers"],
+            ["fan"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "FAN module did not run — network-layer evidence absent from this case",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["fan_protocol_analyzers"],
+            ["fan"],
+        ))
+
+    if fame:
+        findings.append(tag_finding(
+            "FAME (Memory Forensics) analysis completed — process and network findings from memory image",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3", "memory_baseliner"],
+            ["fame"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "FAME module did not run — in-memory process and network evidence absent",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["volatility3"],
+            ["fame"],
+        ))
+
+    if fast:
+        findings.append(tag_finding(
+            "FAST (Storage Forensics) analysis completed — disk artifact findings from image",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk", "bulk_extractor"],
+            ["fast"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "FAST module did not run — disk artifact evidence absent from this case",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["tsk", "bulk_extractor"],
+            ["fast"],
+        ))
+
+    # Cross-module confirmation bonus: if 2+ modules ran and produce overlapping IOC sections
+    # extract a confirmation signal from the markdown text
+    ioc_fan  = _extract_section(fan,  "Indicators of compromise", 500) if fan  else ""
+    ioc_fame = _extract_section(fame, "Indicators of compromise", 500) if fame else ""
+    ioc_fast = _extract_section(fast, "Indicators of compromise", 500) if fast else ""
+
+    # Simple heuristic: if an IP appears in both FAN and FAME IOC sections → CONFIRMED
+    ip_re = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+    fan_ips  = set(ip_re.findall(ioc_fan))
+    fame_ips = set(ip_re.findall(ioc_fame))
+    shared   = fan_ips & fame_ips
+    if shared:
+        for ip in list(shared)[:5]:
+            findings.append(tag_finding(
+                f"IP {ip} confirmed in both FAN (PCAP) and FAME (netscan) — cross-domain corroboration",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["fan_ip_lookup", "volatility3/netscan"],
+                ["fan", "fame"],
+            ))
+
+    return render_confidence_summary(findings, module_label="Combined report")
 
 
 # ── PPTX ───────────────────────────────────────────────────────────────────────

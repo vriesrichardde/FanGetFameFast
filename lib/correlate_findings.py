@@ -40,6 +40,22 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+try:
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+
 
 # ── Parsers ────────────────────────────────────────────────────────────────────
 
@@ -641,7 +657,131 @@ def _build_markdown(
     a("*Evidence integrity preserved — no evidence directories were modified.*")
     a("")
 
+    # ── Hallucination Guard ───────────────────────────────────────────────────
+    hg = _build_correlation_hallucination_guard(
+        ff_matches, mf_matches, fd_matches, modules_found,
+    )
+    if hg:
+        a(hg)
+        a("")
+
     return "\n".join(lines)
+
+
+def _build_correlation_hallucination_guard(
+    ff_matches: list[dict],
+    mf_matches: list[dict],
+    fd_matches: list[dict],
+    modules_found: list[str],
+) -> str:
+    """
+    Tag each cross-module correlation match with a ConfidenceTier and
+    render the Hallucination Guard section for the correlation report.
+
+    Cross-module matches (2+ modules) → CONFIRMED.
+    Single-module claims → INFERRED (one analytical step removed).
+    Missing modules → UNVERIFIABLE.
+    """
+    _hg_reset()
+    findings = []
+    both_fan_fame  = "FAN" in modules_found and "FAME" in modules_found
+    both_fame_fast = "FAME" in modules_found and "FAST" in modules_found
+    both_fan_fast  = "FAN" in modules_found and "FAST" in modules_found
+
+    # FAN ↔ FAME matches — process seen in memory AND flagged in PCAP → CONFIRMED
+    for m in ff_matches:
+        findings.append(tag_finding(
+            f"Process `{m.get('process_name', '?')}` (PID {m.get('pid', '?')}) "
+            f"→ {m.get('remote_ip', '?')}:{m.get('remote_port', '?')} "
+            f"({m.get('threat_type', '?')}, {m.get('severity', '?').upper()})",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+
+    if both_fan_fame and not ff_matches:
+        findings.append(tag_finding(
+            "FAN ↔ FAME correlation computed — no process-network matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+    elif not both_fan_fame:
+        findings.append(tag_finding(
+            "FAN ↔ FAME correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+
+    # FAME ↔ FAST matches
+    for m in mf_matches:
+        ctype = m.get("correlation_type", "")
+        if "process_disk" in ctype:
+            findings.append(tag_finding(
+                f"Process `{m.get('process_name', '?')}` running in memory has executable deleted on disk",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["volatility3/psscan", "tsk/fls"],
+                ["fame", "fast"],
+            ))
+        else:
+            findings.append(tag_finding(
+                f"Disk path `{m.get('disk_path', '?')}` deleted — correlates with memory process evidence",
+                ConfidenceTier.INFERRED,
+                [],
+                ["tsk/ils", "volatility3/psscan"],
+                ["fast", "fame"],
+            ))
+
+    if both_fame_fast and not mf_matches:
+        findings.append(tag_finding(
+            "FAME ↔ FAST correlation computed — no process-disk matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/psscan", "tsk/fls"],
+            ["fame", "fast"],
+        ))
+    elif not both_fame_fast:
+        findings.append(tag_finding(
+            "FAME ↔ FAST correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["volatility3/psscan", "tsk/fls"],
+            ["fame", "fast"],
+        ))
+
+    # FAN ↔ FAST matches
+    for m in fd_matches:
+        findings.append(tag_finding(
+            f"Domain `{m.get('domain', '?')}` appeared in DNS traffic AND carved from disk",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+
+    if both_fan_fast and not fd_matches:
+        findings.append(tag_finding(
+            "FAN ↔ FAST correlation computed — no DNS-to-disk domain matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+    elif not both_fan_fast:
+        findings.append(tag_finding(
+            "FAN ↔ FAST correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+
+    return render_confidence_summary(findings, module_label="Cross-module correlation")
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

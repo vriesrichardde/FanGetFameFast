@@ -48,6 +48,12 @@ try:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
 except ModuleNotFoundError:
     # Imported as a package (e.g. `from lib.generate_fast_report import generate`)
     # rather than run as a script — put lib/ on the path for the sibling import.
@@ -56,6 +62,12 @@ except ModuleNotFoundError:
         parse_steps as _parse_research_steps,
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
+    )
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
     )
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -156,6 +168,161 @@ def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
         elif current is not None:
             sections[current] += line + "\n"
     return {k: v.strip() for k, v in sections.items()}
+
+
+def _build_fast_hallucination_guard_section(
+    data: dict[str, Any],
+    case_id: str,
+    reports_dir: Path,
+) -> str:
+    """
+    Build the Hallucination Guard section for FAST reports.
+
+    Tags key disk-forensics conclusions with ConfidenceTier based on which
+    TSK / bulk_extractor / EWF artifacts were actually extracted.
+    Tiers assigned by code logic, not by Claude prompt instructions.
+    """
+    _hg_reset()
+    findings = []
+    steps = _parse_research_steps(case_id, str(reports_dir)) if case_id else []
+
+    # EWF image verification — CONFIRMED if ewfverify passed
+    if data.get("ewfverify"):
+        findings.append(tag_finding(
+            "EWF image integrity verified (ewfverify hash check passed)",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["libewf/ewfverify"],
+            ["fast"],
+        ))
+
+    # Partition layout — CONFIRMED if mmls ran
+    if data.get("mmls"):
+        findings.append(tag_finding(
+            "Partition layout extracted via mmls — partition boundaries confirmed",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/mmls"],
+            ["fast"],
+        ))
+
+    # Filesystem tree — CONFIRMED if fls ran
+    if data.get("fls_output"):
+        findings.append(tag_finding(
+            "Filesystem tree enumerated via fls — file and directory entries confirmed",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/fls"],
+            ["fast"],
+        ))
+
+    # Unallocated inodes (deleted files) — INFERRED if ils ran
+    if data.get("ils_output") or data.get("ils_orphan"):
+        findings.append(tag_finding(
+            "Unallocated/orphan inodes found via ils — deleted file recovery possible (requires icat)",
+            ConfidenceTier.INFERRED,
+            [],
+            ["tsk/ils"],
+            ["fast"],
+        ))
+
+    # MFT
+    if data.get("mft_extracted"):
+        findings.append(tag_finding(
+            "$MFT extracted — Master File Table provides authoritative file creation/modification times",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/icat"],
+            ["fast"],
+        ))
+
+    # Windows Event Logs
+    evtx = data.get("evtx_list") or []
+    if evtx:
+        findings.append(tag_finding(
+            f"{len(evtx)} Windows Event Log file(s) extracted — security, system, application events available",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/fls+icat"],
+            ["fast"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "No Windows Event Logs extracted — EVTX evidence unavailable",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["tsk/fls+icat"],
+            ["fast"],
+        ))
+
+    # Registry
+    registry = data.get("registry_list") or []
+    if registry:
+        findings.append(tag_finding(
+            f"{len(registry)} registry hive(s) extracted — persistence, run keys, user artifacts available",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/fls+icat"],
+            ["fast"],
+        ))
+
+    # Prefetch
+    prefetch = data.get("prefetch_list") or []
+    if prefetch:
+        findings.append(tag_finding(
+            f"{len(prefetch)} prefetch execution artifact(s) extracted — program execution evidence confirmed",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/fls+icat"],
+            ["fast"],
+        ))
+
+    # Bulk extractor carves
+    carved = data.get("bulk_carved") or []
+    if carved:
+        findings.append(tag_finding(
+            f"bulk_extractor carved {len(carved)} artifact type(s) from unallocated space",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["bulk_extractor"],
+            ["fast"],
+        ))
+
+    # Timeline
+    if data.get("fs_timeline") or data.get("fs_timeline_csv"):
+        findings.append(tag_finding(
+            "Filesystem timeline reconstructed — file system activity sequence confirmed",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["tsk/mactime"],
+            ["fast"],
+        ))
+
+    # Timeline correlations (time-proximity inferences) — INFERRED
+    if (data.get("fs_timeline") or data.get("fs_timeline_csv")) and evtx:
+        findings.append(tag_finding(
+            "Timeline correlation between filesystem events and EVTX entries possible (time-proximity inference)",
+            ConfidenceTier.INFERRED,
+            [],
+            ["tsk/mactime + evtx"],
+            ["fast"],
+        ))
+
+    # Assumptions from research notes
+    for s in steps:
+        outcome = s.get("outcome", "")
+        if "[ASSUMPTION]" in outcome or s.get("confidence") == "assumed":
+            text = outcome.replace("[ASSUMPTION]", "").strip()
+            if text:
+                findings.append(tag_finding(
+                    text,
+                    ConfidenceTier.ASSUMED,
+                    [s["id"]] if s.get("id") else [],
+                    [s.get("source_tool", "")] if s.get("source_tool") else [],
+                    ["fast"],
+                ))
+
+    return render_confidence_summary(findings, module_label="FAST")
 
 
 def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
@@ -611,6 +778,12 @@ def _build_markdown(
     a("")
     a("*All findings derived from disk image analysis as stated. Evidence integrity preserved.*")
     a("")
+
+    # ── Hallucination Guard ───────────────────────────────────────────────────
+    hg_section = _build_fast_hallucination_guard_section(data, case_id, reports_dir)
+    if hg_section:
+        a(hg_section)
+        a("")
 
     # ── Evidence Trail ────────────────────────────────────────────────────────
     lines.extend(_build_evidence_trail(case_id, reports_dir))

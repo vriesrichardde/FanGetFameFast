@@ -42,11 +42,23 @@ from typing import Any
 
 try:
     from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
 except ModuleNotFoundError:
     # Imported as a package (e.g. `from lib.generate_pcap_report import ...`)
     # rather than run as a script — put lib/ on the path for the sibling import.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
 
 PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
@@ -3358,6 +3370,164 @@ def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
     return {k: v.strip() for k, v in sections.items()}
 
 
+# ── Hallucination Guard ────────────────────────────────────────────────────────
+
+def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Path) -> list[str]:
+    """
+    Build the Hallucination Guard section for FAN (PCAP) reports.
+
+    Tags each key conclusion with a ConfidenceTier based on which analysers
+    ran and what they produced. Tiers are assigned by code logic, not by
+    Claude prompt instructions.
+    """
+    _hg_reset()
+    findings = []
+    steps = _parse_research_steps(case_id, str(out_dir)) if case_id else []
+
+    # Suricata alerts — highest-confidence: IDS rule match on wire traffic
+    suricata = data.get("suricata_data") or {}
+    alerts = suricata.get("alerts") or (suricata if isinstance(suricata, list) else [])
+    if alerts:
+        findings.append(tag_finding(
+            f"Suricata IDS produced {len(alerts)} alert(s) — rule-based detections on wire traffic",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["suricata"],
+            ["fan"],
+        ))
+    elif data.get("has_suricata"):
+        findings.append(tag_finding(
+            "Suricata ran but produced no alerts",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["suricata"],
+            ["fan"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "Suricata IDS not run — rule-based alert detection unavailable",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["suricata"],
+            ["fan"],
+        ))
+
+    # YARA matches
+    yara = data.get("yara_results") or {}
+    yara_hits = [k for k, v in yara.items() if isinstance(v, dict) and v.get("triggered")]
+    if yara_hits:
+        findings.append(tag_finding(
+            f"YARA matched {len(yara_hits)} rule(s) in PCAP payload: {', '.join(yara_hits[:3])}",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["yara-python"],
+            ["fan"],
+        ))
+    elif data.get("has_yara"):
+        findings.append(tag_finding(
+            "YARA scan ran on PCAP — no rule matches detected",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["yara-python"],
+            ["fan"],
+        ))
+    else:
+        findings.append(tag_finding(
+            "YARA scan not run on PCAP — malware signature detection in traffic unavailable",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["yara-python"],
+            ["fan"],
+        ))
+
+    # Protocol threat detections (direct analyser output → CONFIRMED)
+    protocol_map = [
+        ("has_dns",     "dns_results",     "DNS",     "fan_dns_threats"),
+        ("has_http",    "http_results",    "HTTP(S)", "fan_http_threats"),
+        ("has_tls",     "tls_results",     "TLS",     "fan_tls_inspector"),
+        ("has_tcp",     "tcp_results",     "TCP",     "fan_tcp_threats"),
+        ("has_icmp",    "icmp_results",    "ICMP",    "fan_icmp_threats"),
+        ("has_arp",     "arp_results",     "ARP",     "fan_arp_threats"),
+        ("has_dhcp",    "dhcp_results",    "DHCP",    "fan_dhcp_threats"),
+        ("has_ntp",     "ntp_results",     "NTP",     "fan_ntp_threats"),
+        ("has_mdns",    "mdns_results",    "mDNS",    "fan_mdns_threats"),
+        ("has_nbns",    "nbns_results",    "NBNS",    "fan_nbns_threats"),
+        ("has_llmnr",   "llmnr_results",   "LLMNR",   "fan_llmnr_threats"),
+        ("has_snmp",    "snmp_results",    "SNMP",    "fan_snmp_threats"),
+        ("has_quic",    "quic_results",    "QUIC",    "fan_quic_threats"),
+        ("has_stun",    "stun_results",    "STUN",    "fan_stun_threats"),
+        ("has_ssdp",    "ssdp_results",    "SSDP",    "fan_ssdp_threats"),
+        ("has_netbios", "netbios_results", "NetBIOS", "fan_netbios_threats"),
+    ]
+    for has_key, result_key, proto_name, tool_name in protocol_map:
+        if data.get(has_key):
+            results = data.get(result_key) or {}
+            triggered = [k for k, v in results.items()
+                         if isinstance(v, dict) and v.get("triggered")]
+            if triggered:
+                findings.append(tag_finding(
+                    f"{proto_name} analyser flagged {len(triggered)} category/ies: "
+                    f"{', '.join(triggered[:3])}",
+                    ConfidenceTier.CONFIRMED,
+                    [],
+                    [tool_name],
+                    ["fan"],
+                ))
+            else:
+                findings.append(tag_finding(
+                    f"{proto_name} analyser ran — no threats detected",
+                    ConfidenceTier.CONFIRMED,
+                    [],
+                    [tool_name],
+                    ["fan"],
+                ))
+
+    # Behavioral inferences (beaconing, C2 patterns) — INFERRED
+    dns_results = data.get("dns_results") or {}
+    for cat, v in dns_results.items():
+        if isinstance(v, dict) and v.get("triggered") and "beacon" in cat.lower():
+            findings.append(tag_finding(
+                f"DNS beaconing pattern inferred from query frequency analysis ({cat})",
+                ConfidenceTier.INFERRED,
+                [],
+                ["fan_dns_threats"],
+                ["fan"],
+            ))
+
+    http_results = data.get("http_results") or {}
+    for cat, v in http_results.items():
+        if isinstance(v, dict) and v.get("triggered") and any(
+            kw in cat.lower() for kw in ("c2", "command", "beacon", "exfil")
+        ):
+            findings.append(tag_finding(
+                f"HTTP C2/exfiltration pattern inferred from traffic analysis ({cat})",
+                ConfidenceTier.INFERRED,
+                [],
+                ["fan_http_threats"],
+                ["fan"],
+            ))
+
+    # Assumptions from research notes
+    for s in steps:
+        outcome = s.get("outcome", "")
+        if "[ASSUMPTION]" in outcome or s.get("confidence") == "assumed":
+            text = outcome.replace("[ASSUMPTION]", "").strip()
+            if text:
+                findings.append(tag_finding(
+                    text,
+                    ConfidenceTier.ASSUMED,
+                    [s["id"]] if s.get("id") else [],
+                    [s.get("source_tool", "")] if s.get("source_tool") else [],
+                    ["fan"],
+                ))
+
+    if not findings:
+        return []
+
+    section_md = render_confidence_summary(findings, module_label="FAN")
+    return section_md.splitlines()
+
+
 # ── Evidence trail ────────────────────────────────────────────────────────────
 
 def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
@@ -3541,6 +3711,7 @@ def generate_report(
     sections.extend(sec_mitre(coverage))
     sections.extend(sec_recommendations(recs))
     sections.extend(sec_appendix(stem, data, case_id))
+    sections.extend(_build_fan_hallucination_guard_section(data, case_id, out_dir))
     sections.extend(_build_evidence_trail(case_id, out_dir))
 
     md_content = "\n".join(sections) + "\n"

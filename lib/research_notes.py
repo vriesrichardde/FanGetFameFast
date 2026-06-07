@@ -69,6 +69,26 @@ def _reflect_count(path: Path) -> int:
 # Public API — importable by report generators
 # ---------------------------------------------------------------------------
 
+def get_findings_with_confidence(case_id: str, output_dir: str | None = None) -> list[dict]:
+    """Return steps enriched with machine-readable confidence fields.
+
+    Each dict contains all parse_steps() fields plus:
+      confidence  — "direct" | "inferred" | "assumed"
+      source_tool — tool name recorded with --source-tool, or ""
+    """
+    steps = parse_steps(case_id, output_dir)
+    for s in steps:
+        outcome = s.get("outcome", "")
+        if s.get("confidence") in ("direct", "inferred", "assumed"):
+            pass  # already set by the new parser
+        elif "[ASSUMPTION]" in outcome:
+            s["confidence"] = "assumed"
+        else:
+            s["confidence"] = "direct"
+        s.setdefault("source_tool", "")
+    return steps
+
+
 def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
     """Return one dict per recorded step: {id, step_num, timestamp, title, action, why, outcome}.
 
@@ -99,14 +119,16 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
 
             step_num = int(num_match.group(1)) if num_match else len(steps) + 1
             current = {
-                "id":        f"RN-{int(id_match.group(1)):03d}" if id_match else None,
-                "step_num":  step_num,
-                "timestamp": ts_match.group(1) if ts_match else "",
-                "title":     title_match.group(1).strip() if title_match else line,
-                "action":    "",
-                "why":       "",
-                "outcome":   "",
-                "dismissed": "",
+                "id":          f"RN-{int(id_match.group(1)):03d}" if id_match else None,
+                "step_num":    step_num,
+                "timestamp":   ts_match.group(1) if ts_match else "",
+                "title":       title_match.group(1).strip() if title_match else line,
+                "action":      "",
+                "why":         "",
+                "outcome":     "",
+                "dismissed":   "",
+                "confidence":  "direct",
+                "source_tool": "",
             }
             continue
 
@@ -119,8 +141,14 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
             current["why"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
         elif "| **Outcome**" in line:
             current["outcome"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+            if "[ASSUMPTION]" in current["outcome"]:
+                current["confidence"] = "assumed"
         elif "| **Dismissed**" in line:
             current["dismissed"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Confidence**" in line:
+            current["confidence"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Source tool**" in line:
+            current["source_tool"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
 
     if current is not None:
         steps.append(current)
@@ -291,8 +319,20 @@ def cmd_step(args: argparse.Namespace) -> None:
             "</details>\n"
         )
 
-    outcome = f"[ASSUMPTION] {args.outcome}" if getattr(args, "assumption", False) else args.outcome
-    dismissed_row = f"\n| **Dismissed** | {args.dismissed} |" if getattr(args, "dismissed", None) else ""
+    is_assumption = getattr(args, "assumption", False)
+    outcome = f"[ASSUMPTION] {args.outcome}" if is_assumption else args.outcome
+    dismissed_row   = f"\n| **Dismissed** | {args.dismissed} |" if getattr(args, "dismissed", None) else ""
+    source_tool_val = getattr(args, "source_tool", None) or ""
+    # Resolve confidence: explicit flag wins; fall back to assumption detection
+    explicit_conf   = getattr(args, "confidence", None)
+    if explicit_conf:
+        confidence_val = explicit_conf
+    elif is_assumption:
+        confidence_val = "assumed"
+    else:
+        confidence_val = "direct"
+    confidence_row  = f"\n| **Confidence** | {confidence_val} |"
+    source_tool_row = f"\n| **Source tool** | {source_tool_val} |" if source_tool_val else ""
 
     entry = (
         f"### [{_now_utc()}] — Step {step_num} [{step_id}]: {args.title}\n\n"
@@ -302,6 +342,8 @@ def cmd_step(args: argparse.Namespace) -> None:
         f"| **Why** | {args.why} |\n"
         f"| **Outcome** | {outcome} |"
         f"{dismissed_row}"
+        f"{confidence_row}"
+        f"{source_tool_row}"
         f"{raw_block}\n\n"
         "---\n\n"
     )
@@ -447,6 +489,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--raw-file",   metavar="PATH", help="Path to file containing full raw output — wins over --raw (avoids shell arg size limits)")
     ps.add_argument("--assumption", action="store_true",           help="Mark this step's outcome as an assumption (prefixes [ASSUMPTION] for the report generator)")
     ps.add_argument("--dismissed",  metavar="TEXT", help="What was observed in this output but not flagged as significant, and why (optional)")
+    ps.add_argument("--confidence", choices=["direct", "inferred", "assumed"],
+                    help="Override confidence tier (default: auto-detected from --assumption flag)")
+    ps.add_argument("--source-tool", metavar="TOOL",
+                    help="Tool that produced this output, e.g. 'volatility3/psscan' or 'suricata' (optional)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
 
     # assumption
