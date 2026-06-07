@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_combined_report.py — Unified FAN + FAME + FAST combined report generator.
 
@@ -150,7 +150,7 @@ def _build_markdown(
     a(f"| Hostname | `{hostname}` |")
     a(f"| Modules | {', '.join(modules_run) if modules_run else 'None detected'} |")
     a(f"| Generated (UTC) | {generated_utc} |")
-    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |")
+    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |")
     a("")
     a("> **Claude: enhance and elaborate when necessary** — this unified report combines")
     a("> all available evidence from network, memory, and storage forensics. Cross-domain")
@@ -397,7 +397,7 @@ def _build_pptx(
     modules_str = "  ·  ".join(modules_run) if modules_run else "No modules run"
     _txt(s, f"Modules: {modules_str}", M, Inches(4.5), W - 2*M, Inches(0.4),
          12, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(5.0), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s, "CONFIDENTIAL — FOR AUTHORISED PERSONNEL ONLY",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)

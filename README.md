@@ -10,7 +10,7 @@ What makes it more than three tools in a folder is that the modules interrogate 
 
 The goal is simple: the analyst spends 100% of their time on analysis. The reports, the correlation, and the paperwork are handled. The analyst asks; the platform finds.
 
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin  
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman  
 **Platform:** Ubuntu 24.04 LTS (x86-64)  
 **License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)
 
@@ -302,4 +302,4 @@ This README is the overview; the detailed documentation lives in `docs/` and a f
 
 Fan Get Fame Fast is dual-licensed under your choice of the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)) or the **MIT License** ([LICENSE-MIT](LICENSE-MIT)). See [LICENSE](LICENSE) for the dual-license notice.
 
-*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin*
+*Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman*

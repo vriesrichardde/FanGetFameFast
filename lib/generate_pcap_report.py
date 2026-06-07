@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_pcap_report.py — PCAP Incident Report Generator
 
@@ -1453,7 +1453,7 @@ def sec_header(stem: str, case_id: str, overall_sev: str, now: str,
         f"| Report Version | v{report_version} |",
         f"| Overall Severity | {badge} |",
         f"| Report Generated | {now} |",
-        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |",
+        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |",
         f"| Capture Start | {first_ts or '—'} |",
         f"| Capture End | {last_ts or '—'} |",
         f"| Capture Duration | {_format_duration(duration) if duration else '—'} |",
@@ -2806,7 +2806,7 @@ def _build_fan_pptx(
     _rect(s1, Inches(3), Inches(3.8), W - Inches(6), Inches(0.04), _BLUE)
     _txt(s1, f"Case: {case_id}  |  PCAP: {pcap_name}  |  {generated_cet[:10]}",
          M, Inches(4.1), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s1, "Fan Get Fame Fast  |  FAN module",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
@@ -3052,7 +3052,7 @@ def _build_fan_docx(
         ("Case ID",      case_id),
         ("PCAP file",    pcap_name),
         ("Module",       "FAN — Forensics Agent Network"),
-        ("Analysts",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Analysts",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
         ("Generated",    generated_cet),
         ("Analysis tools", "tshark · Suricata · YARA · 22 protocol detectors"),
     ])

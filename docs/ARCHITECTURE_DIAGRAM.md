@@ -2,7 +2,7 @@
 
 **Version:** 1.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 **Purpose:** Judge-facing architecture reference for the *FIND EVIL!* hackathon presentation.
 
 > Every diagram in this file is written in [Mermaid](https://mermaid.js.org/). It renders
@@ -447,4 +447,4 @@ interrupted batch resumes without re-analyzing completed evidence.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — June 2026 — Architecture deck v1.0*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman — June 2026 — Architecture deck v1.0*

@@ -2,7 +2,7 @@
 
 **Version:** 2.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 **Classification:** Internal — SOC Operations
 
 > **New in v2.0:** an [Architectural guardrails](#13-architectural-guardrails-deployers-view) section
@@ -804,4 +804,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — June 2026 — v2.0*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman — June 2026 — v2.0*

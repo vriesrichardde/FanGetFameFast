@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_batch_report.py — Overall batch report generator for multi-file investigations.
 
@@ -251,7 +251,7 @@ def _build_markdown(
     a(f"| FAST (storage) | {fast_count} host(s) |")
     a(f"| FAN (network) | {fan_count} PCAP(s) |")
     a(f"| Generated (UTC) | {generated_utc} |")
-    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |")
+    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |")
     a("")
     a("> **Claude: enhance and elaborate when necessary** — this batch report aggregates")
     a("> forensic findings from all investigated hosts. Cross-host IOC matches, shared")
@@ -481,7 +481,7 @@ def _build_pptx(
          M, Inches(3.7), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s, f"Evidence: {evidence_dir}",
          M, Inches(4.2), W - 2*M, Inches(0.4), 12, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(4.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s, "CONFIDENTIAL — FOR AUTHORISED PERSONNEL ONLY",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)

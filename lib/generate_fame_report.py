@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_fame_report.py — FAME (Forensic Analysis Memory) report generator.
 
@@ -1187,7 +1187,7 @@ def _build_pptx(
     meta = f"Case: {case_id}  |  Host: {hostname}  |  {generated_utc[:10]}"
     _add_text(s1, meta, M, Inches(4.1), W - 2*M, Inches(0.5),
               14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _add_text(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _add_text(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
               M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
 
     # ── Slide 2 — Key findings ────────────────────────────────────────────────
@@ -2064,7 +2064,7 @@ def _build_docx(
         ("Memory image",         Path(image_path).name if image_path else ""),
         ("Memory image created", image_mtime),
         ("Module",               "FAME — Forensic Analysis Memory"),
-        ("Analysts",             "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Analysts",             "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
         ("Generated",            generated_utc),
         ("Analysis tools",       "Volatility 3 v2.20.0 · GNU strings · YARA · MemProcFS v5.17.5"),
     ])

@@ -2,7 +2,7 @@
 
 **Version:** 4.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 **Classification:** Internal
 
 > **New installation?** See the [Deployment Guide](DEPLOYMENT_GUIDE.md) for step-by-step production setup.
@@ -972,4 +972,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — June 2026 — v4.0*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman — June 2026 — v4.0*
