@@ -13,7 +13,7 @@
     "PIP_DISABLE_PIP_VERSION_CHECK": "1"
   },
   "mounts": [
-    "source=${localEnv:FGFF_EVIDENCE_INPUT:/tmp},target=/home/vscode/evidence,type=bind,readonly,consistency=cached"
+    "source=/Users/jeffreye/Downloads/Forensic Evidence Sets,target=/home/vscode/evidence,type=bind,readonly,consistency=cached"
   ],
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {

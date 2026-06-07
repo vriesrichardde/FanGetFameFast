@@ -82,6 +82,11 @@ STEM="${STEM%.pcap}"
 
 [[ -z "$CASE_ID" ]] && CASE_ID="FAN-$(date -u +%Y%m%d-%H%M%S)"
 
+# ── WIP directories (cleaned up after upload) ─────────────────────────────────
+ANALYSIS="$PROJECT_ROOT/analysis"
+REPORTS_TMP="$ANALYSIS/_reports/$STEM"
+mkdir -p "$REPORTS_TMP"
+
 # ── Research notes initialisation ─────────────────────────────────────────────
 python3 "$PROJECT_ROOT/lib/research_notes.py" init \
     --case-id    "$CASE_ID" \
@@ -100,11 +105,6 @@ if [[ -x "$SCRIPT_DIR/update_suricata_rules.sh" ]]; then
 else
     warn "update_suricata_rules.sh not found — skipping rule update."
 fi
-
-# ── WIP directories (cleaned up after upload) ─────────────────────────────────
-ANALYSIS="$PROJECT_ROOT/analysis"
-REPORTS_TMP="$ANALYSIS/_reports/$STEM"
-mkdir -p "$REPORTS_TMP"
 
 ok "Case    : $CASE_ID"
 ok "PCAP    : $PCAP_ABS"
@@ -143,6 +143,12 @@ run_step "PCAP netflow / IPs / FQDNs" \
     "$SCRIPT_DIR/pcap_analyze.sh" "$PCAP_ABS" \
     --output-dir "$(full pcap)" \
     --case-id "$CASE_ID"
+
+run_step "SiLK flow analysis" \
+    "$SCRIPT_DIR/fan_silk_analysis.sh" "$PCAP_ABS" \
+    --stem "$STEM" --case-id "$CASE_ID" \
+    --output-dir "$(full silk_analysis)" \
+    "${XFLAGS[@]:+${XFLAGS[@]}}"
 
 run_step "ICMP threats" \
     "$SCRIPT_DIR/fan_icmp_threats.sh" "$PCAP_ABS" \

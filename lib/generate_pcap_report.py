@@ -163,6 +163,7 @@ def load_all_data(stem: str) -> dict:
     fh_dir       = ANALYSIS_DIR / "file_hashes"  / stem
     suricata_dir = ANALYSIS_DIR / "suricata"     / stem
     yara_dir     = ANALYSIS_DIR / "yara_pcap"    / stem
+    silk_dir     = ANALYSIS_DIR / "silk_analysis" / stem
 
     # Strip non-category _sessions key from TLS inspector JSON
     tls_raw = _load_json(tls_dir / "tls_sessions.json") or {}
@@ -207,6 +208,10 @@ def load_all_data(stem: str) -> dict:
         "suricata_alerts":  _load_csv(suricata_dir  / "suricata_alerts.csv"),
         "yara_data":        _load_json(yara_dir     / "yara_matches.json") or {},
         "yara_records":     _load_csv(yara_dir      / "yara_matches.csv"),
+        # SiLK flow-level analysis
+        "silk_raw":         _load_json(silk_dir / "silk_analysis.json") or {},
+        "silk_results":     _normalize_categories(_load_json(silk_dir / "silk_analysis.json")),
+        "silk_flows":       _load_csv(silk_dir / "silk_flows.csv"),
         # Availability flags
         "has_pcap":     (pcap_dir    / "netflow.csv").exists(),
         "has_fan_ip":      (fan_ip_dir     / "correlation.csv").exists() or (fan_ip_dir / "ip_enrichment.csv").exists(),
@@ -231,6 +236,7 @@ def load_all_data(stem: str) -> dict:
         "has_fh":       (fh_dir      / "file_hashes.json").exists(),
         "has_suricata": (suricata_dir / "suricata_alerts.json").exists(),
         "has_yara":     (yara_dir    / "yara_matches.json").exists(),
+        "has_silk":     (silk_dir    / "silk_analysis.json").exists(),
     }
 
 
@@ -2036,6 +2042,34 @@ def _sec_findings_generic(data: dict, results_key: str, section_num: str,
     return lines
 
 
+def sec_findings_silk(data: dict) -> list[str]:
+    if not data.get("has_silk"):
+        return []
+    raw = data.get("silk_raw", {})
+    status = raw.get("status")
+    if status == "unavailable":
+        return [
+            "### 2.0 SiLK Flow-Level Analysis",
+            "",
+            f"> **SiLK not available:** {raw.get('reason', 'silk-tools or yaf not installed.')}",
+            "",
+            "Install with: `sudo apt install silk-tools yaf`",
+            "",
+            "---",
+            "",
+        ]
+    if status == "conversion_failed":
+        return [
+            "### 2.0 SiLK Flow-Level Analysis",
+            "",
+            f"> **SiLK conversion failed:** {raw.get('reason', 'yaf/rwipfix2silk did not produce a flow file.')}",
+            "",
+            "---",
+            "",
+        ]
+    return _sec_findings_generic(data, "silk_results", "2.0", "SiLK Flow-Level Analysis", "has_silk")
+
+
 def sec_findings_arp(data: dict) -> list[str]:
     return _sec_findings_generic(data, "arp_results",  "2.7",  "ARP Threat Analysis", "has_arp")
 
@@ -2596,6 +2630,13 @@ def sec_appendix(stem: str, data: dict, case_id: str = "") -> list[str]:
             ("YARA Matches Report",  str(d / "yara_report.md")),
             ("YARA Matches JSON",    str(d / "yara_matches.json")),
             ("YARA Matches CSV",     str(d / "yara_matches.csv")),
+        ]
+    if data["has_silk"]:
+        d = ANALYSIS_DIR / "silk_analysis" / stem
+        sources += [
+            ("SiLK Flow Analysis Report", str(d / "silk_analysis_report.md")),
+            ("SiLK Flow Analysis JSON",   str(d / "silk_analysis.json")),
+            ("SiLK Flows CSV",            str(d / "silk_flows.csv")),
         ]
     if data["has_fan_ip"]:
         d = ANALYSIS_DIR / "fan_ip" / stem
@@ -3463,7 +3504,7 @@ def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Pa
         if data.get(has_key):
             results = data.get(result_key) or {}
             triggered = [k for k, v in results.items()
-                         if isinstance(v, dict) and v.get("triggered")]
+                         if isinstance(v, dict) and v.get("count", 0) > 0]
             if triggered:
                 findings.append(tag_finding(
                     f"{proto_name} analyser flagged {len(triggered)} category/ies: "
@@ -3485,7 +3526,7 @@ def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Pa
     # Behavioral inferences (beaconing, C2 patterns) — INFERRED
     dns_results = data.get("dns_results") or {}
     for cat, v in dns_results.items():
-        if isinstance(v, dict) and v.get("triggered") and "beacon" in cat.lower():
+        if isinstance(v, dict) and v.get("count", 0) > 0 and "beacon" in cat.lower():
             findings.append(tag_finding(
                 f"DNS beaconing pattern inferred from query frequency analysis ({cat})",
                 ConfidenceTier.INFERRED,
@@ -3496,7 +3537,7 @@ def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Pa
 
     http_results = data.get("http_results") or {}
     for cat, v in http_results.items():
-        if isinstance(v, dict) and v.get("triggered") and any(
+        if isinstance(v, dict) and v.get("count", 0) > 0 and any(
             kw in cat.lower() for kw in ("c2", "command", "beacon", "exfil")
         ):
             findings.append(tag_finding(
@@ -3661,6 +3702,7 @@ def generate_report(
     if data["has_fh"]:       avail.append("file hashes")
     if data["has_suricata"]: avail.append("Suricata IDS")
     if data["has_yara"]:     avail.append("YARA rules")
+    if data["has_silk"]:     avail.append("SiLK flow analysis")
     if data["has_fan_ip"]:      avail.append("CTI enrichment")
     print(f"[report] Available sources: {', '.join(avail) or 'none'}")
 
@@ -3683,6 +3725,7 @@ def generate_report(
     sections.extend(sec_header(stem, case_id, overall_sev, now, first_ts, last_ts, duration, report_version))
     sections.extend(sec_management_summary(data, overall_sev, first_ts, last_ts, duration))
     sections.extend(_sec_incident_timeline(case_id, out_dir))
+    sections.extend(sec_findings_silk(data))
     sections.extend(sec_findings_icmp(data))
     sections.extend(sec_findings_dns(data))
     sections.extend(sec_findings_ntp(data))

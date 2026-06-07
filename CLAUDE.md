@@ -121,6 +121,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
 | Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerate all FAME + FAST evidence files and run them sequentially in-session; default dir: `/home/vscode/evidence` |
+| Network Forensics (FAN) | `/fan <pcap> [--case-id]` | Agentic coordinator: run all 22 FAN modules sequentially, read each output, surface HIGH/CRITICAL findings in real time, then generate report. Use this instead of `analyze_pcap.sh` when Claude is in the loop. |
 | Memory Forensics (FAME) | `/fame` | Run Volatility 3 + Memory Baseliner; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Storage Forensics (FAST) | `/fast` | Run TSK / EWF tools; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Cross-module correlation | `/correlate` | Compute actual FAN↔FAME / FAME↔FAST / FAN↔FAST matches from raw artifact files; run before `./analysis/` is cleaned up |
@@ -141,18 +142,25 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 
 **FAN** is a manual PCAP investigation pipeline. There is no daemon or auto-processing. The analyst starts every investigation explicitly.
 
-```bash
-# Start a PCAP investigation (interactive — prompts for case ID)
-./scripts/analyze_pcap.sh /path/to/capture.pcap
+Two entry points — choose based on whether Claude is in the loop:
 
-# Non-interactive with explicit case ID
+| Entry point | When to use |
+|-------------|-------------|
+| `/fan <pcap> [--case-id]` | **Preferred for interactive use.** Claude runs all 22 modules as agentic coordinator, reads each output, surfaces HIGH/CRITICAL findings in real time, and generates the report. |
+| `./scripts/analyze_pcap.sh` | Headless / CI use only. Blind batch run — Claude never sees intermediate findings. |
+
+```bash
+# Agentic coordinator (Claude in the loop — preferred)
+/fan /path/to/capture.pcap --case-id FAN-2025-001
+
+# Headless batch run (no Claude coordination)
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2025-001
 ```
 
-**Pipeline:**
+**Pipeline (both modes):**
 1. Analyst drops PCAP into the evidence vault or provides a path directly.
-2. `analyze_pcap.sh` runs 22 protocol threat-detection modules. All WIP output goes to `./analysis/`.
-3. A versioned incident report (Markdown + PDF) is generated.
+2. 22 protocol threat-detection modules run. All WIP output goes to `./analysis/`.
+3. A versioned incident report (Markdown + PDF) is generated — includes the hallucination guard confidence table.
 4. The report is copied to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
 5. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
 
