@@ -1,0 +1,342 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:25b8523a-eaac-47c3-924d-8120c774b0a5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-06-07T07:30:19Z",
+    "tools": [
+      {
+        "vendor": "FanGetFameFast",
+        "name": "generate_sbom.py",
+        "version": "1.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:github/vriesrichardde/fangetfamefast",
+      "name": "FanGetFameFast",
+      "description": "FAN/FAME/FAST agentic forensics solution",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        },
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/vriesrichardde/FanGetFameFast"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/weasyprint",
+      "name": "weasyprint",
+      "version": "68.1",
+      "purl": "pkg:pypi/weasyprint@68.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==68.1"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/cairocffi",
+      "name": "cairocffi",
+      "version": "1.7.1",
+      "purl": "pkg:pypi/cairocffi@1.7.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==1.7.1"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/cairosvg",
+      "name": "CairoSVG",
+      "version": "2.9.0",
+      "purl": "pkg:pypi/cairosvg@2.9.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==2.9.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/python-pptx",
+      "name": "python-pptx",
+      "version": "1.0.2",
+      "purl": "pkg:pypi/python-pptx@1.0.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==1.0.2"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/python-docx",
+      "name": "python-docx",
+      "version": "1.2.0",
+      "purl": "pkg:pypi/python-docx@1.2.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==1.2.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/markdown",
+      "name": "Markdown",
+      "version": "3.10.2",
+      "purl": "pkg:pypi/markdown@3.10.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==3.10.2"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/pyyaml",
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "purl": "pkg:pypi/pyyaml@6.0.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==6.0.3"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/plotly",
+      "name": "plotly",
+      "version": "5.18.0",
+      "purl": "pkg:pypi/plotly@5.18.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==5.18.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/volatility3",
+      "name": "volatility3",
+      "version": "2.0.0",
+      "purl": "pkg:pypi/volatility3@2.0.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "VSL-1.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==2.0.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/yara-python",
+      "name": "yara-python",
+      "version": "4.3.1",
+      "purl": "pkg:pypi/yara-python@4.3.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==4.3.1"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/sslyze",
+      "name": "sslyze",
+      "version": "5.0.0",
+      "purl": "pkg:pypi/sslyze@5.0.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "AGPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==5.0.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/memprocfs",
+      "name": "memprocfs",
+      "version": "5.0.0",
+      "purl": "pkg:pypi/memprocfs@5.0.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "AGPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "requirement:spec",
+          "value": "==5.0.0"
+        },
+        {
+          "name": "resolved:installed",
+          "value": "false"
+        }
+      ]
+    }
+  ]
+}

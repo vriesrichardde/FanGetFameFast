@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_fast_report.py — FAST (Forensic Analysis Storage) report generator.
 
@@ -40,6 +40,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 try:
@@ -1098,7 +1100,7 @@ def _build_pptx(
     _rect(s1, Inches(3), Inches(3.8), W - Inches(6), Inches(0.04), _BLUE)
     _txt(s1, f"Case: {case_id}  |  Host: {hostname}  |  {generated_utc[:10]}",
          M, Inches(4.1), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s1, "Fan Get Fame Fast  |  FAST module",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
@@ -1345,7 +1347,7 @@ def _build_docx(
         ("Disk image",           Path(disk_image).name if disk_image else ""),
         ("Disk image created",   disk_mtime),
         ("Module",               "FAST — Forensic Analysis Storage"),
-        ("Analysts",             "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Analysts",             "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
         ("Generated",            generated_utc),
         ("Analysis tools",       "The Sleuth Kit (TSK) · ewflib · bulk_extractor · qemu-nbd"),
     ])
@@ -1761,7 +1763,7 @@ def generate(
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "storage")
     exports_dir  = exports_dir  or (PROJECT_ROOT / "exports")
     output_dir   = output_dir   or (PROJECT_ROOT / "reports")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
 
     data = _load_analysis(analysis_dir, exports_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")

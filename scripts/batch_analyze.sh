@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # batch_analyze.sh — Batch evidence investigation orchestrator.
 #
 # Walks an evidence directory, extracts any .7z/.zip archives to a temporary
@@ -354,6 +354,17 @@ python3 "$PROJECT_ROOT/lib/generate_batch_report.py" \
     --reports-dir "$PROJECT_ROOT/reports" \
     --output-dir  "$PROJECT_ROOT/reports" \
     "${report_flags[@]+"${report_flags[@]}"}"
+
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Capture the full batch coordination session. Best-effort; never fails the run.
+source "$PROJECT_ROOT/scripts/record_session.sh"
+fgff_record_session "$BATCH_ID" "$PROJECT_ROOT/reports" "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Bundle every batch-level artifact (campaign report, transcript, …) and upload.
+source "$PROJECT_ROOT/scripts/package_artifacts.sh"
+fgff_package_artifacts "$BATCH_ID" "$PROJECT_ROOT/reports" "$PROJECT_ROOT/exports" "" \
+    "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

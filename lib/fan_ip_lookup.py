@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 CTI IP Lookup — correlates PCAP-extracted FQDNs and IP addresses, performs DNS
 resolution, enriches each indicator with OSINT via Perplexity.ai, and caches

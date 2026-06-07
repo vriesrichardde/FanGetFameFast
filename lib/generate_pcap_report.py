@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_pcap_report.py — PCAP Incident Report Generator
 
@@ -38,6 +38,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 from typing import Any
 
 try:
@@ -1469,7 +1471,7 @@ def sec_header(stem: str, case_id: str, overall_sev: str, now: str,
         f"| Report Version | v{report_version} |",
         f"| Overall Severity | {badge} |",
         f"| Report Generated | {now} |",
-        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |",
+        f"| Prepared By | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |",
         f"| Capture Start | {first_ts or '—'} |",
         f"| Capture End | {last_ts or '—'} |",
         f"| Capture Duration | {_format_duration(duration) if duration else '—'} |",
@@ -2857,7 +2859,7 @@ def _build_fan_pptx(
     _rect(s1, Inches(3), Inches(3.8), W - Inches(6), Inches(0.04), _BLUE)
     _txt(s1, f"Case: {case_id}  |  PCAP: {pcap_name}  |  {generated_cet[:10]}",
          M, Inches(4.1), W - 2*M, Inches(0.5), 14, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s1, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(4.6), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s1, "Fan Get Fame Fast  |  FAN module",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
@@ -3103,7 +3105,7 @@ def _build_fan_docx(
         ("Case ID",      case_id),
         ("PCAP file",    pcap_name),
         ("Module",       "FAN — Forensics Agent Network"),
-        ("Analysts",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Analysts",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
         ("Generated",    generated_cet),
         ("Analysis tools", "tshark · Suricata · YARA · 22 protocol detectors"),
     ])
@@ -3379,7 +3381,12 @@ def convert_to_pdf(
             f'<!DOCTYPE html><html><head><meta charset="utf-8">'
             f"<style>{_PLAIN_CSS}</style></head><body>{body}</body></html>"
         )
-        weasyprint.HTML(string=full).write_pdf(str(pdf_path), presentational_hints=True)
+        # Restrict resource fetching so attacker-influenced evidence text cannot
+        # trigger local-file disclosure or SSRF via file://, <img>, or url().
+        from md_to_pdf import safe_url_fetcher
+        weasyprint.HTML(string=full, url_fetcher=safe_url_fetcher).write_pdf(
+            str(pdf_path), presentational_hints=True
+        )
         return pdf_path.exists()
     except ImportError:
         pass
@@ -3674,7 +3681,7 @@ def generate_report(
         ANALYSIS_DIR = base_dir
 
     out_dir = output_dir or REPORTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out_dir)
 
     print(f"[report] Loading analysis data for stem: {stem}")
     data = load_all_data(stem)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 md_to_pdf.py — Convert any Markdown file to a styled PDF.
 
@@ -26,6 +26,34 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
+
+# Hosts allowed for remote resource fetches during PDF rendering (web fonts only).
+_ALLOWED_FETCH_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+
+
+def safe_url_fetcher(url: str):
+    """Restricted WeasyPrint URL fetcher.
+
+    Reports are rendered from attacker-influenced evidence text (filenames,
+    process names, URIs, certificate fields). WeasyPrint's default fetcher
+    resolves ``<img src>``, CSS ``url()`` and ``@import`` — including
+    ``file://`` (local file disclosure) and arbitrary ``http(s)://`` (SSRF /
+    out-of-band exfiltration). This fetcher permits only inline ``data:`` URIs
+    and a fixed allowlist of trusted web-font hosts; everything else is blocked.
+    """
+    import urllib.parse
+
+    import weasyprint
+
+    if url.startswith("data:"):
+        return weasyprint.default_url_fetcher(url)
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname in _ALLOWED_FETCH_HOSTS:
+        return weasyprint.default_url_fetcher(url)
+    raise ValueError(f"[md_to_pdf] blocked external resource during render: {url!r}")
 
 _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto+Mono:wght@400;600&display=swap');
@@ -317,7 +345,7 @@ def build_html(
     title: str = "DFIR Analysis Report",
     subtitle: str = "",
     case_id: str = "",
-    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
     date_str: str = "",
     logo_data_uri: str = "",
 ) -> str:
@@ -415,7 +443,7 @@ def convert(
     title: str = "",
     subtitle: str = "",
     case_id: str = "",
-    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    prepared_by: str = "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
     date_str: str = "",
     logo_path: Path | None = None,
 ) -> Path:
@@ -440,8 +468,8 @@ def convert(
         raise FileNotFoundError(f"Markdown file not found: {md_path}")
 
     out = output_path or md_path.with_suffix(".pdf")
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = path_guard.assert_writable(out)
+    path_guard.guard_output_dir(out.parent)
 
     inferred_title = title or md_path.stem.replace("_", " ").replace("-", " ").title()
 
@@ -463,9 +491,9 @@ def convert(
         logo_data_uri=logo_data_uri,
     )
 
-    weasyprint.HTML(string=html, base_url=str(md_path.parent)).write_pdf(
-        str(out), presentational_hints=True
-    )
+    weasyprint.HTML(
+        string=html, base_url=str(md_path.parent), url_fetcher=safe_url_fetcher
+    ).write_pdf(str(out), presentational_hints=True)
     return out
 
 
@@ -478,7 +506,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title",       metavar="TITLE",       default="",            help="Report title (default: inferred from filename)")
     p.add_argument("--subtitle",    metavar="SUBTITLE",    default="",            help="Cover page subtitle")
     p.add_argument("--case-id",     metavar="ID",          default="",            help="Case ID shown on cover and page header")
-    p.add_argument("--prepared-by", metavar="NAME",        default="Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin", help="Prepared-by field on cover")
+    p.add_argument("--prepared-by", metavar="NAME",        default="Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman", help="Prepared-by field on cover")
     p.add_argument("--date",        metavar="YYYY-MM-DD",  default="",            help="Report date (default: today UTC)")
     p.add_argument("--logo",        metavar="SVG",         default="",            help="Path to SVG logo file to embed on cover and page header")
     return p

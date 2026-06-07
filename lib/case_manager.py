@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 case_manager.py — Investigation case lifecycle management.
 
@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -30,6 +31,19 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 CASES_DIR    = PROJECT_ROOT / "cases"
+
+# A case id becomes a single path component under ./cases/. Restrict it to a
+# safe charset so it cannot traverse out of the cases root (e.g. "../../etc")
+# into destructive operations such as archive_case / remove_case (rmtree).
+_CASE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def validate_case_id(case_id: str) -> str:
+    if not isinstance(case_id, str) or not _CASE_ID_RE.match(case_id):
+        raise ValueError(
+            f"Invalid case id {case_id!r}: expected 1-64 chars of [A-Za-z0-9._-]"
+        )
+    return case_id
 
 
 def generate_case_id() -> str:
@@ -44,7 +58,7 @@ class CaseManager:
     # ── Directory helpers ────────────────────────────────────────────────────
 
     def case_dir(self, case_id: str) -> Path:
-        return self.cases_dir / case_id
+        return self.cases_dir / validate_case_id(case_id)
 
     def analysis_dir(self, case_id: str, subdir: str = "") -> Path:
         d = self.case_dir(case_id) / "analysis"
@@ -177,6 +191,7 @@ class CaseManager:
 def _remove_vault_case(case_id: str) -> None:
     """Remove the Cases/<case_id>.md vault note for this case."""
     try:
+        validate_case_id(case_id)
         sys.path.insert(0, str(PROJECT_ROOT / "lib"))
         vault = PROJECT_ROOT / "vault" / "Cases"
         note = vault / f"{case_id}.md"

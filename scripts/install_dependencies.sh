@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # =============================================================================
 # install_dependencies.sh — FanGetFameFast production dependency installer
 #
@@ -308,18 +308,15 @@ if [[ -f "$REQUIREMENTS_FILE" ]]; then
 else
     warn "requirements.txt not found — installing baseline packages only"
     pip install --quiet \
-        "PyYAML>=6.0" \
-        "Markdown>=3.4" \
-        "weasyprint>=60.0" \
-        "requests>=2.31.0" \
-        "python-pptx>=1.0.0" \
-        "xlsxwriter>=3.2.0" \
-        "numpy>=1.26.0" \
-        "scipy>=1.11.0" \
-        "networkx>=3.2.0" \
-        "rapidfuzz>=3.0.0" \
-        "datasketch>=1.6.0" \
-        "graphifyy>=0.7.0"
+        "PyYAML==6.0.3" \
+        "Markdown==3.10.2" \
+        "weasyprint==68.1" \
+        "cairocffi==1.7.1" \
+        "CairoSVG==2.9.0" \
+        "python-pptx==1.0.2" \
+        "python-docx==1.2.0" \
+        "plotly==5.18.0" \
+        "yara-python==4.3.1"
 fi
 
 deactivate
@@ -430,9 +427,6 @@ section "Environment variables"
 
 REQUIRED_VARS=(PERPLEXITY_API_KEY)
 OPTIONAL_VARS=(
-    SENTINEL_TENANT_ID SENTINEL_CLIENT_ID SENTINEL_CLIENT_SECRET
-    SENTINEL_SUBSCRIPTION_ID SENTINEL_RESOURCE_GROUP
-    SENTINEL_WORKSPACE_NAME SENTINEL_WORKSPACE_ID
     OPENCTI_URL OPENCTI_API_KEY
     SOC_VA_POLL_INTERVAL SOC_NOTIFY_WEBHOOK
 )
@@ -450,7 +444,7 @@ for var in "${OPTIONAL_VARS[@]}"; do
     if [[ -n "${!var:-}" ]]; then
         ok "${var} is set"
     else
-        skip "${var} not set (optional — needed for Sentinel/OpenCTI integrations)"
+        skip "${var} not set (optional — needed for OpenCTI integration)"
     fi
 done
 

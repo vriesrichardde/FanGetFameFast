@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_attack_demo_docs.py — PowerPoint + Word document generator for the
 AI-based attack demonstration performed on 24-May-2026 against Metasploitable.
@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 sys.path.insert(0, "/home/richard/Documents/SecurityOperationsCenterOnSteroids/.venv/lib/python3.12/site-packages")
 
@@ -391,7 +393,7 @@ def build_pptx(output_path: Path):
         ("Attacker",      "KALI Linux (VirtualBox, NAT)"),
         ("Environment",   "Controlled lab — VirtualBox on UbuntuDesktop"),
         ("Case ID",       CASE_ID),
-        ("Authors",       "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Authors",       "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
     ]
     for i, (k, v) in enumerate(meta):
         y = 3.25 + i * 0.37
@@ -1008,7 +1010,7 @@ def build_docx(output_path: Path):
         ("Environment",    "Controlled lab — both machines are VirtualBox VMs"),
         ("Case ID",        CASE_ID),
         ("Classification", "CONFIDENTIAL — controlled lab environment"),
-        ("Authors",        "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("Authors",        "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
     ])
     doc.add_page_break()
     _add_toc(doc)
@@ -1754,7 +1756,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out)
 
     pptx_path = out / "AI-based attack demonstration.pptx"
     docx_path = out / "AI-based attack demonstration.docx"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_combined_report.py — Unified FAN + FAME + FAST combined report generator.
 
@@ -34,6 +34,8 @@ try:
 except ImportError:
     _CET = timezone.utc
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -164,7 +166,7 @@ def _build_markdown(
     a(f"| Hostname | `{hostname}` |")
     a(f"| Modules | {', '.join(modules_run) if modules_run else 'None detected'} |")
     a(f"| Generated (UTC) | {generated_utc} |")
-    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |")
+    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |")
     a("")
     a("> **Claude: enhance and elaborate when necessary** — this unified report combines")
     a("> all available evidence from network, memory, and storage forensics. Cross-domain")
@@ -508,7 +510,7 @@ def _build_pptx(
     modules_str = "  ·  ".join(modules_run) if modules_run else "No modules run"
     _txt(s, f"Modules: {modules_str}", M, Inches(4.5), W - 2*M, Inches(0.4),
          12, color=_TEXT_MID, align=PP_ALIGN.CENTER)
-    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin",
+    _txt(s, "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman",
          M, Inches(5.0), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
     _txt(s, "CONFIDENTIAL — FOR AUTHORISED PERSONNEL ONLY",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
@@ -896,7 +898,7 @@ def generate(
 ) -> dict[str, Path | None]:
     reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     output_dir  = output_dir  or reports_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(output_dir)
 
     sources = _discover_sources(reports_dir, case_id)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")

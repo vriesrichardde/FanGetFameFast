@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 correlate_findings.py — Cross-module correlation engine for FanGetFameFast.
 
@@ -429,7 +429,7 @@ def _build_markdown(
     a(f"| Hostname | `{hostname}` |")
     a(f"| Modules | {', '.join(modules_found) or 'None detected'} |")
     a(f"| Generated (UTC) | {generated_utc} |")
-    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin |")
+    a(f"| Prepared by | Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman |")
     a("")
     a("> **Claude: enhance and elaborate when necessary** — this document surfaces")
     a("> kill-chain connections that no single module identifies alone.")

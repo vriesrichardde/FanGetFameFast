@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 investigations_server.py — Read-write MCP server for the investigations vault.
 
@@ -143,10 +143,39 @@ TOOLS = [
 # ── Path safety ────────────────────────────────────────────────────────────────
 
 def _safe_path(rel: str) -> Path:
-    resolved = (INVESTIGATIONS_ROOT / (rel or "")).resolve()
-    if not str(resolved).startswith(str(INVESTIGATIONS_ROOT.resolve())):
+    root = INVESTIGATIONS_ROOT.resolve()
+    resolved = (root / (rel or "")).resolve()
+    # Use path-relative containment, not str.startswith: a string prefix match
+    # would accept a sibling like ``<root>_backup`` that escapes the root.
+    if resolved != root and not resolved.is_relative_to(root):
         raise ValueError(f"Path outside investigations root: {rel!r}")
     return resolved
+
+
+# Read-only roots that must never receive a write, even if they somehow fall
+# within INVESTIGATIONS_ROOT. Mirrors lib/path_guard.py; kept self-contained so
+# this server has no project-library dependency when deployed standalone.
+_READONLY_ROOTS = tuple(
+    Path(p).expanduser().resolve()
+    for p in (
+        "/mnt",
+        "/media",
+        os.environ.get("EVIDENCE_ROOT", "") or "/home/sansforensics/evidence",
+    )
+    if p
+)
+
+
+def _assert_writable(target: Path) -> Path:
+    """Reject writes that resolve under a read-only root (evidence, /mnt, /media)."""
+    resolved = target.resolve()
+    for ro in _READONLY_ROOTS:
+        if resolved == ro or resolved.is_relative_to(ro):
+            raise ValueError(
+                f"Refusing to write to read-only location: {resolved} "
+                f"(under protected root {ro})"
+            )
+    return target
 
 
 # ── Tool handlers ──────────────────────────────────────────────────────────────
@@ -197,7 +226,7 @@ def _read_file(args: dict) -> str:
 
 
 def _write_file(args: dict) -> str:
-    target = _safe_path(args["path"])
+    target = _assert_writable(_safe_path(args["path"]))
     target.parent.mkdir(parents=True, exist_ok=True)
     append = bool(args.get("append", False))
     mode = "ab" if append else "wb"
@@ -221,13 +250,13 @@ def _write_file(args: dict) -> str:
 
 
 def _create_directory(args: dict) -> str:
-    target = _safe_path(args["path"])
+    target = _assert_writable(_safe_path(args["path"]))
     target.mkdir(parents=True, exist_ok=True)
     return json.dumps({"path": str(target.relative_to(INVESTIGATIONS_ROOT)), "created": True})
 
 
 def _delete(args: dict) -> str:
-    target = _safe_path(args["path"])
+    target = _assert_writable(_safe_path(args["path"]))
     if not target.exists():
         raise FileNotFoundError(f"Not found: {target}")
     recursive = bool(args.get("recursive", False))

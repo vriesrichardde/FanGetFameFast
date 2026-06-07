@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 evidence_server.py — Read-only MCP server for the evidence vault.
 
@@ -118,8 +118,11 @@ TOOLS = [
 
 def _safe_path(rel: str) -> Path:
     """Resolve *rel* inside EVIDENCE_ROOT. Raises if it escapes the root."""
-    resolved = (EVIDENCE_ROOT / (rel or "")).resolve()
-    if not str(resolved).startswith(str(EVIDENCE_ROOT.resolve())):
+    root = EVIDENCE_ROOT.resolve()
+    resolved = (root / (rel or "")).resolve()
+    # Use path-relative containment, not str.startswith: a string prefix match
+    # would accept a sibling like ``<root>_exfil`` that escapes the root.
+    if resolved != root and not resolved.is_relative_to(root):
         raise ValueError(f"Path outside evidence root: {rel!r}")
     return resolved
 

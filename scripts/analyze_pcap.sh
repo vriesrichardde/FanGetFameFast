@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # analyze_pcap.sh — Manual PCAP investigation orchestrator (FAN)
 #
 # Runs all 22 analysis modules against a PCAP, generates a versioned incident
@@ -15,6 +15,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/pathguard.sh"
+source "$SCRIPT_DIR/record_session.sh"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 PCAP_FILE=""
@@ -81,6 +83,7 @@ STEM="${STEM%.pcapng}"
 STEM="${STEM%.pcap}"
 
 [[ -z "$CASE_ID" ]] && CASE_ID="FAN-$(date -u +%Y%m%d-%H%M%S)"
+fgff_validate_case_id "$CASE_ID" >/dev/null
 
 # ── WIP directories (cleaned up after upload) ─────────────────────────────────
 ANALYSIS="$PROJECT_ROOT/analysis"
@@ -374,6 +377,25 @@ run_step "Upload report" \
     $( [[ -f "$REPORT_PPTX"  ]] && echo "--pptx $REPORT_PPTX" ) \
     $( [[ -f "$REPORT_ZIP"   ]] && echo "--zip $REPORT_ZIP" ) \
     $( [[ -f "$EVIDENCE_ZIP" ]] && echo "--zip $EVIDENCE_ZIP" )
+
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl) and upload it. The transcript is
+# written to ./reports (which survives WIP cleanup) and captures the analytical
+# reasoning behind every finding, feeding workflow optimisation.
+header "Recording Session Transcript"
+
+# Best-effort, shared recorder (never fails the investigation). Uploaded to the
+# investigations vault alongside the report.
+fgff_record_session "$CASE_ID" "$PROJECT_ROOT/reports" 1
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Bundle every artifact for this case — incident reports + the analysis bundle
+# from the temp reports dir, plus the transcript from ./reports — and upload it.
+# Runs before WIP cleanup so the temp reports dir ($REPORTS_TMP) still exists.
+header "Bundling & Uploading Artifacts"
+source "$SCRIPT_DIR/package_artifacts.sh"
+fgff_package_artifacts "$CASE_ID" "$REPORTS_TMP" "$PROJECT_ROOT/exports" "$STEM" 1 "$PROJECT_ROOT/reports"
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"

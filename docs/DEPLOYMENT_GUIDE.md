@@ -1,9 +1,15 @@
 # FanGetFameFast — Production deployment guide
 
-**Version:** 1.2 · May 2026
+**Version:** 2.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 **Classification:** Internal — SOC Operations
+
+> **New in v2.0:** an [Architectural guardrails](#13-architectural-guardrails-deployers-view) section
+> documenting the security boundaries as a deployer control, optional batch/timeline dependencies in
+> [Section 4](#4-install-system-dependencies), and an audit-trail/output verification note in
+> [Section 10](#10-verify-the-installation). The companion diagrams are in
+> [Architecture diagrams](ARCHITECTURE_DIAGRAM.md).
 
 ---
 
@@ -21,10 +27,11 @@
 10. [Verify the installation](#10-verify-the-installation)
 11. [First investigation](#11-first-investigation)
 12. [Security hardening](#12-security-hardening)
-13. [Backup and recovery](#13-backup-and-recovery)
-14. [Upgrading](#14-upgrading)
-15. [Troubleshooting](#15-troubleshooting)
-16. [License and disclaimer](#16-license-and-disclaimer)
+13. [Architectural guardrails (deployer's view)](#13-architectural-guardrails-deployers-view)
+14. [Backup and recovery](#14-backup-and-recovery)
+15. [Upgrading](#15-upgrading)
+16. [Troubleshooting](#16-troubleshooting)
+17. [License and disclaimer](#17-license-and-disclaimer)
 
 ---
 
@@ -197,6 +204,23 @@ pip3 install -r /opt/EVTXtract/requirements.txt
 
 When absent, `fame_analyze.sh` skips the event recovery step and continues.
 
+### Optional — timeline rendering (batch / campaign reports)
+
+The swimlane attack-timeline images in campaign reports (`lib/generate_timeline.py`,
+`lib/generate_campaign_report.py`) use two optional plotting libraries:
+
+```bash
+source .venv/bin/activate
+pip install plotly       # interactive HTML timeline — already in requirements.txt
+pip install matplotlib   # static PNG timeline — optional, not in requirements.txt
+```
+
+`plotly` ships in `requirements.txt`. `matplotlib` is **not** required: when it is absent the PNG
+timeline is skipped with a logged warning and the rest of the campaign report is produced normally.
+Install it only if you want the static PNG embedded in PDFs and board decks. This is the same
+graceful-degradation pattern used throughout the platform — a missing optional component never
+aborts a run.
+
 ### Post-install — apply group membership
 
 The wireshark group change does not take effect in the current shell:
@@ -300,18 +324,6 @@ export OPENCTI_URL="http://your-opencti-host:8080"
 export OPENCTI_API_KEY="your-api-token"   # from Settings → API access in OpenCTI
 ```
 
-For Microsoft Sentinel integration (optional):
-
-```bash
-export SENTINEL_TENANT_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-export SENTINEL_CLIENT_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-export SENTINEL_CLIENT_SECRET="your-client-secret"
-export SENTINEL_SUBSCRIPTION_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-export SENTINEL_RESOURCE_GROUP="rg-sentinel"
-export SENTINEL_WORKSPACE_NAME="law-sentinel"
-export SENTINEL_WORKSPACE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
-
 For AutoTimeliner (if installed):
 
 ```bash
@@ -395,6 +407,32 @@ ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
 
 Without this setup, the final upload step of every investigation fails. The finished report stays in `./analysis/_reports/<stem>/` and `./analysis/` is not cleared.
 
+### Session transcript recording (chain of evidence)
+
+At the end of every pipeline, the shared helper `scripts/record_session.sh`
+(`fgff_record_session`) calls `lib/chat_recorder.py` to record the full Claude
+Code coordination session as `./reports/<case_id>_chat_transcript.{md,pdf,jsonl}`.
+It reads the active session from the Claude Code transcript directory
+(`~/.claude/projects/<encoded-project-dir>/`), which is derived automatically
+from `CLAUDE_PROJECT_DIR` or the working directory — no configuration is needed,
+and it adapts to whichever user the solution runs as. The rendering is verbatim
+— tool outputs are never truncated — and the raw `.jsonl` is preserved with its
+SHA-256 recorded in the document.
+
+### Artifact bundling and upload (chain of evidence)
+
+Immediately after the transcript, the shared helper
+`scripts/package_artifacts.sh` (`fgff_package_artifacts`) calls
+`lib/case_packager.py --all` to bundle the case's **complete** artifact set —
+reports of every type, the transcript, exhibit images, evidence ZIPs — into
+`./exports/<case_id>_<YYYYMMDD-HHMMSS>.zip` with a `MANIFEST.sha256` integrity
+manifest, and uploads it to the investigations vault
+(`$INVESTIGATIONS_ROOT/<case_id>/`). Because it runs after the recorder, the
+transcript is inside the bundle. Both helpers are best-effort: any recording,
+packaging, or upload failure is logged as a warning and never aborts the
+investigation. Upload is skipped when the pipeline is run with `--no-upload`
+(FAME/FAST/batch).
+
 ---
 
 ## 10. Verify the installation
@@ -431,7 +469,23 @@ Expected output tail:
 End-to-end pipeline: PASS
 ```
 
-If any check reports `[FAIL]`, see [Section 15 — Troubleshooting](#15-troubleshooting).
+If any check reports `[FAIL]`, see [Section 16 — Troubleshooting](#16-troubleshooting).
+
+### Verify the audit trail and report outputs
+
+After the first real (or test) investigation, confirm the trust artifacts were produced — these are
+what make the platform's findings auditable:
+
+```bash
+ls reports/                                   # expect <case_id>_research_notes.md + <case_id>_*_report.{md,pdf,pptx,docx}
+ls reports/<case_id>_evidence/                # preserved raw artifacts (with SHA-256) per step
+grep -c '^### \[' reports/<case_id>_research_notes.md   # number of logged steps/events — should be > 0
+grep -n 'Confidence & gaps' reports/<case_id>_fame_report.md   # the confidence/gaps section is present
+```
+
+`reports/` and its `<case_id>_evidence/` subfolders are intentionally **git-ignored** — research
+notes and raw evidence excerpts are never committed to the repository. Back them up via the
+investigations vault (Section 14), not via git.
 
 ---
 
@@ -494,9 +548,54 @@ Emerging Threats rules change frequently. Automate weekly updates via cron:
 (crontab -l 2>/dev/null; echo "0 2 * * 0 $INSTALL_DIR/scripts/update_suricata_rules.sh --et-only >> /var/log/suricata_update.log 2>&1") | crontab -
 ```
 
+### Dependency inventory (SBOM)
+
+A CycloneDX 1.5 Software Bill of Materials for the Python dependency set is checked in at
+[`sbom.json`](../sbom.json), with a human-readable summary in [`sbom.md`](../sbom.md). Regenerate it
+after any change to `requirements.txt` or a dependency upgrade:
+
+```bash
+python3 scripts/generate_sbom.py            # rewrite sbom.json + sbom.md
+python3 scripts/generate_sbom.py --check    # CI gate: non-zero exit if stale
+```
+
+The generator resolves each declared dependency to the concrete installed version and SPDX license.
+Note the copyleft components flagged in `sbom.md` — `sslyze` and `memprocfs` (AGPL-3.0), `CairoSVG`
+(LGPL-3.0), and `volatility3` (VSL) — when redistributing a combined work; they are invoked as
+separate tools / optional modules, not statically linked into the Apache-2.0/MIT core.
+
 ---
 
-## 13. Backup and recovery
+## 13. Architectural guardrails (deployer's view)
+
+The platform's security boundaries are enforced in code, at the server and kernel level — not in the
+agent's prompt. As a deployer you do not configure these; they are structural. This section
+documents where they live so you can audit them and explain them to a security reviewer. The full
+technical treatment is [Technical Reference §11.3](TECHNICAL_REFERENCE.md#113-architectural-guardrails);
+the diagram is [Architecture §5](ARCHITECTURE_DIAGRAM.md#5-architectural-guardrails).
+
+| Guardrail | What it enforces | Where | How to verify |
+|-----------|------------------|-------|---------------|
+| **Evidence MCP server is read-only** | Claude cannot modify evidence through MCP | `mcp/evidence_server.py` defines only read tools — no write handler exists | `grep -i "write\|delete\|mkdir" mcp/evidence_server.py` returns no tool handlers |
+| **MCP path jail** | No access outside the evidence / cases root, including `../` traversal and sibling-prefix escape (e.g. `evidence_exfil`) | `_safe_path()` in both file servers resolves to an absolute path and tests containment with `Path.is_relative_to(root)` (not a string prefix) | `grep -n "is_relative_to" mcp/evidence_server.py mcp/investigations_server.py` |
+| **Read-only evidence mounts** | The original disk/memory image is never altered, even by a pipeline bug | `mount -o ro,loop,norecovery` in `fast_analyze.sh`, verified by `fgff_assert_ro_mount` (`scripts/pathguard.sh`) before analysis runs; Volatility 3 / YARA open images read-only | inspect the `mount` invocation in `scripts/fast_analyze.sh`; `bash -c 'source scripts/pathguard.sh; fgff_assert_ro_mount /'` aborts (rw) |
+| **Library write-path policy** | No library code can write a report or note into evidence, `/mnt`, `/media`, or outside the approved output folders — even via a buggy `--output-dir` | `lib/path_guard.py` hard-fails (`WritePolicyError`); wired into `obsidian_bridge`, `md_to_pdf`, every `generate_*` generator, `chat_recorder`, `case_packager`; `investigations_server._assert_writable` rejects the same roots over MCP | `python3 lib/path_guard.py --test` |
+| **Case ID validation** | An analyst- or manifest-supplied `case_id` cannot traverse out of the output/cases root (e.g. `../../tmp/x`) into `mkdir`/`rsync`/`zip`/`rmtree` | restricted to `[A-Za-z0-9._-]{1,64}`: `validate_case_id()` in `lib/case_manager.py` (gates `case_dir`/`archive`/`remove`), `fgff_validate_case_id` in `scripts/pathguard.sh` (called by all three analyze scripts) | `python3 -c "import sys;sys.path.insert(0,'lib');from case_manager import validate_case_id as v;v('../../etc')"` raises `ValueError` |
+| **Prompt-injection path whitelist** | A hostile evidence filename — *or a crafted sub-directory name inside an extracted archive* — cannot inject instructions into the agentic prompt | `batch_agentic.sh` skips any basename outside `[[:alnum:][:space:]._-]` **and** any full path containing characters outside `[[:alnum:][:space:]./_-]`, logging both | `grep -n "unsafe characters\|unsafe characters in path" scripts/batch_agentic.sh` |
+| **Report renderer resource isolation** | Attacker-influenced evidence text in a report cannot cause the PDF renderer to read local files (`file://`) or make outbound requests (SSRF) | `md_to_pdf.safe_url_fetcher` restricts WeasyPrint to inline `data:` URIs and an allowlist of web-font hosts; used by `md_to_pdf` and the `generate_pcap_report` fallback | `grep -n "safe_url_fetcher" lib/md_to_pdf.py lib/generate_pcap_report.py` |
+| **SSH host-key verification** | Report/evidence uploads to the investigations vault reject a *changed* host key (MITM), rather than blindly trusting any key | `StrictHostKeyChecking=accept-new` in `lib/investigations_upload.py` and `lib/case_packager.py` (trust-on-first-use, reject-on-change) | `grep -n "StrictHostKeyChecking" lib/investigations_upload.py lib/case_packager.py` |
+| **IOC defanging** | Live indicators never leak to the vault or to Perplexity | values are defanged before any vault write or external call | inspect `record_ioc` / `_refang` in `lib/vault_writer.py` |
+| **No daemon / explicit start** | No un-audited automated evidence processing — chain of custody requires every action be deliberate | there is no file watcher; every investigation starts with an analyst command | — |
+
+These boundaries hold regardless of what the agent is asked to do. A path-traversal request raises
+`ValueError` at the server; an evidence write has no code path to execute; the kernel enforces the
+read-only mount; a library write outside the approved folders raises `WritePolicyError` before any
+bytes are written. When briefing a security reviewer, this table is the answer to *"are the guardrails
+architectural or prompt-based?"* — they are architectural.
+
+---
+
+## 14. Backup and recovery
 
 ### What to back up
 
@@ -544,7 +643,7 @@ pip install -r requirements.txt
 
 ---
 
-## 14. Upgrading
+## 15. Upgrading
 
 ```bash
 cd "$INSTALL_DIR"
@@ -571,7 +670,7 @@ Vault template changes in a new release are additive. The setup script adds new 
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 ### tshark fails with permission denied
 
@@ -708,7 +807,7 @@ If the import succeeds but initialization fails, the error details appear in `./
 
 ---
 
-## 16. License and disclaimer
+## 17. License and disclaimer
 
 Fan Get Fame Fast is released under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for the full terms.
 
@@ -718,4 +817,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — May 2026 — v1.2*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman — June 2026 — v2.0*

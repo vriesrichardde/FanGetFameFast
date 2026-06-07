@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # fast_analyze.sh — FAST (Forensic Analysis Storage) orchestration script.
 #
 # Mounts and analyses a disk image using The Sleuth Kit / EWF tools, generates
@@ -24,6 +24,7 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/pathguard.sh"
 
 DISK_IMAGE=""
 CASE_ID=""
@@ -75,6 +76,7 @@ if [[ -z "$CASE_ID" ]]; then
     echo -n "[fast] Case ID (e.g. FAST-2026-001): "
     read -r CASE_ID
 fi
+fgff_validate_case_id "$CASE_ID" >/dev/null
 
 if [[ "$HOSTNAME_ARG" == "unknown" ]]; then
     HOSTNAME_ARG="$(basename "$DISK_IMAGE" | sed 's/\.[^.]*$//')"
@@ -225,7 +227,9 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
         { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
 
-        [[ $SKIP_MOUNT -eq 0 ]] && MOUNTED_FS=1 && echo "[fast] Mounted at $FS_MOUNT"
+        # Verify the mount really is read-only before any analysis touches it.
+        [[ $SKIP_MOUNT -eq 0 ]] && fgff_assert_ro_mount "$FS_MOUNT"
+        [[ $SKIP_MOUNT -eq 0 ]] && MOUNTED_FS=1 && echo "[fast] Mounted at $FS_MOUNT (verified read-only)"
     fi
 fi
 
@@ -465,36 +469,55 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     PPTX_PATH="$REPORTS_DIR/${STEM}_fast_presentation.pptx"
     DOCX_PATH="$REPORTS_DIR/${STEM}_fast_report.docx"
 
-    UPLOAD_ARGS="--case-id $CASE_ID --md $MD_PATH"
-    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=" --pdf $PDF_PATH"
-    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=" --pptx $PPTX_PATH"
-    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=" --docx $DOCX_PATH"
+    # Use an array so paths/case-id with spaces or glob chars cannot word-split
+    # or inject extra --flags into investigations_upload.py.
+    UPLOAD_ARGS=(--case-id "$CASE_ID" --md "$MD_PATH")
+    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=(--pdf "$PDF_PATH")
+    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=(--pptx "$PPTX_PATH")
+    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=(--docx "$DOCX_PATH")
 
     # Upload evidence folder as ZIP
     EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
     if [[ -d "$EVIDENCE_DIR" ]]; then
         (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
-            UPLOAD_ARGS+=" --zip $EVIDENCE_ZIP"
+            UPLOAD_ARGS+=(--zip "$EVIDENCE_ZIP")
     fi
 
-    python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
+    python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
         echo "[fast] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
     COMBINED_MD="$REPORTS_DIR/${STEM}_combined_report.md"
     if [[ -f "$COMBINED_MD" ]]; then
-        COMB_ARGS="--case-id $CASE_ID --md $COMBINED_MD"
+        COMB_ARGS=(--case-id "$CASE_ID" --md "$COMBINED_MD")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.pdf"  ]] && \
-            COMB_ARGS+=" --pdf $REPORTS_DIR/${STEM}_combined_report.pdf"
+            COMB_ARGS+=(--pdf "$REPORTS_DIR/${STEM}_combined_report.pdf")
         [[ -f "$REPORTS_DIR/${STEM}_combined_presentation.pptx" ]] && \
-            COMB_ARGS+=" --pptx $REPORTS_DIR/${STEM}_combined_presentation.pptx"
+            COMB_ARGS+=(--pptx "$REPORTS_DIR/${STEM}_combined_presentation.pptx")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.docx" ]] && \
-            COMB_ARGS+=" --docx $REPORTS_DIR/${STEM}_combined_report.docx"
-        python3 "$PROJECT_ROOT/lib/investigations_upload.py" $COMB_ARGS || \
+            COMB_ARGS+=(--docx "$REPORTS_DIR/${STEM}_combined_report.docx")
+        python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}" || \
             echo "[fast] WARNING: Combined report upload failed."
     fi
 else
     echo "[fast] Upload skipped (--no-upload)."
 fi
+
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl). It captures the analytical
+# reasoning behind every finding and feeds workflow optimisation. This step
+# must never fail the investigation, and runs before local cleanup so the
+# transcript is uploaded with the rest of the artefacts.
+source "$PROJECT_ROOT/scripts/record_session.sh"
+fgff_record_session "$CASE_ID" "$REPORTS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Package every artifact for this case (reports, transcript, exhibits, …) into a
+# timestamped ZIP and upload it to the investigations vault. Runs after the
+# transcript so the bundle includes it. Best-effort; never fails the run.
+source "$PROJECT_ROOT/scripts/package_artifacts.sh"
+fgff_package_artifacts "$CASE_ID" "$REPORTS_DIR" "$PROJECT_ROOT/exports" "$STEM" \
+    "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Clean up local artifacts ───────────────────────────────────────────────────
 echo "[fast] Cleaning up local artifacts (preserved in investigations vault)..."

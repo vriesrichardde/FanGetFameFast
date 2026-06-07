@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # =============================================================================
 # setup_folder_structure.sh — FanGetFameFast folder structure initialiser
 #
@@ -458,7 +458,7 @@ echo ""
 echo -e "${C_GREEN}${C_BOLD}Folder structure ready.${C_RESET}"
 echo ""
 echo "Next:"
-echo "  1. Edit .claude/settings.json — fill in Sentinel and OpenCTI credentials"
+echo "  1. Edit .claude/settings.json — fill in OpenCTI credentials"
 echo "  2. Set PERPLEXITY_API_KEY in ~/.bashrc"
 echo "  3. Run: ./scripts/update_suricata_rules.sh"
 echo "  4. Run: ./scripts/test_solution.sh"

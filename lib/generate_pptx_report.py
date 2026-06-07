@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 generate_pptx_report.py — Management PowerPoint briefing for PCAP investigations.
 
@@ -33,6 +33,8 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -299,7 +301,7 @@ def _slide_cover(prs, title: str, case_id: str, description: str,
         ("CASE ID",         case_id if case_id else "—"),
         ("DATE",            date_str + " UTC"),
         ("CLASSIFICATION",  "CONFIDENTIAL — RESTRICTED DISTRIBUTION"),
-        ("PREPARED BY",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin"),
+        ("PREPARED BY",     "Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman"),
     ]
     for label, value in meta_items:
         _text(slide, label,
@@ -1029,7 +1031,7 @@ def generate(
     )
 
     out_dir = output_dir or (PROJECT_ROOT / "analysis" / "_reports" / stem)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(out_dir)
     out_path = out_dir / f"{stem}_management_briefing.pptx"
 
     rpts_dir = reports_dir or (PROJECT_ROOT / "reports")

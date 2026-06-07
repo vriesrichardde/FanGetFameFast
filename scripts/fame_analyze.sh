@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # fame_analyze.sh — FAME (Forensic Analysis Memory) orchestration script.
 #
 # Runs Volatility 3 / Memory Baseliner against a memory image, generates
@@ -24,6 +24,7 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/pathguard.sh"
 VOL="${VOL:-/opt/volatility3-2.20.0/vol.py}"
 [[ -x "$VOL" ]] || VOL="/opt/volatility3/vol.py"
 BASELINE="/opt/memory-baseliner/baseline.py"
@@ -73,6 +74,7 @@ if [[ -z "$CASE_ID" ]]; then
     echo -n "[fame] Case ID (e.g. FAME-2026-001): "
     read -r CASE_ID
 fi
+fgff_validate_case_id "$CASE_ID" >/dev/null
 
 # Auto-detect hostname from image filename stem if not provided
 if [[ "$HOSTNAME_ARG" == "unknown" ]]; then
@@ -516,36 +518,38 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     PPTX_PATH="$REPORTS_DIR/${STEM}_fame_presentation.pptx"
     DOCX_PATH="$REPORTS_DIR/${STEM}_fame_report.docx"
 
-    UPLOAD_ARGS="--case-id $CASE_ID --md $MD_PATH"
-    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=" --pdf $PDF_PATH"
-    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=" --pptx $PPTX_PATH"
-    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=" --docx $DOCX_PATH"
+    # Use an array so paths/case-id with spaces or glob chars cannot word-split
+    # or inject extra --flags into investigations_upload.py.
+    UPLOAD_ARGS=(--case-id "$CASE_ID" --md "$MD_PATH")
+    [[ -f "$PDF_PATH"  ]] && UPLOAD_ARGS+=(--pdf "$PDF_PATH")
+    [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=(--pptx "$PPTX_PATH")
+    [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=(--docx "$DOCX_PATH")
 
     # Include memory artifact ZIP if created during Linux analysis
     ARTIFACT_ZIP="$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip"
-    [[ -f "$ARTIFACT_ZIP" ]] && UPLOAD_ARGS+=" --zip $ARTIFACT_ZIP"
+    [[ -f "$ARTIFACT_ZIP" ]] && UPLOAD_ARGS+=(--zip "$ARTIFACT_ZIP")
 
     # Upload evidence folder as a ZIP
     EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
     if [[ -d "$EVIDENCE_DIR" ]]; then
         (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
-            UPLOAD_ARGS+=" --zip $EVIDENCE_ZIP"
+            UPLOAD_ARGS+=(--zip "$EVIDENCE_ZIP")
     fi
 
-    python3 "$PROJECT_ROOT/lib/investigations_upload.py" $UPLOAD_ARGS || \
+    python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
         echo "[fame] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
     # Upload combined report if generated
     COMBINED_MD="$REPORTS_DIR/${STEM}_combined_report.md"
     if [[ -f "$COMBINED_MD" ]]; then
-        COMB_ARGS="--case-id $CASE_ID --md $COMBINED_MD"
+        COMB_ARGS=(--case-id "$CASE_ID" --md "$COMBINED_MD")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.pdf"  ]] && \
-            COMB_ARGS+=" --pdf $REPORTS_DIR/${STEM}_combined_report.pdf"
+            COMB_ARGS+=(--pdf "$REPORTS_DIR/${STEM}_combined_report.pdf")
         [[ -f "$REPORTS_DIR/${STEM}_combined_presentation.pptx" ]] && \
-            COMB_ARGS+=" --pptx $REPORTS_DIR/${STEM}_combined_presentation.pptx"
+            COMB_ARGS+=(--pptx "$REPORTS_DIR/${STEM}_combined_presentation.pptx")
         [[ -f "$REPORTS_DIR/${STEM}_combined_report.docx" ]] && \
-            COMB_ARGS+=" --docx $REPORTS_DIR/${STEM}_combined_report.docx"
-        python3 "$PROJECT_ROOT/lib/investigations_upload.py" $COMB_ARGS || \
+            COMB_ARGS+=(--docx "$REPORTS_DIR/${STEM}_combined_report.docx")
+        python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}" || \
             echo "[fame] WARNING: Combined report upload failed."
     fi
 else
@@ -571,6 +575,22 @@ if [[ $NO_VAULT -eq 0 ]]; then
         echo "[fame] WARNING: Report not found for vault write: $MD_PATH"
     fi
 fi
+
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Record the full Claude Code coordination session as a chain-of-evidence
+# Markdown + PDF (plus the verbatim .jsonl). It captures the analytical
+# reasoning behind every finding and feeds workflow optimisation. This step
+# must never fail the investigation.
+source "$PROJECT_ROOT/scripts/record_session.sh"
+fgff_record_session "$CASE_ID" "$REPORTS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Package every artifact for this case (reports, transcript, exhibits, …) into a
+# timestamped ZIP and upload it to the investigations vault. Runs after the
+# transcript so the bundle includes it. Best-effort; never fails the run.
+source "$PROJECT_ROOT/scripts/package_artifacts.sh"
+fgff_package_artifacts "$CASE_ID" "$REPORTS_DIR" "$PROJECT_ROOT/exports" "$STEM" \
+    "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

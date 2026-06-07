@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 Core read/write interface for the Obsidian vault.
 All vault I/O goes through this module so path and frontmatter handling is consistent.
@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 VAULT_ROOT = Path(__file__).parent.parent / "vault"
 
@@ -76,7 +79,7 @@ def write_note(folder: str, title: str, frontmatter: dict[str, Any], body: str) 
     path = _note_path(folder, title)
     now = _now_utc()
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(path.parent)
 
     if path.exists():
         existing_fm, _ = _parse_note(path.read_text(encoding="utf-8"))
@@ -85,7 +88,7 @@ def write_note(folder: str, title: str, frontmatter: dict[str, Any], body: str) 
         frontmatter.setdefault("date_created", now)
 
     frontmatter["date_updated"] = now
-    path.write_text(_render_note(frontmatter, body), encoding="utf-8")
+    path_guard.safe_write_text(path, _render_note(frontmatter, body), encoding="utf-8")
     return path
 
 
@@ -97,17 +100,17 @@ def append_to_note(folder: str, title: str, md_content: str) -> Path:
     path = _note_path(folder, title)
     now = _now_utc()
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path_guard.guard_output_dir(path.parent)
 
     if path.exists():
         text = path.read_text(encoding="utf-8")
         fm, body = _parse_note(text)
         fm["date_updated"] = now
         new_body = body.rstrip("\n") + "\n\n" + md_content.strip()
-        path.write_text(_render_note(fm, new_body), encoding="utf-8")
+        path_guard.safe_write_text(path, _render_note(fm, new_body), encoding="utf-8")
     else:
         fm = {"date_created": now, "date_updated": now, "tags": []}
-        path.write_text(_render_note(fm, md_content.strip()), encoding="utf-8")
+        path_guard.safe_write_text(path, _render_note(fm, md_content.strip()), encoding="utf-8")
 
     return path
 
@@ -180,7 +183,7 @@ def patch_section(folder: str, title: str, marker: str, new_content: str) -> Non
     # Update date_updated in frontmatter
     fm, body = _parse_note(updated)
     fm["date_updated"] = _now_utc()
-    path.write_text(_render_note(fm, body), encoding="utf-8")
+    path_guard.safe_write_text(path, _render_note(fm, body), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

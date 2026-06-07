@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 """
 case_packager.py — Package all PCAP investigation artifacts into a timestamped ZIP
 and upload it to the investigations vault via SSH/SCP.
@@ -30,12 +30,18 @@ Python API:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import re
+import shlex
 import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import path_guard  # noqa: E402  write-path policy enforcement
 
 SSH_HOST    = os.environ.get("INVESTIGATIONS_SSH_HOST", "sansforensics@ubuntudesktop")
 REMOTE_ROOT = os.environ.get("INVESTIGATIONS_ROOT",     "/home/sansforensics/cases")
@@ -69,11 +75,11 @@ def package(
     analysis_dir = Path(analysis_dir) if analysis_dir else reports_dir.parent.parent
     output_dir   = Path(output_dir)   if output_dir   else reports_dir
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = path_guard.guard_output_dir(output_dir)
 
     ts       = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     zip_name = f"{case_id}_{ts}.zip"
-    zip_path = output_dir / zip_name
+    zip_path = path_guard.assert_writable(output_dir / zip_name)
 
     print(f"[package] Creating {zip_path.name} ...")
 
@@ -83,6 +89,86 @@ def package(
 
     size_mb = zip_path.stat().st_size / (1024 * 1024)
     print(f"[package] ZIP complete: {zip_path}  ({size_mb:.1f} MB)")
+    return zip_path
+
+
+def package_all(
+    case_id: str,
+    reports_dirs,
+    output_dir: Path | None = None,
+    stem: str | None = None,
+) -> Path | None:
+    """
+    General, format-agnostic packager: collect EVERY artifact for *case_id*
+    across one or more report directories and compress them into a timestamped
+    ZIP with a SHA-256 integrity manifest.
+
+    Unlike :func:`package` (which is PCAP/stem specific and only handles
+    MD/PDF/PPTX), this captures any file type — DOCX, PPTX, PDF, the chat
+    transcript (MD/PDF/JSONL), exhibit images, evidence ZIPs, etc. — so the
+    bundle is complete for FAN, FAME, FAST and batch runs alike.
+
+    Collection rules, applied to each directory in *reports_dirs*:
+      * a ``<case_id>/`` subfolder (in-session layout) — added whole,
+      * flat ``<case_id>_*`` files,
+      * flat ``<stem>_*`` files when *stem* differs from *case_id* (FAN).
+    Our own timestamped ``<case_id>_<ts>.zip`` bundles are skipped so repeated
+    runs never nest prior bundles.
+
+    Returns the ZIP path, or ``None`` when no artifacts were found.
+    """
+    dirs = [Path(d) for d in (reports_dirs if isinstance(reports_dirs, (list, tuple)) else [reports_dirs])]
+    output_dir = Path(output_dir) if output_dir else dirs[0]
+    output_dir = path_guard.guard_output_dir(output_dir)
+
+    ts        = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    zip_name  = f"{case_id}_{ts}.zip"
+    zip_path  = path_guard.assert_writable(output_dir / zip_name)
+    bundle_re = re.compile(rf"{re.escape(case_id)}_\d{{8}}-\d{{6}}\.zip$")
+
+    selected: dict[str, Path] = {}
+
+    def consider(f: Path, base: Path) -> None:
+        # Skip non-files, our own timestamped bundles (avoid nesting), and any
+        # pre-existing manifest (we regenerate MANIFEST.sha256 ourselves).
+        if not f.is_file() or bundle_re.search(f.name) or f.name == "MANIFEST.sha256":
+            return
+        try:
+            rel = f.relative_to(base)
+        except ValueError:
+            rel = Path(f.name)
+        arc = str(rel) if rel.parts and rel.parts[0] == case_id else f"{case_id}/{rel}"
+        selected.setdefault(arc, f)
+
+    for rd in dirs:
+        if not rd.is_dir():
+            continue
+        sub = rd / case_id
+        if sub.is_dir():
+            for f in sub.rglob("*"):
+                consider(f, rd)
+        for f in rd.glob(f"{case_id}_*"):
+            consider(f, rd)
+        if stem and stem != case_id:
+            for f in rd.glob(f"{stem}_*"):
+                consider(f, rd)
+
+    if not selected:
+        print(f"[package] No artifacts found for {case_id} in {', '.join(str(d) for d in dirs)}")
+        return None
+
+    print(f"[package] Creating {zip_path.name} ...")
+    manifest = []
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for arc in sorted(selected):
+            f = selected[arc]
+            zf.write(f, arc)
+            manifest.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {arc}")
+            print(f"[package]   + {arc}")
+        zf.writestr(f"{case_id}/MANIFEST.sha256", "\n".join(manifest) + "\n")
+
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    print(f"[package] ZIP complete: {zip_path}  ({len(selected)} files, {size_mb:.1f} MB)")
     return zip_path
 
 
@@ -145,12 +231,16 @@ def upload_zip(case_id: str, zip_path: Path) -> None:
 
     print(f"[upload] {zip_path.name} → {SSH_HOST}:{remote_dir}/")
 
+    # accept-new preserves MITM protection (rejects changed host keys) instead
+    # of silently trusting any key. remote_dir is shell-quoted: it is built from
+    # the operator-supplied case_id and runs in a remote shell via `ssh`.
+    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes"]
     subprocess.run(
-        ["ssh", SSH_HOST, f"mkdir -p {remote_dir}"],
+        ["ssh", *ssh_opts, SSH_HOST, f"mkdir -p {shlex.quote(remote_dir)}"],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["scp", str(zip_path), f"{SSH_HOST}:{remote_path}"],
+        ["scp", *ssh_opts, str(zip_path), f"{SSH_HOST}:{remote_path}"],
         check=True, capture_output=True,
     )
     print(f"[upload] Done — {SSH_HOST}:{remote_path}")
@@ -163,10 +253,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Package PCAP investigation artifacts into a timestamped ZIP and upload"
     )
     p.add_argument("--case-id",      required=True, metavar="ID",  help="Case ID")
-    p.add_argument("--stem",         required=True, metavar="STEM", help="PCAP stem name")
-    p.add_argument("--reports-dir",  required=True, metavar="DIR",  help="Directory with MD/PDF/PPTX reports")
+    p.add_argument("--stem",         default="",    metavar="STEM", help="PCAP stem name (required unless --all)")
+    p.add_argument("--reports-dir",  required=True, metavar="DIR",  help="Directory with reports/artifacts")
+    p.add_argument("--extra-reports-dir", action="append", default=[], metavar="DIR",
+                   help="Additional report directory to scan (repeatable; --all mode)")
     p.add_argument("--analysis-dir", default="",    metavar="DIR",  help="Analysis base directory (default: reports-dir/../..)")
     p.add_argument("--output-dir",   default="",    metavar="DIR",  help="Where to write the ZIP (default: reports-dir)")
+    p.add_argument("--all",          action="store_true",           help="General mode: bundle EVERY artifact for the case (all file types) with a SHA-256 manifest")
     p.add_argument("--upload",       action="store_true",           help="Upload the ZIP after packaging")
     return p
 
@@ -174,18 +267,32 @@ def _build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
 
-    zip_path = package(
-        case_id      = args.case_id,
-        stem         = args.stem,
-        reports_dir  = Path(args.reports_dir),
-        analysis_dir = Path(args.analysis_dir) if args.analysis_dir else None,
-        output_dir   = Path(args.output_dir)   if args.output_dir   else None,
-    )
+    if args.all:
+        zip_path = package_all(
+            case_id     = args.case_id,
+            reports_dirs= [args.reports_dir, *args.extra_reports_dir],
+            output_dir  = Path(args.output_dir) if args.output_dir else None,
+            stem        = args.stem or None,
+        )
+    else:
+        if not args.stem:
+            print("[package] ERROR: --stem is required unless --all is given", file=sys.stderr)
+            sys.exit(2)
+        zip_path = package(
+            case_id      = args.case_id,
+            stem         = args.stem,
+            reports_dir  = Path(args.reports_dir),
+            analysis_dir = Path(args.analysis_dir) if args.analysis_dir else None,
+            output_dir   = Path(args.output_dir)   if args.output_dir   else None,
+        )
 
     if args.upload:
-        try:
-            upload_zip(args.case_id, zip_path)
-        except subprocess.CalledProcessError as exc:
-            print(f"[upload] ERROR: SSH/SCP failed: {exc.stderr.decode(errors='replace')}",
-                  file=sys.stderr)
-            sys.exit(1)
+        if zip_path is None:
+            print("[upload] Nothing to upload (no artifacts packaged).", file=sys.stderr)
+        else:
+            try:
+                upload_zip(args.case_id, zip_path)
+            except subprocess.CalledProcessError as exc:
+                print(f"[upload] ERROR: SSH/SCP failed: {exc.stderr.decode(errors='replace')}",
+                      file=sys.stderr)
+                sys.exit(1)

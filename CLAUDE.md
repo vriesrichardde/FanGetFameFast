@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Authors
 
-Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 
 ## Solution name & philosophy
 
@@ -35,7 +35,7 @@ In the devcontainer, evidence files are located at `/home/vscode/evidence`.
 | Module | Domain | Status |
 |--------|--------|--------|
 | FAN | Network forensics (PCAP) | Live |
-| FAME | Memory forensics (Volatility 3 / Memory Baseliner) | Live |
+| FAME | Memory forensics (Volatility 3 + optional Memory Baseliner) | Live |
 | FAST | Storage forensics (disk images — TSK / EWF tools) | Live |
 
 All three modules are live. FAME and FAST auto-detect sibling module reports for the
@@ -100,13 +100,15 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 
 | Module | Purpose |
 |--------|---------|
+| `lib/path_guard.py` | Write-path policy (single source of truth): `assert_writable`, `guard_output_dir`, `safe_write_text/bytes/open`, `is_writable` — hard-fails (`WritePolicyError`) any write outside the approved output folders; evidence, `/mnt`, `/media` are read-only. Self-test: `python3 lib/path_guard.py --test` |
 | `lib/obsidian_bridge.py` | Low-level vault I/O: `write_note`, `read_note`, `append_to_note`, `search_vault`, `patch_section` |
 | `lib/knowledge_extractor.py` | High-level record functions: `record_ioc`, `record_ttp`, `record_threat_actor`, `record_malware`, `record_risk`, `record_concept`, `open_case`, `close_case` — each also pushes new intel to OpenCTI |
 | `lib/vault_query.py` | Read-path queries: `get_context_for_ioc`, `get_context_for_ttp`, `get_active_cases`, `get_top_risks`, `get_related_notes`, `search_context` |
 | `lib/perplexity_client.py` | Real-time threat intel via Perplexity.ai: `lookup_ioc`, `lookup_malware`, `lookup_ttp`, `lookup_cve`, `lookup_actor`, `lookup_tool`, `search` |
 | `lib/md_to_pdf.py` | Markdown → styled PDF converter: cover page, running page-header stripe, "Page X of Y" pagination, CONFIDENTIAL footer — wraps WeasyPrint, no pandoc required |
+| `lib/chat_recorder.py` | Chain-of-evidence session recorder: locates the active Claude Code transcript (`~/.claude/projects/<encoded>/<uuid>.jsonl`), renders it to Markdown + PDF, and preserves the raw `.jsonl` verbatim (SHA-256 recorded in the document so the rendering ties back to the original bytes). `record_chat(case_id, upload=False)` → `{md, pdf, jsonl}`. Runs automatically at the end of every FAN/FAME/FAST pipeline; also invokable via `/record-chat` |
 | `lib/generate_pptx_report.py` | Management PowerPoint generator (7 slides, CISO language, python-pptx): cover, executive summary, threat landscape, IDS/YARA alerts, IOCs, recommendations, module coverage |
-| `lib/case_packager.py` | Package all artifacts (MD + PDF + PPTX + module JSON/CSV) into a timestamped ZIP and upload via SSH/SCP to the investigations vault |
+| `lib/case_packager.py` | Package investigation artifacts into a timestamped `<case_id>_<ts>.zip` and upload via SSH/SCP to the investigations vault. `--all` is the general, format-agnostic mode (bundles **every** artifact for a case — DOCX/PPTX/PDF, the chain-of-evidence chat transcript, exhibit images, evidence ZIPs — with a SHA-256 `MANIFEST.sha256`); the default mode is the legacy PCAP/stem path. Wired into every analysis script via the shared helper `scripts/package_artifacts.sh` (`fgff_package_artifacts`), which runs after `scripts/record_session.sh` so the transcript is included; both helpers are best-effort and never fail the investigation |
 | `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop) — supports MD, PDF, PPTX, DOCX, ZIP |
 | `lib/fan_*.py` | FAN analysis modules (22 protocol detectors + pcap_analyzer, generate_pcap_report) |
 | `lib/generate_fame_report.py` | FAME report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/memory/` Volatility 3 outputs |
@@ -121,6 +123,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
 | Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerate all FAME + FAST evidence files and run them sequentially in-session; default dir: `/home/vscode/evidence` |
+| Memory Forensics (FAME) | `/fame` | Run Volatility 3 (+ Memory Baseliner when a baseline is supplied); generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Network Forensics (FAN) | `/fan <pcap> [--case-id]` | Agentic coordinator: run all 22 FAN modules sequentially, read each output, surface HIGH/CRITICAL findings in real time, then generate report. Use this instead of `analyze_pcap.sh` when Claude is in the loop. |
 | Memory Forensics (FAME) | `/fame` | Run Volatility 3 + Memory Baseliner; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Storage Forensics (FAST) | `/fast` | Run TSK / EWF tools; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
@@ -130,11 +133,13 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Vault recording (post-investigation) | `/obsidian-record` | Record confirmed findings into the vault (also pushes to OpenCTI) |
 | Unknown artifact / live threat intel | `/perplexity-lookup` | Live threat intel search for an unknown artifact |
 | Markdown to PDF | `/md-to-pdf` | Convert any Markdown file to a styled PDF |
+| Session transcript (chain of evidence) | `/record-chat` | Record the current Claude Code session as MD + PDF + verbatim `.jsonl` (SHA-256 fingerprinted). Runs automatically at the end of FAN/FAME/FAST; invoke manually to re-record |
 | Remove Case | `/remove-case` | Remove a case directory from the investigations vault |
+| Archive reports | `/archive-reports [campaign_id]` | Move a completed campaign folder from `./reports/<id>/` to `./archive/<id>/` (also migrates legacy flat files); interactive if no id given |
 
 FAN analysis skills: `fan-arp-threats`, `fan-cert-inspector`, `fan-dhcp-threats`, `fan-dns-threats`, `fan-extract-ip-fqdn`, `fan-file-hashes`, `fan-http-threats`, `fan-icmp-threats`, `fan-ip-lookup`, `fan-llmnr-threats`, `fan-mdns-threats`, `fan-nbns-threats`, `fan-netbios-threats`, `fan-ntp-threats`, `fan-opencti-lookup`, `fan-quic-threats`, `fan-report`, `fan-snmp-threats`, `fan-ssdp-threats`, `fan-stun-threats`, `fan-suricata`, `fan-tcp-threats`, `fan-tls-inspector`, `fan-udp-threats`, `fan-yara-pcap`.
 
-FAME skill: `fame` — memory forensics pipeline (Volatility 3 + Memory Baseliner + report generation + upload).
+FAME skill: `fame` — memory forensics pipeline (Volatility 3 + optional Memory Baseliner + report generation + upload).
 
 FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact extraction + report generation + upload).
 
@@ -162,13 +167,14 @@ Two entry points — choose based on whether Claude is in the loop:
 2. 22 protocol threat-detection modules run. All WIP output goes to `./analysis/`.
 3. A versioned incident report (Markdown + PDF) is generated — includes the hallucination guard confidence table.
 4. The report is copied to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
-5. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
+5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the report.
+6. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
 
 **Investigations vault** — case folders live at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
 
 ## Forensic analysis memory (FAME)
 
-**FAME** is a manual memory forensics pipeline built on Volatility 3 and Memory Baseliner.
+**FAME** is a manual memory forensics pipeline built on Volatility 3, with optional Memory Baseliner comparison. Baseliner runs only when a clean-system baseline is supplied at `baselines/baseline.json` (and `/opt/memory-baseliner/baseline.py` is installed); otherwise it is skipped and the rest of the pipeline proceeds normally.
 
 ```bash
 # Start a memory investigation (interactive — prompts for case ID)
@@ -180,10 +186,11 @@ Two entry points — choose based on whether Claude is in the loop:
 
 **Pipeline:**
 1. Analyst provides a memory image path.
-2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline) and Memory Baseliner (proc/drv/svc comparison). Linux images fall back to strings-based extraction when ISF symbols are unavailable.
+2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline). If a `baselines/baseline.json` is present, it also runs Memory Baseliner (proc/drv/svc comparison); without one this step is skipped. Linux images fall back to strings-based extraction when ISF symbols are unavailable.
 3. Reports are generated: Markdown + PDF + PPTX (Microsoft PowerPoint, 8 slides) + DOCX (Microsoft Word).
 4. If FAN or FAST reports exist for the same case ID, a combined unified report is also generated.
 5. All reports are uploaded to the investigations vault via MCP (`investigations_write_file`).
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAME report section.
 
@@ -205,12 +212,15 @@ Two entry points — choose based on whether Claude is in the loop:
 3. Reports are generated: Markdown + PDF + PPTX (8 slides) + DOCX.
 4. If FAN or FAME reports exist for the same case ID, a combined unified report is also generated.
 5. All reports are uploaded to the investigations vault via MCP.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAST report section.
 
 MCP servers for vault access:
 - `evidence` (read-only, SSH to `sansforensics@ubuntudesktop`, root: `/home/sansforensics/evidence/`): `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`
 - `investigations` (read-write): `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`
+
+The SSH-to-`ubuntudesktop` form above is the canonical (production) registration and is not committed. For local development you can register the same servers as plain local processes (`"command": "python3"`, `args: [".../mcp/evidence_server.py"]`) and point them at a local directory via the `EVIDENCE_ROOT` env var — keep this in your gitignored `.claude/settings.local.json`, not the committed `settings.json`.
 
 ## OpenCTI integration (MCP server)
 
@@ -259,11 +269,18 @@ When the vault returns no answer for an unknown artifact, CVE, malware family, t
 python3 lib/obsidian_bridge.py          # write/read/search round-trip
 python3 lib/knowledge_extractor.py --test   # all record types + Dashboard refresh
 python3 lib/vault_query.py --search powershell
+python3 lib/path_guard.py --test        # write-path allow/deny matrix
+python3 scripts/generate_sbom.py --check    # SBOM (sbom.json) is up to date
 ```
+
+A CycloneDX SBOM of the Python dependency set lives at `sbom.json` (human-readable
+summary in `sbom.md`). Regenerate it with `python3 scripts/generate_sbom.py` after any
+change to `requirements.txt`.
 
 ## Constraints
 
-- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory.
+- Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. This is **enforced in code**, not just convention: `lib/path_guard.py` is the single source of truth — every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail (`WritePolicyError`) on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). The MCP `investigations_server` independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`. The shell analyze scripts source `scripts/pathguard.sh`, which verifies evidence mounts are read-only (`fgff_assert_ro_mount`) before any analysis runs. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
+- Untrusted input is validated before it reaches a path, shell, or renderer sink: `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` (`validate_case_id` in `lib/case_manager.py`; `fgff_validate_case_id` in `scripts/pathguard.sh`) so it cannot traverse out of the output/cases root; `batch_agentic.sh` rejects unsafe characters in the full evidence path (not just the basename) before it enters the agentic prompt; report PDF rendering uses `md_to_pdf.safe_url_fetcher` to block `file://`/SSRF resource fetches triggered by malicious evidence text; and vault uploads use SSH `StrictHostKeyChecking=accept-new`. The MCP file servers jail paths with `Path.is_relative_to` (not a string prefix). See [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md) for the full guardrail table.
 - Analysis WIP goes to `./analysis/` only. The analysis folder must be empty after a completed investigation.
 - Finalized reports are stored in the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop).
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.

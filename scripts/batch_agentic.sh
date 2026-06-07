@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+# SPDX-FileCopyrightText: 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 # batch_agentic.sh — Agentic batch evidence investigation orchestrator.
 #
 # Identical orchestration to batch_analyze.sh (archive extraction, file routing,
@@ -194,6 +194,16 @@ _process_file() {
     if [[ "$base" =~ [^[:alnum:][:space:]._-] ]]; then
         echo "[batch] Skipping file with unsafe characters in name: $base" >&2
         _manifest_add_error "Unsafe filename skipped (prompt-injection guard): $file"
+        return 0
+    fi
+    # The FULL path (not just the basename) is interpolated into the `claude -p`
+    # prompt below. Directory components can originate inside extracted archives,
+    # so validate the whole path too — allow '/' as separator but reject any
+    # quote/backtick/$/; metacharacter that could break out of the prompt string
+    # or inject agent instructions via a crafted sub-directory name.
+    if [[ "$file" =~ [^[:alnum:][:space:]./_-] ]]; then
+        echo "[batch] Skipping file with unsafe characters in path: $file" >&2
+        _manifest_add_error "Unsafe path skipped (prompt-injection guard): $file"
         return 0
     fi
 
@@ -401,6 +411,17 @@ python3 "$PROJECT_ROOT/lib/generate_campaign_report.py" \
     --output-dir  "$PROJECT_ROOT/reports"
 
 echo "[batch] Phase 4 complete — campaign report written."
+
+# ── Session transcript (chain of evidence) ────────────────────────────────────
+# Capture the full agentic-batch coordination session. Best-effort; never fails.
+source "$PROJECT_ROOT/scripts/record_session.sh"
+fgff_record_session "$BATCH_ID" "$PROJECT_ROOT/reports" "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Bundle every batch-level artifact (campaign report, transcript, …) and upload.
+source "$PROJECT_ROOT/scripts/package_artifacts.sh"
+fgff_package_artifacts "$BATCH_ID" "$PROJECT_ROOT/reports" "$PROJECT_ROOT/exports" "" \
+    "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

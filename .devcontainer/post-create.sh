@@ -88,17 +88,11 @@ fi
 echo "[devcontainer] Upgrading pip"
 python -m pip install --upgrade pip
 
-# graphifyy is not on PyPI; memprocfs is x86-64 only — skip both on arm64
-# so container setup can complete cleanly.
+# memprocfs is x86-64 only — skip it on arm64 so container setup completes cleanly.
 ARCH="$(dpkg --print-architecture)"
-SKIP_PATTERN='^graphifyy([<>=].*)?$'
 if [[ "$ARCH" != "amd64" ]]; then
-    SKIP_PATTERN='^(graphifyy|memprocfs)([<>=].*)?$'
-fi
-
-if grep -qP "$SKIP_PATTERN" requirements.txt 2>/dev/null || \
-   grep -qE "$SKIP_PATTERN" requirements.txt 2>/dev/null; then
-  echo "[devcontainer] Installing Python requirements (excluding unavailable packages for ${ARCH})"
+  SKIP_PATTERN='^memprocfs([<>=!~].*)?$'
+  echo "[devcontainer] Installing Python requirements (excluding x86-64-only packages for ${ARCH})"
   grep -vE "$SKIP_PATTERN" requirements.txt > /tmp/requirements.devcontainer.txt
   python -m pip install -r /tmp/requirements.devcontainer.txt
 else

@@ -1,12 +1,18 @@
 # FanGetFameFast — User guide
 
-**Version:** 3.3 · May 2026
+**Version:** 4.0 · June 2026
 **Platform:** Ubuntu 24.04 LTS (x86-64)
-**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin
+**Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman
 **Classification:** Internal
 
 > **New installation?** See the [Deployment Guide](DEPLOYMENT_GUIDE.md) for step-by-step production setup.
 > **Integrating or extending Fan Get Fame Fast?** See the [Technical Reference](TECHNICAL_REFERENCE.md).
+> **Presenting the architecture?** See the [Architecture diagrams](ARCHITECTURE_DIAGRAM.md).
+
+> **New in v4.0:** the trust features are now documented end to end —
+> [research notes & the audit trail](#9-research-notes--the-audit-trail),
+> [how the platform avoids hallucinations and handles failures](#10-how-the-platform-stays-accurate-trust-features),
+> and [batch / campaign analysis](#8-batch-analysis-many-evidence-files-at-once) across many evidence files.
 
 ---
 
@@ -19,16 +25,19 @@
 5. [Disk forensics (FAST)](#5-disk-forensics-fast)
 6. [Detection modules (FAN)](#6-detection-modules-fan)
 7. [IDS and YARA rule management](#7-ids-and-yara-rule-management)
-8. [Claude skills](#8-claude-skills)
-9. [Obsidian vault — knowledge graph](#9-obsidian-vault--knowledge-graph)
-10. [Live threat intelligence (Perplexity.ai)](#10-live-threat-intelligence-perplexityai)
-11. [OpenCTI integration](#11-opencti-integration)
-12. [MCP servers](#12-mcp-servers)
-13. [Reporting](#13-reporting)
-14. [Configuration reference](#14-configuration-reference)
-15. [Self-tests and verification](#15-self-tests-and-verification)
-16. [Evidence integrity rules](#16-evidence-integrity-rules)
-17. [License and disclaimer](#17-license-and-disclaimer)
+8. [Batch analysis — many evidence files at once](#8-batch-analysis-many-evidence-files-at-once)
+9. [Research notes & the audit trail](#9-research-notes--the-audit-trail)
+10. [How the platform stays accurate (trust features)](#10-how-the-platform-stays-accurate-trust-features)
+11. [Claude skills](#11-claude-skills)
+12. [Obsidian vault — knowledge graph](#12-obsidian-vault--knowledge-graph)
+13. [Live threat intelligence (Perplexity.ai)](#13-live-threat-intelligence-perplexityai)
+14. [OpenCTI integration](#14-opencti-integration)
+15. [MCP servers](#15-mcp-servers)
+16. [Reporting](#16-reporting)
+17. [Configuration reference](#17-configuration-reference)
+18. [Self-tests and verification](#18-self-tests-and-verification)
+19. [Evidence integrity rules](#19-evidence-integrity-rules)
+20. [License and disclaimer](#20-license-and-disclaimer)
 
 ---
 
@@ -159,10 +168,11 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 4. IP and FQDN extraction runs; each indicator is enriched via vault lookup then Perplexity on a cache miss
 5. An incident report (Markdown + PDF) is generated in `./analysis/_reports/<stem>/`
 6. A management PowerPoint briefing (PPTX) is generated in `./analysis/_reports/<stem>/`
-7. All artifacts (MD, PDF, PPTX, and all module outputs) are packaged into a single timestamped ZIP
-8. The ZIP goes to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
-9. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
-10. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
+7. The reports and management briefing are uploaded to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
+8. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
+9. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`)
+10. Every artifact for the case — reports, the transcript, exhibits, and all module outputs — is bundled into a single timestamped ZIP with a SHA-256 manifest (in `./exports/`) and uploaded to the vault. The bundle runs **after** the transcript so the transcript travels inside it
+11. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
 
 ### Output files per investigation
 
@@ -171,7 +181,9 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 | `<stem>_incident_report.md` | Analyst | Full technical findings, all protocol sections |
 | `<stem>_incident_report.pdf` | Analyst / Legal | Styled PDF of the technical report |
 | `<stem>_management_briefing.pptx` | CISO / Management | 7-slide PowerPoint: executive summary, threat landscape, IDS alerts, IOCs, recommendations, module coverage |
-| `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above + raw module JSON/CSV outputs |
+| `<case_id>_chat_transcript.md` / `.pdf` | Legal / Internal Audit | Chain-of-evidence record of the full Claude Code coordination session (verbatim, nothing truncated) |
+| `<case_id>_chat_transcript.jsonl` | Chain of evidence | Raw session transcript, preserved verbatim; its SHA-256 is recorded in the MD/PDF |
+| `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above (reports, transcript, exhibits) + raw module JSON/CSV outputs, with a `MANIFEST.sha256` integrity manifest. Written to `./exports/` |
 
 ### Analysis folder
 
@@ -418,29 +430,191 @@ Drop `.yar` files into `./rules/yara/`. They are compiled and loaded automatical
 
 ---
 
-## 8. Claude skills
+## 8. Batch analysis — many evidence files at once
+
+When you have a folder full of evidence — several memory images, disk images, and PCAPs from
+the same intrusion — you do not run each one by hand. Point the platform at the directory and it
+analyzes every file, then writes a single campaign report that ties the cases together.
+
+### In a Claude Code session (recommended)
+
+```
+/investigate-all                       # default evidence dir: /home/vscode/evidence
+/investigate-all /path/to/evidence     # explicit directory
+```
+
+This enumerates every FAME / FAST / FAN evidence file, proposes a Batch ID, runs the cases
+sequentially in-session (so you see the reasoning and approve tool use), and finishes with a
+**batch synthesis**: common IOCs, common TTPs, the outlier case, the highest-severity leads, and a
+revised campaign-level conclusion — followed by the unified report.
+
+### From the shell
+
+```bash
+# Fast, non-interactive — direct shell pipelines per file
+./scripts/batch_analyze.sh  /path/to/evidence --batch-id BATCH-2026-001
+
+# Agentic — each case runs through Claude (/fame, /fast) so it produces research
+# notes, interpreted findings, and a campaign report
+./scripts/batch_agentic.sh  /path/to/evidence --batch-id BATCH-2026-001
+
+# Re-render narratives / board decks / PDFs for cases already in ./reports/
+./scripts/batch_regenerate.sh --dry-run        # list what would be regenerated
+./scripts/batch_regenerate.sh --only-pptx      # board decks only
+```
+
+Files are routed by extension (FAME: `.mem .img .raw .lime .vmem .dmp`; FAST: `.E01 .ewf .vmdk
+.vdi .qcow2 .vhd .vhdx`; FAN: `.pcap .pcapng .cap`). `.7z`/`.zip` archives are extracted first.
+A `manifest.json` records every case's status and any errors; if a case fails, the batch logs it,
+continues, and retries failed cases at the end. Already-processed files are skipped, so an
+interrupted batch resumes without redoing work.
+
+**Outputs:** per-case reports in `./reports/`, a batch aggregate report, and (agentic path) a
+`CAMPAIGN_<id>_report.*` with a swimlane attack timeline. When finished, archive the campaign
+folder with `/archive-reports` to keep `./reports/` clear for the next investigation.
+
+### Cross-module correlation
+
+After a multi-module case (e.g. a host with both a memory image and a disk image), run:
+
+```
+/correlate
+```
+
+This computes the actual links between modules — which **process** (FAME) opened a flagged
+**network connection** (FAN), which running process was found **deleted on disk** (FAST), which
+**DNS domain** (FAN) was confirmed by a **carved artifact** (FAST) — and writes
+`<case_id>_correlation.md`. Run it **before** `./analysis/` is cleaned up, because it needs the raw
+artifact files. Each correlated link is rated by how many modules corroborate it (3+ high
+confidence, 1 = "verify manually").
+
+---
+
+## 9. Research notes & the audit trail
+
+Every FAME / FAST / FAN investigation produces a **research notes file** next to the report:
+`./reports/<case_id>_research_notes.md`. It is a timestamped, numbered, step-by-step log of the
+whole investigation — what was run, *why*, what it found, and what was deliberately *not* flagged.
+Any analyst (or any hackathon judge) can read it top to bottom and follow exactly how the
+conclusion was reached.
+
+This is what makes findings **auditable**: you can trace any line in the report back to the precise
+tool execution that produced it.
+
+```
+tool run  →  preserved artifact (with SHA-256)  →  research note RN-005
+          →  report section (cites RN-005)       →  vault record (source: …, RN-005)
+```
+
+### What a step looks like
+
+```
+### [2026-06-02 14:32:10 UTC] — Step 5 [RN-005]: Process List (windows.pslist)
+
+| | |
+|---|---|
+| **Action** | vol -f image.mem windows.pslist → DEMO_evidence/memory/pslist.txt |
+| **Why** | Identify running processes and parents for injection/persistence analysis |
+| **Outcome** | 87 processes. lsass.exe running from C:\Temp\ — anomalous [source: …/pslist.txt] |
+| **Dismissed** | All svchost.exe under System32 — match baseline, not flagged |
+```
+
+### The four kinds of entry
+
+| Entry | What it records | Why it matters |
+|-------|-----------------|----------------|
+| **Step** (`RN-NNN`) | One tool run: action, why, outcome, and what was dismissed | The workflow, one line per action |
+| **Event** (`EVT-NNN`) | A confirmed attacker action with a timestamp from the evidence | Builds the attack timeline |
+| **Reflect** (`RF-NNN`) | A mid-investigation re-assessment: how new findings change earlier conclusions, and open leads | The agent re-examining its own work |
+| **Assumption** | A working hypothesis that is not yet proven | Surfaces unproven premises so they are never mistaken for fact |
+
+You do not normally call these by hand — Claude writes them as it works. The raw tool output for
+each step is preserved under `./reports/<case_id>_evidence/` with a SHA-256 hash. The `./reports/`
+directory is git-ignored, so notes and evidence are never committed to the repository.
+
+---
+
+## 10. How the platform stays accurate (trust features)
+
+A forensics report is only useful if you can trust it. Fan Get Fame Fast is built so that a claim
+is always reported at its true status — **confirmed**, **inferred**, or **unknown** — and a value is
+never invented to fill a gap. These behaviours are enforced in code, not just asked for in a prompt.
+The architecture is drawn in [Architecture diagrams §3–§7](ARCHITECTURE_DIAGRAM.md#3-trust--reliability-layer);
+the technical detail is in [Technical Reference §11](TECHNICAL_REFERENCE.md#11-trust--reliability-subsystem).
+
+### Confirmed vs. inferred
+
+- Findings that are analytical judgements rather than direct evidence are tagged `[ASSUMPTION]`
+  and collected into the report's **Confidence & gaps** section.
+- An attacker event with no timestamp confirmed in the evidence is marked `(unconfirmed)` and left
+  **out of the visual timeline** — a guessed time never appears as a fact.
+- Every scoped conclusion names its evidence source: *"as observed in the PCAP file"*,
+  *"Volatility 3 malfind identified injected code in PID 1234"*.
+
+### Confidence & gaps section
+
+Every FAME report ends with a **Confidence & gaps** section that states an overall confidence
+(HIGH / MEDIUM / LOW) **with the reason** ("YARA scan and Memory Baseliner were both unavailable",
+"DKOM is active"), a completeness table of which steps ran versus were skipped, the data gaps, the
+recorded assumptions, and recommended follow-up. You can never mistake what was *not* analyzed for a
+clean result.
+
+### Degrade, don't guess
+
+If a rootkit is hiding processes (the hidden-process scan finds more than the active list — DKOM),
+the platform detects it, marks the active process list **"not authoritative"**, promotes the scans
+that the rootkit cannot hide, and lowers the overall confidence — rather than quietly reporting a
+process list it knows is incomplete.
+
+### Confirmed findings only reach the knowledge base
+
+IOCs and TTPs are written to the vault **only** from the analyst-reviewed report tables — never
+scraped from raw tool output. Anything marked *"not confirmed"* or merely *Informational* is
+skipped. A value you did not vet into the final report never becomes an institutional record.
+
+### It handles failures instead of crashing
+
+An optional stage never aborts the pipeline, and every skip or fallback is logged so the gap is
+visible. Examples you will see in the logs:
+
+- Linux memory image with no symbols → falls back to strings-based extraction.
+- Disk image won't mount → retries, then falls back to TSK-only mode.
+- Autopsy not installed → writes `AUTOPSY_NOT_RUN.txt` and continues.
+- A tool returns nothing or errors → the step is recorded as a **Deviation** with the reason, and
+  the investigation continues on a fallback path.
+
+Every one of these deviations is written into the research notes, so you can see exactly where and
+why the investigation changed course.
+
+---
+
+## 11. Claude skills
 
 Open Claude Code in the project directory and type the skill name preceded by `/`.
 
 | Skill | Command | What it does |
 |-------|---------|-------------|
+| Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerates every FAME + FAST + FAN file and runs them in-session, then a unified campaign report |
+| Cross-module correlation | `/correlate` | Computes FAN↔FAME / FAME↔FAST / FAN↔FAST matches from raw artifacts; writes `<case_id>_correlation.md` |
+| Archive reports | `/archive-reports [CAMPAIGN_ID]` | Moves a finished campaign folder from `./reports/` to `./archive/` (move only, never delete) |
 | CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Checks all IPs and FQDNs extracted from the PCAP against OpenCTI; writes `opencti_lookup.md` to the case folder |
 | FAN IP lookup | `/fan-ip-lookup` | FQDN/IP enrichment + OSINT via Perplexity; results cached in the vault for 7 days |
 | FAN report | `/fan-report` | Generates MD + PDF incident report from all module outputs under `./analysis/` |
 | FAN extract IP+FQDN | `/fan-extract-ip-fqdn` | Extracts netflow, unique IPs, and FQDNs from a PCAP (lightweight, no full module pipeline) |
-| Memory forensics | `/fame` | Full FAME pipeline: Volatility 3 + Memory Baseliner + report generation + upload |
-| Storage forensics | `/fast` | Full FAST pipeline: TSK + bulk_extractor + Autopsy + report generation + upload |
+| Memory forensics | `/fame` | Full FAME pipeline: Volatility 3 + Memory Baseliner + research notes + report generation + upload |
+| Storage forensics | `/fast` | Full FAST pipeline: TSK + bulk_extractor + Autopsy + research notes + report generation + upload |
 | Perplexity lookup | `/perplexity-lookup` | Live threat intel for an unknown artifact (IOC, CVE, malware family, threat actor) |
 | Obsidian query | `/obsidian-query` | Queries the vault for known context before starting an investigation |
 | Obsidian record | `/obsidian-record` | Records confirmed findings into the vault and pushes them to OpenCTI |
 | Markdown to PDF | `/md-to-pdf` | Converts any Markdown file to a styled PDF with cover page and pagination |
+| Session transcript | `/record-chat` | Records the current Claude Code session as a chain-of-evidence MD + PDF + verbatim `.jsonl`; runs automatically at the end of FAN/FAME/FAST, invoke to re-record |
 | Remove case | `/remove-case` | Removes a case directory from the investigations vault |
 
 Individual detection module skills (`/fan-dns-threats`, `/fan-http-threats`, `/fan-tls-inspector`, etc.) run one module at a time against the current PCAP.
 
 ---
 
-## 9. Obsidian vault — knowledge graph
+## 12. Obsidian vault — knowledge graph
 
 The vault at `./vault/` is the platform's institutional memory. TTPs, IOCs, threat actors, malware families, risks, and case histories accumulate here across investigations. It is a plain-Markdown directory. Every note is a `.md` file readable without any special tooling.
 
@@ -486,7 +660,7 @@ IOC values in the vault are defanged: `192[.]168[.]1[.]1`, `evil[.]com`, `hxxps:
 
 ---
 
-## 10. Live threat intelligence (Perplexity.ai)
+## 13. Live threat intelligence (Perplexity.ai)
 
 When the vault has no answer for an artifact, Perplexity provides real-time web-sourced intelligence. Decision order: vault first, Perplexity on a cache miss, confirmed findings recorded back to vault.
 
@@ -509,7 +683,7 @@ Requires `PERPLEXITY_API_KEY` in `~/.soc_env`.
 
 ---
 
-## 11. OpenCTI integration
+## 14. OpenCTI integration
 
 The `/fan-opencti-lookup` skill checks all IPs and FQDNs extracted by FAN against your OpenCTI instance. Results go to `opencti_lookup.md` in the investigations vault case folder.
 
@@ -535,7 +709,7 @@ Score thresholds:
 
 ---
 
-## 12. MCP servers
+## 15. MCP servers
 
 Fan Get Fame Fast uses three Model Context Protocol (MCP) servers. They run as local Python processes started by Claude Code, communicate over stdio using JSON-RPC 2.0, and are registered in `.claude/settings.json`. They are the bridge between Claude and the evidence vault, investigation reports, and OpenCTI.
 
@@ -546,6 +720,8 @@ Fan Get Fame Fast uses three Model Context Protocol (MCP) servers. They run as l
 | `opencti` | OpenCTI instance | Read-write | `opencti_search_ioc`, `opencti_search_stix`, `opencti_create_indicator` |
 
 The evidence and investigations roots are set in `.claude/settings.json` via the `env` block. Re-run `setup_folder_structure.sh` to regenerate this file if you move the project or change the evidence/cases paths.
+
+**These are architectural guardrails, not prompt rules.** The `evidence` server is read-only because it has *no write code at all* — a write isn't refused, it's unimplemented. Both file servers confine every request to their root with a `_safe_path()` check that defeats `../` traversal at the server, before any file is touched. The `investigations` server additionally rejects any write that resolves under `/mnt`, `/media`, or `EVIDENCE_ROOT`. On the library side, `lib/path_guard.py` is the single source of truth for the write-path policy: every Python write chokepoint hard-fails (`WritePolicyError`) on any write outside the approved output folders, so even a buggy `--output-dir` cannot land a report in evidence. Claude cannot talk its way past any of these boundaries. See [Technical Reference §11.3](TECHNICAL_REFERENCE.md#113-architectural-guardrails).
 
 Credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from environment variables sourced via `~/.soc_env`, not from `settings.json`.
 
@@ -580,7 +756,7 @@ Full MCP API reference: [Technical Reference — MCP server API](TECHNICAL_REFER
 
 ---
 
-## 13. Reporting
+## 16. Reporting
 
 ### Report outputs by module
 
@@ -659,12 +835,15 @@ The management summary section uses no technical identifiers. Business causality
     --case-id FAN-2026-001 \
     --output-dir ./analysis/_reports/<stem>/
 
-# Package all artifacts into a ZIP
-python3 lib/case_packager.py \
+# Package ALL artifacts for a case into a ZIP (general mode, any file type,
+# with a SHA-256 manifest) and upload it to the investigations vault
+python3 lib/case_packager.py --all \
     --case-id FAN-2026-001 \
-    --stem <pcap-stem> \
-    --reports-dir ./analysis/_reports/<stem>/ \
+    --reports-dir ./reports \
+    --output-dir ./exports \
     --upload
+# (FAN can add the temp reports dir: --reports-dir ./analysis/_reports/<stem>/
+#  --extra-reports-dir ./reports --stem <pcap-stem>)
 ```
 
 ### Markdown to PDF
@@ -673,11 +852,28 @@ python3 lib/case_packager.py \
 ./scripts/md_to_pdf.sh /path/to/report.md /path/to/output.pdf
 ```
 
+### Recording the session transcript (chain of evidence)
+
+This runs automatically at the end of every FAN/FAME/FAST pipeline. To
+re-record manually (e.g. the session continued after the analysis finished):
+
+```bash
+# Auto-detect the active session → ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+python3 lib/chat_recorder.py --case-id FAN-2026-001
+
+# Also upload the transcript to the investigations vault
+python3 lib/chat_recorder.py --case-id FAN-2026-001 --upload
+```
+
+The rendering is complete and verbatim — tool outputs are never truncated. The
+raw `.jsonl` is preserved as the authoritative record and its SHA-256 is printed
+in the MD/PDF.
+
 The PDF includes a styled cover page, running header stripe, and "Page X of Y" pagination. Requires WeasyPrint (installed by `install_dependencies.sh`).
 
 ---
 
-## 14. Configuration reference
+## 17. Configuration reference
 
 ### Environment variables
 
@@ -692,18 +888,6 @@ All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`
 | `INVESTIGATIONS_ROOT` | No | Remote root path for case output (default: `/home/sansforensics/cases`) |
 | `EVIDENCE_ROOT` | No | Override local evidence root (default: `~/evidence`) |
 | `PYTHONPATH` | No (for AutoTimeliner) | Must include path to Volatility 3 source, e.g. `/opt/volatility3-2.20.0` |
-
-For Microsoft Sentinel integration (optional):
-
-| Variable | Description |
-|----------|-------------|
-| `SENTINEL_TENANT_ID` | Azure Active Directory tenant GUID |
-| `SENTINEL_CLIENT_ID` | App registration (service principal) client GUID |
-| `SENTINEL_CLIENT_SECRET` | App registration secret |
-| `SENTINEL_SUBSCRIPTION_ID` | Azure subscription GUID |
-| `SENTINEL_RESOURCE_GROUP` | Resource group name containing the workspace |
-| `SENTINEL_WORKSPACE_NAME` | Log Analytics workspace name |
-| `SENTINEL_WORKSPACE_ID` | Log Analytics workspace GUID |
 
 ### Key paths
 
@@ -723,7 +907,7 @@ For Microsoft Sentinel integration (optional):
 
 ---
 
-## 15. Self-tests and verification
+## 18. Self-tests and verification
 
 ### Vault library round-trips
 
@@ -753,9 +937,9 @@ All checks report `[PASS]` on a healthy installation. The smoke test exits 0 on 
 
 ---
 
-## 16. Evidence integrity rules
+## 19. Evidence integrity rules
 
-1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. Those paths are read-only by platform policy.
+1. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. Those paths are read-only by platform policy, enforced in code by `lib/path_guard.py` (Python writes) and `scripts/pathguard.sh` (analyze scripts) — a forbidden write raises `WritePolicyError` / aborts the script rather than silently succeeding. Output may only land in the approved folders: `analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
 2. Analysis WIP goes to `./analysis/` only. It is deleted automatically after each investigation completes.
 3. Finalized reports go to the investigations vault (`~/cases/<case_id>/reports/` via SSH/SCP).
 4. All timestamps are UTC internally. Reports use the timezone of the incident location (UTC if unknown, stated explicitly).
@@ -769,13 +953,14 @@ All checks report `[PASS]` on a healthy installation. The smoke test exits 0 on 
 
 | Document | Purpose |
 |----------|---------|
+| [Architecture diagrams](ARCHITECTURE_DIAGRAM.md) | Presentation-ready diagrams: agentic loop, trust layer, audit chain, guardrails, batch scale-out |
 | [Deployment guide](DEPLOYMENT_GUIDE.md) | Production server setup, SSH key configuration, sudoers setup, Autopsy/AutoTimeliner/EVTXtract/MemProcFS install, hardening, backup, upgrade |
-| [Technical reference](TECHNICAL_REFERENCE.md) | Architecture, all pipeline data flows, full Python library API, MCP API, vault schema, dependency map |
+| [Technical reference](TECHNICAL_REFERENCE.md) | Architecture, all pipeline data flows, full Python library API, MCP API, vault schema, dependency map, trust & reliability subsystem |
 | [CLAUDE.md](../CLAUDE.md) | Project philosophy, agentic coordinator behavior, report voice registers, evidence constraints |
 
 ---
 
-## 17. License and disclaimer
+## 20. License and disclaimer
 
 Fan Get Fame Fast is dual-licensed under your choice of:
 
@@ -790,4 +975,4 @@ See [DISCLAIMER.md](../DISCLAIMER.md) for the full disclaimer.
 
 ---
 
-*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin — May 2026 — v3.3*
+*Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman — June 2026 — v4.0*
