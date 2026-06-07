@@ -168,10 +168,10 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 4. IP and FQDN extraction runs; each indicator is enriched via vault lookup then Perplexity on a cache miss
 5. An incident report (Markdown + PDF) is generated in `./analysis/_reports/<stem>/`
 6. A management PowerPoint briefing (PPTX) is generated in `./analysis/_reports/<stem>/`
-7. All artifacts (MD, PDF, PPTX, and all module outputs) are packaged into a single timestamped ZIP
-8. The ZIP goes to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
-9. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
-10. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside the report
+7. The reports and management briefing are uploaded to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
+8. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
+9. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`)
+10. Every artifact for the case — reports, the transcript, exhibits, and all module outputs — is bundled into a single timestamped ZIP with a SHA-256 manifest (in `./exports/`) and uploaded to the vault. The bundle runs **after** the transcript so the transcript travels inside it
 11. All WIP directories under `./analysis/` are deleted; the analysis folder is left empty
 
 ### Output files per investigation
@@ -183,7 +183,7 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 | `<stem>_management_briefing.pptx` | CISO / Management | 7-slide PowerPoint: executive summary, threat landscape, IDS alerts, IOCs, recommendations, module coverage |
 | `<case_id>_chat_transcript.md` / `.pdf` | Legal / Internal Audit | Chain-of-evidence record of the full Claude Code coordination session (verbatim, nothing truncated) |
 | `<case_id>_chat_transcript.jsonl` | Chain of evidence | Raw session transcript, preserved verbatim; its SHA-256 is recorded in the MD/PDF |
-| `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above + raw module JSON/CSV outputs |
+| `<case_id>_<YYYYMMDD-HHMMSS>.zip` | Archive | All of the above (reports, transcript, exhibits) + raw module JSON/CSV outputs, with a `MANIFEST.sha256` integrity manifest. Written to `./exports/` |
 
 ### Analysis folder
 
@@ -835,12 +835,15 @@ The management summary section uses no technical identifiers. Business causality
     --case-id FAN-2026-001 \
     --output-dir ./analysis/_reports/<stem>/
 
-# Package all artifacts into a ZIP
-python3 lib/case_packager.py \
+# Package ALL artifacts for a case into a ZIP (general mode, any file type,
+# with a SHA-256 manifest) and upload it to the investigations vault
+python3 lib/case_packager.py --all \
     --case-id FAN-2026-001 \
-    --stem <pcap-stem> \
-    --reports-dir ./analysis/_reports/<stem>/ \
+    --reports-dir ./reports \
+    --output-dir ./exports \
     --upload
+# (FAN can add the temp reports dir: --reports-dir ./analysis/_reports/<stem>/
+#  --extra-reports-dir ./reports --stem <pcap-stem>)
 ```
 
 ### Markdown to PDF

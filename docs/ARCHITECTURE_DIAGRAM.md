@@ -221,11 +221,16 @@ matching research note, follow the `[source: …]` tag to the preserved artifact
 exact command in the `Action` field. The chain is bidirectional and complete.
 
 Wrapping the whole chain is the **chain-of-evidence session transcript**
-(`lib/chat_recorder.py` → `<case>_chat_transcript.{md,pdf,jsonl}`): a verbatim,
-SHA-256-fingerprinted record of the entire Claude Code coordination session —
-every analyst question, every pivot, every tool execution and its full output.
-It is produced automatically at the end of each pipeline and shows not just
-*what* was concluded but *how* the coordinator reasoned its way there.
+(`scripts/record_session.sh` → `lib/chat_recorder.py` →
+`<case>_chat_transcript.{md,pdf,jsonl}`): a verbatim, SHA-256-fingerprinted
+record of the entire Claude Code coordination session — every analyst question,
+every pivot, every tool execution and its full output. It is produced
+automatically at the end of each pipeline and shows not just *what* was concluded
+but *how* the coordinator reasoned its way there. Finally
+`scripts/package_artifacts.sh` (→ `lib/case_packager.py --all`) bundles the
+complete artifact set — reports, transcript, exhibits, evidence ZIPs — into a
+single timestamped `<case>_<ts>.zip` with a `MANIFEST.sha256`, uploaded to the
+investigations vault.
 
 ### ASCII fallback
 

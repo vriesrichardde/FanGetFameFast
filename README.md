@@ -161,19 +161,19 @@ python3 scripts/generate_sbom.py --check    # confirm sbom.json matches requirem
 
 You point FAN at a PCAP — either by dropping it into the evidence vault or by passing a path directly — and the script asks for a case ID if you didn't supply one, then opens a running research-notes log that every subsequent step appends to. It starts by extracting the netflow picture (unique IPs, FQDNs, conversations) and then sweeps the capture with its full battery of protocol threat detectors: ARP, DHCP, DNS, HTTP/S, ICMP, LLMNR, mDNS, NBNS, NetBIOS, NTP, QUIC, SNMP, SSDP, STUN, TCP, UDP, and TLS (including certificate inspection and JA4 fingerprinting). On top of the protocol layer it extracts and hashes transferred files, runs a Suricata IDS pass, and sweeps both the raw capture and any carved files with YARA rules. When OpenCTI or Perplexity are configured, the IPs and FQDNs are enriched against external threat intelligence; when they are not, FAN leans on the local vault cache and continues.
 
-From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP. The reports are uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop, and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
+From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP with a SHA-256 integrity manifest. The reports and that artifact ZIP are uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop, and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — recorded *before* the ZIP so it travels inside it, and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
 
 ## How FAME works
 
 You hand FAME a memory image and a case ID (and optionally a hostname), and it first works out whether the image is Windows or Linux. For Windows images it runs the Volatility 3 plugins that matter for triage — process listings and scans (`pslist`, `psscan`, `pstree`, `cmdline`), the network view (`netstat`, `netscan`), injected-code detection (`malfind`), services and drivers (`svcscan`, `modules`, `modscan`), the file-object scan (`filescan`), and registry artifacts (`userassist`, `hivelist`) plus image metadata. When a clean-system baseline is present at `baselines/baseline.json`, Memory Baseliner adds a process/driver/service comparison, and on x86-64 hosts MemProcFS runs as a second, independent analysis pathway. Linux images run their own Volatility plugins (`pslist`, `pstree`, `netstat`, `malfind`, banners) and fall back to strings extraction and YARA scanning when ISF symbols aren't available, so the pipeline still produces results on images Volatility can't fully parse.
 
-The findings become a full report set — Markdown, PDF, a PowerPoint management deck, and a technical Word document. FAME then looks for sibling FAN or FAST reports under the same case ID; when it finds them it generates a combined, cross-module report and embeds the correlation analysis where available. Everything is uploaded to the investigations vault, and the coordination session is recorded as the same chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded with the reports.
+The findings become a full report set — Markdown, PDF, a PowerPoint management deck, and a technical Word document. FAME then looks for sibling FAN or FAST reports under the same case ID; when it finds them it generates a combined, cross-module report and embeds the correlation analysis where available. The coordination session is recorded as the same chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`); everything — reports and transcript — is then bundled into a timestamped ZIP with a SHA-256 manifest, and the reports and that ZIP are uploaded to the investigations vault.
 
 ## How FAST works
 
 You give FAST a disk image in any TSK-compatible format — E01, VMDK, raw, and so on. For EnCase/EWF images it first runs `ewfinfo` and `ewfverify` to confirm integrity, then mounts the image **read-only** (via `ewfmount`, falling back to a network block device for other formats) so the evidence is never altered. With the volume mounted it walks the disk with The Sleuth Kit: `mmls` to map partitions, `fsstat` for filesystem detail, `fls` to list files recursively and emit a timeline bodyfile, and `ils`/`icat` to reach inodes and recover content. It then pulls the artifacts that drive most investigations — Windows event logs (EVTX), registry hives, prefetch, the MFT, the USN journal, SRUM, and browser history — and runs `bulk_extractor` (with foremost, scalpel, and binwalk as fallback carvers) to carve deleted and unallocated data.
 
-As with the other modules, the results are written as Markdown, PDF, a PowerPoint deck, and a Word document; if FAN or FAME reports already exist for the case, a combined cross-module report is produced automatically. The reports go to the investigations vault, and the full Claude Code session is preserved as the chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`) and uploaded alongside them.
+As with the other modules, the results are written as Markdown, PDF, a PowerPoint deck, and a Word document; if FAN or FAME reports already exist for the case, a combined cross-module report is produced automatically. The full Claude Code session is preserved as the chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`), then the reports and transcript are bundled into a timestamped ZIP with a SHA-256 manifest; the reports and that ZIP are uploaded to the investigations vault.
 
 ---
 
@@ -185,7 +185,64 @@ The **management summary** is plain language for a CISO, legal team, or law-enfo
 
 The **technical body** is for the analyst: precise identifiers (workstation names, IP addresses, ports, protocols, payload sizes, malware family names) and scoped conclusions that explicitly name the evidence source they rest on — for example, "no signs of lateral movement were observed *in the PCAP file*."
 
-Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word); FAN additionally bundles its artifacts into a timestamped ZIP. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
+Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word). At the end of every run, each module bundles its complete artifact set — reports, exhibits, evidence ZIPs, and the chain-of-evidence transcript — into a timestamped ZIP with a SHA-256 integrity manifest and uploads it to the investigations vault. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
+
+---
+
+## Conducting an investigation
+
+There are two ways to drive the platform. The **script-driven** path (see [Quick start](#quick-start)) runs a single module end to end and automatically records the session transcript and packages + uploads the artifact ZIP. The **conversational** path lets Claude act as the coordinator across all the evidence at once — deciding which module to run, pivoting between them, and correlating findings.
+
+For the conversational path, the prompt below is the one that gets the most value out of the solution. It is deliberately explicit about the things that most often make or break an investigation: testing a hypothesis rather than assuming it, examining *every* artifact (screen recordings included), separating correlation from causation, pinning down host attribution and time zones, and producing the full chain-of-evidence output. Fill in the `<…>` placeholders and paste it as your first message.
+
+```text
+You are a senior DFIR investigator using the FanGetFameFast solution
+(FAN network · FAME memory · FAST storage · cross-module correlation).
+Conduct a complete, rigorous investigation.
+
+CASE:  <CASE-ID>   —   <isolated case | part of campaign <ID>>
+INCIDENT LOCATION TIMEZONE:  <e.g. CET>   (if unknown, use UTC and state it)
+
+EVIDENCE — examine ALL of these thoroughly, skip nothing:
+  - <pcap path>
+  - <memory image path>
+  - <disk image path>
+  - <logs, screen recordings / video, images, and any other artifacts>
+
+HYPOTHESIS TO TEST:  <the SOC analyst's theory>.
+Treat this strictly as a hypothesis to CONFIRM OR REFUTE on the evidence —
+do not assume it. Actively try to disprove it. Give me a calibrated confidence
+level and state what single piece of evidence would change your conclusion.
+
+HOW TO WORK:
+1. List/verify available tooling first. Work read-only on copies; never write to evidence.
+2. Examine every artifact, INCLUDING any screen recording / video / image —
+   extract and read frames; do not treat media as opaque.
+3. Log each step to research notes before starting the next (sequential).
+4. Pin down topology and attribution precisely: which host actually did what,
+   NAT vs egress identity, reverse-DNS/PTR, and reconcile all clocks/time zones.
+5. Distinguish CORRELATION from CAUSATION. For any "X caused Y" claim, find the
+   direct connecting evidence; if it is only inferred, say so explicitly and go
+   find the artifact that would prove it.
+6. Query the vault first, Perplexity on a miss, then record confirmed findings
+   back to the vault + OpenCTI. Run cross-module correlation (FAN<->FAME<->FAST).
+7. Compute SHA-256 of every evidence file (chain of custody).
+
+DELIVERABLES:
+  - Management PowerPoint (CISO language, NO technical identifiers).
+  - Technical Word document: precise identifiers; every conclusion scoped and
+    citing its evidence source; an explicit Assumptions section; and an
+    artifact-to-evidence map (what was found where, with confidence).
+  - Record the full coordination session as a chain-of-evidence transcript, then
+    package ALL artifacts into a timestamped ZIP with a SHA-256 manifest and
+    upload to the investigations vault.
+  - Enhance and elaborate when necessary.
+
+End with: your conclusion, the confidence level, and the strongest single
+piece of evidence behind it.
+```
+
+> When you drive an investigation conversationally rather than through the analyze scripts, the explicit "record the session transcript" and "package + upload the artifact ZIP" lines matter — those steps are wired into the scripts but not into an ad-hoc session, so naming them guarantees the chain-of-evidence outputs are produced.
 
 ---
 

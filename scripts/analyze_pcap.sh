@@ -16,6 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/pathguard.sh"
+source "$SCRIPT_DIR/record_session.sh"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 PCAP_FILE=""
@@ -378,11 +379,17 @@ run_step "Upload report" \
 # reasoning behind every finding, feeding workflow optimisation.
 header "Recording Session Transcript"
 
-run_step "Session transcript (chain of evidence)" \
-    python3 "$PROJECT_ROOT/lib/chat_recorder.py" \
-    --case-id "$CASE_ID" \
-    --output-dir "$PROJECT_ROOT/reports" \
-    --upload
+# Best-effort, shared recorder (never fails the investigation). Uploaded to the
+# investigations vault alongside the report.
+fgff_record_session "$CASE_ID" "$PROJECT_ROOT/reports" 1
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Bundle every artifact for this case — incident reports + the analysis bundle
+# from the temp reports dir, plus the transcript from ./reports — and upload it.
+# Runs before WIP cleanup so the temp reports dir ($REPORTS_TMP) still exists.
+header "Bundling & Uploading Artifacts"
+source "$SCRIPT_DIR/package_artifacts.sh"
+fgff_package_artifacts "$CASE_ID" "$REPORTS_TMP" "$PROJECT_ROOT/exports" "$STEM" 1 "$PROJECT_ROOT/reports"
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"

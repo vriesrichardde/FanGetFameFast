@@ -131,25 +131,26 @@ Analyst
         │     lib/generate_presentation.py → PPTX (7 slides)
         │     Output: ./analysis/_reports/<pcap-stem>/
         │
-        ├── [8] Artifact bundling
-        │     lib/case_packager.py: zip MD + PDF + PPTX + all module outputs
-        │     ZIP name: <case_id>_<YYYYMMDD-HHMMSS>.zip
-        │     Output: ./analysis/_reports/<pcap-stem>/
-        │
-        ├── [9] Upload to investigations vault
+        ├── [8] Upload to investigations vault
         │     lib/investigations_upload.py
         │     SSH key: ~/.ssh/id_ed25519
         │     SSH host: $INVESTIGATIONS_SSH_HOST (default: sansforensics@ubuntudesktop)
         │     Destination: $INVESTIGATIONS_ROOT/<case_id>/reports/
         │
-        ├── [10] Vault recording
+        ├── [9] Vault recording
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
         │     Also pushes to OpenCTI via mcp/opencti_server.py
         │
-        ├── [11] Session transcript (chain of evidence)
-        │     lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
+        ├── [10] Session transcript (chain of evidence)
+        │     scripts/record_session.sh → lib/chat_recorder.py
+        │     verbatim MD + PDF + raw .jsonl (SHA-256)
         │     Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
-        │     Uploaded to the investigations vault alongside the report
+        │
+        ├── [11] Artifact bundling + upload (runs after [10] so the transcript is included)
+        │     scripts/package_artifacts.sh → lib/case_packager.py --all
+        │     Bundles EVERY artifact for the case — reports, exhibits, evidence
+        │     ZIPs, and the [10] transcript — into <case_id>_<YYYYMMDD-HHMMSS>.zip
+        │     with a SHA-256 MANIFEST; written to ./exports/ and uploaded to the vault
         │
         └── [12] WIP cleanup
               rm -rf ./analysis/<module>/<pcap-stem>/  (all 22 modules)
@@ -270,10 +271,16 @@ Analyst
         ├── [14] Vault recording
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
         │
-        └── [15] Session transcript (chain of evidence)
-              lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
-              Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
-              Uploaded to the investigations vault alongside the reports
+        ├── [15] Session transcript (chain of evidence)
+        │     scripts/record_session.sh → lib/chat_recorder.py
+        │     verbatim MD + PDF + raw .jsonl (SHA-256)
+        │     Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+        │
+        └── [16] Artifact bundling + upload (runs after [15] so the transcript is included)
+              scripts/package_artifacts.sh → lib/case_packager.py --all
+              Bundles every artifact for the case (reports, transcript, …) into
+              <case_id>_<YYYYMMDD-HHMMSS>.zip with a SHA-256 MANIFEST in ./exports/,
+              uploaded to the investigations vault (skipped when --no-upload)
 ```
 
 ---
@@ -354,10 +361,16 @@ Analyst
         ├── [14] Vault recording
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
         │
-        └── [15] Session transcript (chain of evidence)
-              lib/chat_recorder.py → verbatim MD + PDF + raw .jsonl (SHA-256)
-              Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
-              Uploaded to the investigations vault alongside the reports
+        ├── [15] Session transcript (chain of evidence)
+        │     scripts/record_session.sh → lib/chat_recorder.py
+        │     verbatim MD + PDF + raw .jsonl (SHA-256)
+        │     Output: ./reports/<case_id>_chat_transcript.{md,pdf,jsonl}
+        │
+        └── [16] Artifact bundling + upload (runs after [15] so the transcript is included)
+              scripts/package_artifacts.sh → lib/case_packager.py --all
+              Bundles every artifact for the case (reports, transcript, …) into
+              <case_id>_<YYYYMMDD-HHMMSS>.zip with a SHA-256 MANIFEST in ./exports/,
+              uploaded to the investigations vault (skipped when --no-upload)
 ```
 
 ---
@@ -467,7 +480,9 @@ Autopsy is located via `$PATH`, `/opt/autopsy/bin/autopsy`, or `/usr/share/autop
 | `batch_regenerate.sh` | Regenerates new-format narratives / board decks / PDFs for all cases already in `./reports/` (`--dry-run`, `--only-pptx`, `--case-id`); optionally re-runs the campaign report |
 | `generate_pcap_report.sh` | Assembles FAN module outputs into Markdown + PDF incident report |
 | `generate_pcap_presentation.sh` | Generates FAN management PowerPoint briefing (wraps `lib/generate_presentation.py`) |
-| `bundle_artifacts.sh` | Zips all investigation artifacts for a completed case (reports + per-module outputs) |
+| `record_session.sh` | Shared helper (`fgff_record_session`) sourced by every analysis script to record the Claude Code session as a chain-of-evidence transcript (MD + PDF + verbatim `.jsonl`). Best-effort; never fails the run |
+| `package_artifacts.sh` | Shared helper (`fgff_package_artifacts`) sourced by every analysis script to bundle the case's complete artifact set into `<case_id>_<ts>.zip` (with a SHA-256 manifest, via `lib/case_packager.py --all`) and upload it to the vault. Runs after `record_session.sh`; best-effort, never fails the run |
+| `bundle_artifacts.sh` | Legacy wrapper: zips a FAN case's per-stem reports + module outputs (the default `case_packager` mode), used for the FAN staging bundle |
 | `update_suricata_rules.sh` | Downloads and updates ET Open Suricata rules |
 | `yara_sweep.sh` | Standalone YARA sweep against disk mounts or memory images |
 | `perplexity_search.sh` | CLI wrapper for Perplexity threat intelligence lookups |
@@ -848,25 +863,30 @@ python3 lib/generate_technical_reference_doc.py \
 
 ### `lib/case_packager.py` — artifact ZIP and upload
 
-Packages all artifacts for a completed FAN investigation into a timestamped ZIP and uploads to the investigations vault.
+Packages a case's artifacts into a timestamped `<case_id>_<YYYYMMDD-HHMMSS>.zip` and uploads it to the investigations vault. Two modes:
+
+- **`--all` (general, recommended)** — `package_all()` collects **every** artifact for a case regardless of file type (DOCX/PPTX/PDF, the chain-of-evidence chat transcript, exhibit images, evidence ZIPs, …) across one or more report directories, and writes a `MANIFEST.sha256` integrity manifest inside the ZIP. Used by FAN, FAME, FAST and batch runs.
+- **default (legacy)** — `package()` is PCAP/stem-specific (MD + PDF + PPTX + per-stem `analysis/` module outputs only).
 
 ```python
-from lib.case_packager import package, upload_zip
+from lib.case_packager import package_all, package, upload_zip
 
-zip_path = package(
-    case_id="FAN-2026-001",
-    stem="capture",
-    reports_dir=Path("./analysis/_reports/capture/"),
-    analysis_dir=Path("./analysis/"),   # optional; includes all per-module outputs for stem
-    output_dir=Path("./analysis/_reports/capture/"),
+# General mode — bundles all artifact types, with a SHA-256 manifest
+zip_path = package_all(
+    case_id="FAME-2026-001",
+    reports_dirs=["./reports"],          # one or more dirs; scans <case>/, <case>_*, <stem>_*
+    output_dir="./exports",
+    stem=None,                            # pass the evidence stem only when it differs from case_id (FAN)
 )
-# ZIP name: FAN-2026-001_20260501-142235.zip
+# ZIP name: FAME-2026-001_20260501-142235.zip ; returns None if no artifacts found
 
-upload_zip(case_id="FAN-2026-001", zip_path=zip_path)
-# Uploads via SSH/SCP to $INVESTIGATIONS_ROOT/FAN-2026-001/
+upload_zip(case_id="FAME-2026-001", zip_path=zip_path)
+# Uploads via SSH/SCP to $INVESTIGATIONS_ROOT/FAME-2026-001/
 ```
 
-Also accessible via shell wrapper: `scripts/bundle_artifacts.sh --stem <stem> --case-id <id> --reports-dir <path> --base-dir <path> --output-dir <path>`
+CLI: `python3 lib/case_packager.py --all --case-id <id> --reports-dir <dir> [--extra-reports-dir <dir> …] [--stem <stem>] [--output-dir ./exports] [--upload]`
+
+Every analysis script invokes this through the shared shell helper **`scripts/package_artifacts.sh`** (`fgff_package_artifacts <case_id> <reports_dir> <output_dir> <stem> <upload> [extra_dirs…]`), which runs after the transcript recorder (`scripts/record_session.sh`) so the bundle includes the transcript. Both helpers are best-effort: a failure is downgraded to a warning and never aborts the investigation. The legacy `scripts/bundle_artifacts.sh` wrapper around the default `package()` mode remains for the FAN per-stem staging bundle.
 
 ---
 

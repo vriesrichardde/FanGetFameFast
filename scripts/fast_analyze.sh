@@ -508,12 +508,16 @@ fi
 # reasoning behind every finding and feeds workflow optimisation. This step
 # must never fail the investigation, and runs before local cleanup so the
 # transcript is uploaded with the rest of the artefacts.
-echo "[fast] Recording session transcript (chain of evidence)..."
-python3 "$PROJECT_ROOT/lib/chat_recorder.py" \
-    --case-id    "$CASE_ID" \
-    --output-dir "$REPORTS_DIR" \
-    $([[ $SKIP_UPLOAD -eq 0 ]] && echo "--upload" || true) \
-    || echo "[fast] WARNING: Session transcript recording failed (analysis unaffected)."
+source "$PROJECT_ROOT/scripts/record_session.sh"
+fgff_record_session "$CASE_ID" "$REPORTS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Artifact bundle (chain of evidence) ───────────────────────────────────────
+# Package every artifact for this case (reports, transcript, exhibits, …) into a
+# timestamped ZIP and upload it to the investigations vault. Runs after the
+# transcript so the bundle includes it. Best-effort; never fails the run.
+source "$PROJECT_ROOT/scripts/package_artifacts.sh"
+fgff_package_artifacts "$CASE_ID" "$REPORTS_DIR" "$PROJECT_ROOT/exports" "$STEM" \
+    "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Clean up local artifacts ───────────────────────────────────────────────────
 echo "[fast] Cleaning up local artifacts (preserved in investigations vault)..."

@@ -409,16 +409,29 @@ Without this setup, the final upload step of every investigation fails. The fini
 
 ### Session transcript recording (chain of evidence)
 
-At the end of every pipeline, `lib/chat_recorder.py` records the full Claude Code
-coordination session as `./reports/<case_id>_chat_transcript.{md,pdf,jsonl}` and
-uploads it with the rest of the artefacts. It reads the active session from the
-Claude Code transcript directory (`~/.claude/projects/<encoded-project-dir>/`),
-which is derived automatically from `CLAUDE_PROJECT_DIR` or the working
-directory — no configuration is needed, and it adapts to whichever user the
-solution runs as. Recording (and its upload) is best-effort: any failure is
-logged as a warning and never aborts the investigation. The rendering is
-verbatim — tool outputs are never truncated — and the raw `.jsonl` is preserved
-with its SHA-256 recorded in the document.
+At the end of every pipeline, the shared helper `scripts/record_session.sh`
+(`fgff_record_session`) calls `lib/chat_recorder.py` to record the full Claude
+Code coordination session as `./reports/<case_id>_chat_transcript.{md,pdf,jsonl}`.
+It reads the active session from the Claude Code transcript directory
+(`~/.claude/projects/<encoded-project-dir>/`), which is derived automatically
+from `CLAUDE_PROJECT_DIR` or the working directory — no configuration is needed,
+and it adapts to whichever user the solution runs as. The rendering is verbatim
+— tool outputs are never truncated — and the raw `.jsonl` is preserved with its
+SHA-256 recorded in the document.
+
+### Artifact bundling and upload (chain of evidence)
+
+Immediately after the transcript, the shared helper
+`scripts/package_artifacts.sh` (`fgff_package_artifacts`) calls
+`lib/case_packager.py --all` to bundle the case's **complete** artifact set —
+reports of every type, the transcript, exhibit images, evidence ZIPs — into
+`./exports/<case_id>_<YYYYMMDD-HHMMSS>.zip` with a `MANIFEST.sha256` integrity
+manifest, and uploads it to the investigations vault
+(`$INVESTIGATIONS_ROOT/<case_id>/`). Because it runs after the recorder, the
+transcript is inside the bundle. Both helpers are best-effort: any recording,
+packaging, or upload failure is logged as a warning and never aborts the
+investigation. Upload is skipped when the pipeline is run with `--no-upload`
+(FAME/FAST/batch).
 
 ---
 

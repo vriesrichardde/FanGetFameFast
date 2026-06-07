@@ -27,19 +27,27 @@ alongside as the SHA-256-fingerprinted authoritative record.
 
 ## When this runs automatically
 
-This is wired into the end of every investigation pipeline — it runs on its own
-after the report upload, before final cleanup:
+Every analysis entry-point records the session at the end of its run, via the
+shared helper `scripts/record_session.sh` (`fgff_record_session`, single source
+of truth, best-effort — a recording or upload error is downgraded to a warning
+and never fails the investigation):
 
+- `scripts/analyze_pcap.sh` (FAN)
 - `scripts/fame_analyze.sh` (FAME)
 - `scripts/fast_analyze.sh` (FAST)
-- `scripts/analyze_pcap.sh` (FAN)
+- `scripts/batch_analyze.sh` (batch — recorded under the batch ID)
+- `scripts/batch_agentic.sh` (agentic batch — recorded under the batch ID)
 
-In all three, the transcript is uploaded to the investigations vault with the
-rest of the artefacts (skipped when `--no-upload` is set for FAME/FAST).
+The transcript is uploaded to the investigations vault with the rest of the
+artefacts unless upload is disabled (`--no-upload` for FAME/FAST/batch; the FAN
+pipeline always uploads).
 
 Use this skill to **manually re-record** a session — for example when the
 session continued after the analysis script finished, or to capture an
-in-session investigation that did not run through a shell script.
+in-session investigation that did not run through a shell script. Note that the
+script-level recorder only fires when one of the scripts above is run; an
+investigation driven directly in-session (without those scripts) must be
+recorded manually with `/record-chat`.
 
 ## Invocation
 
