@@ -1294,15 +1294,11 @@ fast_analyze.sh  (FAST)
 | `weasyprint` + `cairocffi` | PDF generation (requires Cairo + Pango system libraries) |
 | `python-pptx` | PowerPoint output (PPTX) |
 | `python-docx` | Word document output (DOCX) |
-| `xlsxwriter` | Excel output |
 | `Markdown` | Markdown to HTML (pre-PDF step) |
 | `PyYAML` | YAML frontmatter parsing, configuration files |
-| `requests` + `urllib3` | Perplexity API, OpenCTI HTTP |
-| `numpy` + `scipy` | Statistical anomaly detection in protocol modules |
-| `networkx` | Connection graph analysis (topology, correlation graphs) |
-| `rapidfuzz` | Fuzzy matching for vault deduplication and IOC correlation |
-| `datasketch` | MinHash similarity for large IOC set comparisons |
-| `graphifyy` | Network topology visualization |
+| `plotly` | Interactive HTML timeline visualisation |
+| `volatility3` + `yara-python` | Memory forensics (FAME) and YARA scanning |
+| `sslyze` | TLS / certificate inspection (FAN) |
 | `memprocfs` | MemProcFS physical memory access via LeechCore (FAME optional stage) |
 
 ---

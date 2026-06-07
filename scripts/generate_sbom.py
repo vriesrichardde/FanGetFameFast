@@ -32,9 +32,6 @@ SBOM_MD = ROOT / "sbom.md"
 # or not installed in the current environment. Keys are PyPI names (lowercased).
 LICENSE_OVERRIDES = {
     "markdown": "BSD-3-Clause",
-    "urllib3": "MIT",
-    "rapidfuzz": "MIT",
-    "graphifyy": "MIT",
     "plotly": "MIT",
     "volatility3": "VSL-1.0",          # Volatility Software License v1.0 (BSD-derived)
     "sslyze": "AGPL-3.0-or-later",
@@ -42,15 +39,17 @@ LICENSE_OVERRIDES = {
     "weasyprint": "BSD-3-Clause",
     "cairocffi": "BSD-3-Clause",
     "cairosvg": "LGPL-3.0-or-later",
-    "numpy": "BSD-3-Clause",
-    "scipy": "BSD-3-Clause",
-    "networkx": "BSD-3-Clause",
-    "xlsxwriter": "BSD-2-Clause",
     "yara-python": "Apache-2.0",
-    "requests": "Apache-2.0",
 }
 
 _REQ_RE = re.compile(r"^([A-Za-z0-9._-]+)\s*([<>=!~]=?.*)?$")
+_PIN_RE = re.compile(r"^==\s*([^,;\s]+)")
+
+
+def pinned_version(spec: str) -> str:
+    """Return the exact version from an ``==`` spec, or '' if not pinned."""
+    m = _PIN_RE.match(spec or "")
+    return m.group(1) if m else ""
 
 
 def parse_requirements() -> list[tuple[str, str]]:
@@ -98,12 +97,15 @@ def build_components(reqs: list[tuple[str, str]]) -> list[dict]:
     for name, spec in reqs:
         version, installed = resolve_version(name)
         license_id = resolve_license(name)
+        # Prefer the concrete installed version; otherwise fall back to the
+        # exact ``==`` pin so every component carries a specific version.
+        effective = version or pinned_version(spec)
         comp: dict = {
             "type": "library",
             "bom-ref": f"pkg:pypi/{name.lower()}",
             "name": name,
-            "version": version or spec.lstrip("><=~! ") or "unknown",
-            "purl": f"pkg:pypi/{name.lower()}@{version}" if version else f"pkg:pypi/{name.lower()}",
+            "version": effective or "unknown",
+            "purl": f"pkg:pypi/{name.lower()}@{effective}" if effective else f"pkg:pypi/{name.lower()}",
             "scope": "required",
             "licenses": [{"license": {"id" if license_id != "UNKNOWN" else "name": license_id}}],
             "properties": [
@@ -165,9 +167,11 @@ def render_markdown(sbom: dict) -> str:
         f"| Package | Version | Spec | License | Installed |\n"
         f"|---------|---------|------|---------|-----------|\n"
         f"{body}\n\n"
-        f"> Versions reflect what is resolved in the generating environment. "
-        f"Packages marked *Installed: no* are optional/platform-specific "
-        f"(e.g. memprocfs is x86-64 only) and carry the `requirements.txt` minimum.\n\n"
+        f"> Every dependency is pinned to an exact version (`==`) in "
+        f"`requirements.txt`. Packages marked *Installed: no* are "
+        f"optional/platform-specific (e.g. memprocfs is x86-64 only) and were "
+        f"not present in the generating environment; their version is taken "
+        f"from the pin.\n\n"
         f"## License notes\n\n"
         f"- **AGPL-3.0** components (`sslyze`, `memprocfs`) are copyleft. They are "
         f"invoked as separate tools / optional modules and are not statically linked "
