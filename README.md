@@ -44,18 +44,6 @@ From those outputs Claude writes a versioned incident report (Markdown + PDF), g
 
 ---
 
-## Report format
-
-Every investigation produces a single report written in two registers, so one document serves every audience from the boardroom to law enforcement.
-
-The **management summary** is plain language for a CISO, legal team, or law-enforcement reader: it carries the business causality — what happened, when, and what the impact was — and deliberately omits technical identifiers like IPs, ports, and file sizes.
-
-The **technical body** is for the analyst: precise identifiers (workstation names, IP addresses, ports, protocols, payload sizes, malware family names) and scoped conclusions that explicitly name the evidence source they rest on — for example, "no signs of lateral movement were observed *in the PCAP file*."
-
-Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word). At the end of every run, each module bundles its complete artifact set — reports, exhibits, evidence ZIPs, and the chain-of-evidence transcript — into a timestamped ZIP with a SHA-256 integrity manifest and uploads it to the investigations vault. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
-
----
-
 ## How FAST works
 
 You give FAST a disk image in any TSK-compatible format — E01, VMDK, raw, and so on. For EnCase/EWF images it first runs `ewfinfo` and `ewfverify` to confirm integrity, then mounts the image **read-only** (via `ewfmount`, falling back to a network block device for other formats) so the evidence is never altered. With the volume mounted it walks the disk with The Sleuth Kit: `mmls` to map partitions, `fsstat` for filesystem detail, `fls` to list files recursively and emit a timeline bodyfile, and `ils`/`icat` to reach inodes and recover content. It then pulls the artifacts that drive most investigations — Windows event logs (EVTX), registry hives, prefetch, the MFT, the USN journal, SRUM, and browser history — and runs `bulk_extractor` (with foremost, scalpel, and binwalk as fallback carvers) to carve deleted and unallocated data.
@@ -69,6 +57,18 @@ As with the other modules, the results are written as Markdown, PDF, a PowerPoin
 You hand FAME a memory image and a case ID (and optionally a hostname), and it first works out whether the image is Windows or Linux. For Windows images it runs the Volatility 3 plugins that matter for triage — process listings and scans (`pslist`, `psscan`, `pstree`, `cmdline`), the network view (`netstat`, `netscan`), injected-code detection (`malfind`), services and drivers (`svcscan`, `modules`, `modscan`), the file-object scan (`filescan`), and registry artifacts (`userassist`, `hivelist`) plus image metadata. When a clean-system baseline is present at `baselines/baseline.json`, Memory Baseliner adds a process/driver/service comparison, and on x86-64 hosts MemProcFS runs as a second, independent analysis pathway. Linux images run their own Volatility plugins (`pslist`, `pstree`, `netstat`, `malfind`, banners) and fall back to strings extraction and YARA scanning when ISF symbols aren't available, so the pipeline still produces results on images Volatility can't fully parse.
 
 The findings become a full report set — Markdown, PDF, a PowerPoint management deck, and a technical Word document. FAME then looks for sibling FAN or FAST reports under the same case ID; when it finds them it generates a combined, cross-module report and embeds the correlation analysis where available. The coordination session is recorded as the same chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`); everything — reports and transcript — is then bundled into a timestamped ZIP with a SHA-256 manifest, and the reports and that ZIP are uploaded to the investigations vault.
+
+---
+
+## Report format
+
+Every investigation produces a single report written in two registers, so one document serves every audience from the boardroom to law enforcement.
+
+The **management summary** is plain language for a CISO, legal team, or law-enforcement reader: it carries the business causality — what happened, when, and what the impact was — and deliberately omits technical identifiers like IPs, ports, and file sizes.
+
+The **technical body** is for the analyst: precise identifiers (workstation names, IP addresses, ports, protocols, payload sizes, malware family names) and scoped conclusions that explicitly name the evidence source they rest on — for example, "no signs of lateral movement were observed *in the PCAP file*."
+
+Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word). At the end of every run, each module bundles its complete artifact set — reports, exhibits, evidence ZIPs, and the chain-of-evidence transcript — into a timestamped ZIP with a SHA-256 integrity manifest and uploads it to the investigations vault. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
 
 ---
 
