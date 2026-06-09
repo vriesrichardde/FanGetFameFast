@@ -36,7 +36,141 @@ All three modules are live. When more than one module has run against the same c
 
 ---
 
+## How FAN works
+
+You point FAN at a PCAP — either by dropping it into the evidence vault or by passing a path directly — and the script asks for a case ID if you didn't supply one, then opens a running research-notes log that every subsequent step appends to. It starts by extracting the netflow picture (unique IPs, FQDNs, conversations) and then sweeps the capture with its full battery of protocol threat detectors: ARP, DHCP, DNS, HTTP/S, ICMP, LLMNR, mDNS, NBNS, NetBIOS, NTP, QUIC, SNMP, SSDP, STUN, TCP, UDP, and TLS (including certificate inspection and JA4 fingerprinting). On top of the protocol layer it extracts and hashes transferred files, runs a Suricata IDS pass, and sweeps both the raw capture and any carved files with YARA rules. When OpenCTI or Perplexity are configured, the IPs and FQDNs are enriched against external threat intelligence; when they are not, FAN leans on the local vault cache and continues.
+
+From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP with a SHA-256 integrity manifest. The reports and that artifact ZIP are uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop, and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — recorded *before* the ZIP so it travels inside it, and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
+
+---
+
+## How FAST works
+
+You give FAST a disk image in any TSK-compatible format — E01, VMDK, raw, and so on. For EnCase/EWF images it first runs `ewfinfo` and `ewfverify` to confirm integrity, then mounts the image **read-only** (via `ewfmount`, falling back to a network block device for other formats) so the evidence is never altered. With the volume mounted it walks the disk with The Sleuth Kit: `mmls` to map partitions, `fsstat` for filesystem detail, `fls` to list files recursively and emit a timeline bodyfile, and `ils`/`icat` to reach inodes and recover content. It then pulls the artifacts that drive most investigations — Windows event logs (EVTX), registry hives, prefetch, the MFT, the USN journal, SRUM, and browser history — and runs `bulk_extractor` (with foremost, scalpel, and binwalk as fallback carvers) to carve deleted and unallocated data.
+
+As with the other modules, the results are written as Markdown, PDF, a PowerPoint deck, and a Word document; if FAN or FAME reports already exist for the case, a combined cross-module report is produced automatically. The full Claude Code session is preserved as the chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`), then the reports and transcript are bundled into a timestamped ZIP with a SHA-256 manifest; the reports and that ZIP are uploaded to the investigations vault.
+
+---
+
+## How FAME works
+
+You hand FAME a memory image and a case ID (and optionally a hostname), and it first works out whether the image is Windows or Linux. For Windows images it runs the Volatility 3 plugins that matter for triage — process listings and scans (`pslist`, `psscan`, `pstree`, `cmdline`), the network view (`netstat`, `netscan`), injected-code detection (`malfind`), services and drivers (`svcscan`, `modules`, `modscan`), the file-object scan (`filescan`), and registry artifacts (`userassist`, `hivelist`) plus image metadata. When a clean-system baseline is present at `baselines/baseline.json`, Memory Baseliner adds a process/driver/service comparison, and on x86-64 hosts MemProcFS runs as a second, independent analysis pathway. Linux images run their own Volatility plugins (`pslist`, `pstree`, `netstat`, `malfind`, banners) and fall back to strings extraction and YARA scanning when ISF symbols aren't available, so the pipeline still produces results on images Volatility can't fully parse.
+
+The findings become a full report set — Markdown, PDF, a PowerPoint management deck, and a technical Word document. FAME then looks for sibling FAN or FAST reports under the same case ID; when it finds them it generates a combined, cross-module report and embeds the correlation analysis where available. The coordination session is recorded as the same chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`); everything — reports and transcript — is then bundled into a timestamped ZIP with a SHA-256 manifest, and the reports and that ZIP are uploaded to the investigations vault.
+
+---
+
+## Report format
+
+Every investigation produces a single report written in two registers, so one document serves every audience from the boardroom to law enforcement.
+
+The **management summary** is plain language for a CISO, legal team, or law-enforcement reader: it carries the business causality — what happened, when, and what the impact was — and deliberately omits technical identifiers like IPs, ports, and file sizes.
+
+The **technical body** is for the analyst: precise identifiers (workstation names, IP addresses, ports, protocols, payload sizes, malware family names) and scoped conclusions that explicitly name the evidence source they rest on — for example, "no signs of lateral movement were observed *in the PCAP file*."
+
+Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word). At the end of every run, each module bundles its complete artifact set — reports, exhibits, evidence ZIPs, and the chain-of-evidence transcript — into a timestamped ZIP with a SHA-256 integrity manifest and uploads it to the investigations vault. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
+
+---
+
+## Obsidian vault (institutional memory)
+
+The vault at `./vault/` is the platform's long-term memory: a plain-Markdown knowledge graph where TTPs, IOCs, threat actors, malware profiles, risks, and cybersecurity concepts accumulate across every investigation. Because it is just Markdown, it opens directly in Obsidian (or any editor) as a navigable, cross-linked graph — no database, no server, fully portable, and reviewable by a human at any time.
+
+```
+vault/
+├── TTPs/          — One note per MITRE ATT&CK (sub)technique
+├── IOCs/          — One note per indicator (hash, IP, domain, URL, …)
+├── ThreatActors/  — Threat group profiles
+├── Malware/       — Malware family profiles
+├── Concepts/      — Generic cybersecurity concepts
+├── Risks/         — Risk assessments per case/asset
+├── Cases/         — Post-investigation summaries
+├── Templates/     — Note schemas (do not edit manually)
+└── Dashboard.md   — Auto-maintained index
+```
+
+**Why it matters.** The vault is what turns a sequence of one-off investigations into compounding institutional knowledge — the second time an indicator, technique, or malware family appears, the platform already knows what it learned the first time. Concretely, it adds value in four ways:
+
+- **It answers first, so you don't pay for the same lookup twice.** Every investigation consults the vault *before* reaching out to OpenCTI or Perplexity (`vault → Perplexity → record back to vault`). A FAN IP/FQDN lookup that found fresh intel on a prior case reuses the cached note instead of re-querying the network, which keeps investigations fast and works even when external services are offline or unconfigured.
+- **It carries context between cases.** Querying the vault before an investigation surfaces what is already known — that a port was used for C2 in a previous incident, that a hash belongs to a known tool, that an actor has a documented playbook — so the analyst starts with history instead of a blank page.
+- **It preserves conflicting intel instead of overwriting it.** When two cases disagree (e.g., the same port serving different purposes), both entries are kept with their case context, so the knowledge graph reflects reality rather than the most recent write.
+- **It is safe to share and audit.** All IOC values are stored **defanged** (`192[.]168[.]1[.]1`, `evil[.]com`, `hxxps://…`), so the vault can be opened, reviewed, and circulated without risk of accidentally clicking a live malicious indicator. Case notes hold metadata only — never raw evidence.
+
+Query the vault before an investigation:
+
+```bash
+./scripts/vault_context.sh "Cobalt Strike"
+python3 lib/vault_query.py --search powershell
+```
+
+Validate the vault read/write path with the built-in self-tests:
+
+```bash
+python3 lib/obsidian_bridge.py             # write/read/search round-trip
+python3 lib/knowledge_extractor.py --test  # all record types + Dashboard refresh
+```
+
+---
+
+## MCP servers
+
+Model Context Protocol (MCP) servers are how the AI coordinator reaches the outside world under controlled, auditable rules — instead of giving Claude raw shell access to evidence and case storage, each server exposes a small, explicit set of tools with a fixed root directory and a fixed access mode. Three servers are wired in:
+
+| Server | Access | Root |
+|--------|--------|------|
+| `evidence` | Read-only (SSH) | `/home/sansforensics/evidence/` on ubuntudesktop |
+| `investigations` | Read-write | `/home/sansforensics/cases/` on ubuntudesktop |
+| `opencti` | Read-write | Your OpenCTI instance |
+
+- **`evidence` — read-only access to the source material.** This server lets the coordinator list, read, and fingerprint evidence files (and find PCAPs) over SSH, but it is **physically incapable of writing** — the connection is read-only by design. This is the first line of defence for evidence integrity: even if the coordinator were instructed to modify a memory image or disk image, this path cannot do it. Tools: `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`.
+- **`investigations` — read-write access to the case vault.** This is where finalized reports, transcripts, and artifact bundles are stored, organized per case under `/home/sansforensics/cases/<case_id>/reports/`. It is the *only* write path the coordinator has to durable storage, and it independently enforces the write policy — it rejects any write under `/mnt`, `/media`, or the evidence root, and jails every path inside the case root — so a malformed case ID or a path-traversal attempt cannot escape it. Tools: `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`.
+- **`opencti` — structured threat-intelligence exchange.** This server connects the platform to your OpenCTI instance so the coordinator can both *consume* accumulated STIX intelligence (searching entities and indicators) and *contribute* new indicators discovered during an investigation, closing the loop between what is found on the wire/in memory/on disk and your organization's central CTI knowledge base. Tools: `opencti_search_stix`, `opencti_search_ioc`, `opencti_create_indicator`. This server is optional — see [Live threat intel](#live-threat-intel-perplexity) and the [requirements note](#requirements) under Installation.
+
+---
+
+## Live threat intel (Perplexity)
+
+The vault remembers what *this* deployment has already seen, and OpenCTI holds structured intel you've curated — but a live incident routinely turns up something neither knows: a brand-new CVE, a freshly registered domain, a malware family or tool the team hasn't encountered yet. Perplexity fills exactly that gap. It is the platform's **live, web-sourced research layer**: real-time search with citations, so an unknown artifact can be identified during the investigation rather than parked as a TODO for later.
+
+Its value compounds with the rest of the system because it sits in a deliberate pipeline — `vault → Perplexity → record back to vault`. The vault is consulted first; only when it has no answer does Perplexity reach out to the web; and whatever it confirms is written back into the vault as a defanged, cited note. That means **the platform only has to learn each thing once** — the next investigation that meets the same indicator answers instantly from memory, with the citation preserved for the report's chain of evidence. The result is a system that gets smarter over time while still being able to research something it has never seen.
+
+When the vault has no answer for an unknown artifact, CVE, malware family, threat actor, or tool, the platform queries Perplexity for real-time web-sourced intelligence:
+
+```bash
+./scripts/perplexity_search.sh ioc     203.0.113.42
+./scripts/perplexity_search.sh malware "Cobalt Strike"
+./scripts/perplexity_search.sh ttp     T1071.001
+./scripts/perplexity_search.sh cve     CVE-2024-1234
+./scripts/perplexity_search.sh actor   APT29
+./scripts/perplexity_search.sh tool    mimikatz
+
+# Save result to vault automatically
+./scripts/perplexity_search.sh malware "Cobalt Strike" --save-vault
+```
+
+Privacy rule: never include live case hostnames, usernames, or internal IPs in Perplexity queries.
+
+---
+
+## Constraints
+
+These are not style guidelines — they are the rules that make the platform trustworthy in a forensic and legal context. Each one exists for a reason:
+
+- **Evidence is never written to — and that's enforced in code, not by convention.** The platform must never write to `/mnt/`, `/media/`, or any `evidence/` directory, because altering source material would destroy its evidentiary value and break chain of custody. This is guaranteed by `lib/path_guard.py`, the single source of truth for the write policy: every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail with `WritePolicyError` on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). Two independent layers back this up: the `investigations` MCP server separately rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`, and the shell analyze scripts source `scripts/pathguard.sh` to confirm evidence mounts are read-only *before* any analysis runs. Validate the whole allow/deny matrix with `python3 lib/path_guard.py --test`.
+- **Untrusted evidence input is validated before it can reach a dangerous sink.** Evidence is attacker-controlled data, so anything derived from it is treated as hostile until proven safe: a `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` so it cannot traverse out of the case/output root, PDF rendering blocks `file://`/SSRF resource fetches that malicious text in an evidence file might trigger, and the MCP file servers jail every path with `Path.is_relative_to` rather than a string prefix. The full guardrail table is in [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md), and a CycloneDX SBOM of the dependency set is checked in at [sbom.json](sbom.json) (regenerate with `python3 scripts/generate_sbom.py`) so the supply chain is auditable.
+- **Working files live only in `./analysis/`, and that folder is emptied when an investigation completes.** All intermediate, work-in-progress output is confined to one place so it is easy to reason about and clean up; a completed investigation leaves `./analysis/` empty, which is both a tidiness guarantee and a signal that the pipeline ran to the end and the only surviving outputs are the finalized reports.
+- **Finalized reports live in the investigations vault, not in the project directory.** The authoritative copy of every report is stored per case under `/home/sansforensics/cases/<case_id>/reports/` (via the `investigations` MCP server), so deliverables are centralized, durable, and separated from the working code checkout.
+- **Report timestamps use the incident's local timezone; when it's unknown, UTC is used and said so explicitly.** A forensic timeline is only meaningful if the reader knows which clock it's on, so reports are anchored to the timezone where the incident actually happened — and never silently default to UTC, which would misrepresent when events occurred.
+- **All internal processing, vault storage, and log entries use UTC.** While *reports* speak in incident-local time for the reader, the platform's own bookkeeping is kept in a single, unambiguous reference timezone so records from different cases and machines can be ordered and compared without conversion errors.
+- **Every scoped conclusion must name the evidence source it rests on.** Conclusions are written as scoped, sourced statements — e.g. "as observed in the PCAP file" or "as found in the memory dump" — so a reader (or a court) can always see exactly which artifact supports a claim, and an absence of evidence in one source is never overstated as proof across all sources.
+
+---
+
 ## Quick start
+
+There are three ways to drive the platform, all interchangeable. The **script-driven** path runs one module end to end from the shell; the **conversational** path lets Claude act as the agentic coordinator across every artifact at once; and the **VS Code** path is the same conversational experience inside the editor with the Claude extension.
+
+### 1. Script-driven (one module, headless)
 
 ```bash
 # Network forensics
@@ -53,6 +187,141 @@ All three modules are live. When more than one module has run against the same c
 ```
 
 Without `--case-id` the script prompts interactively.
+
+### 2. Conversational — with Claude only (CLI)
+
+Let Claude be the agentic coordinator: it decides which module to run, pivots between them, correlates findings, and generates the reports. Start the Claude Code CLI from the project root and either invoke a skill or just describe the case in plain language.
+
+```bash
+cd ~/FanGetFameFast
+claude            # start an interactive Claude Code session in this repo
+```
+
+Then, inside the session, drive an investigation with a skill or a sentence:
+
+```text
+# Run a single module via its skill (slash command)
+/fan /path/to/capture.pcap --case-id FAN-2025-001
+/fame
+/fast
+
+# Or analyze every evidence file in a directory, in-session
+/investigate-all /home/vscode/evidence
+
+# Or just ask — Claude picks the modules, runs them, and reports
+Investigate the PCAP and memory image in ~/evidence for case FAN-2025-001
+and tell me whether the host was compromised.
+```
+
+For a full end-to-end investigation across all evidence, paste the ready-made coordinator prompt in [Sample prompt to demonstrate its full potential](#sample-prompt-to-demonstrate-its-full-potential) as your first message — it makes the chain-of-evidence and artifact-packaging steps explicit.
+
+### 3. Conversational — in VS Code with the Claude extension
+
+The same conversational experience, inside the editor:
+
+1. Install the **Claude Code** extension from the VS Code Marketplace (search for "Claude Code" / Anthropic) and sign in.
+2. Open the project folder: `File → Open Folder…` → select your `FanGetFameFast` checkout (or run `code ~/FanGetFameFast`).
+3. Open the Claude panel (the Claude icon in the Activity Bar, or the **Claude: Focus** command from the Command Palette).
+4. Drive it exactly as in the CLI path above — type `/fan`, `/fame`, `/fast`, `/investigate-all`, or describe the case in natural language. Skills, MCP servers (`evidence`, `investigations`, `opencti`), and the Obsidian vault all work identically because the extension runs in the same project context.
+
+> **Tip:** the bundled [VS Code Dev Container](#alternative-vs-code-dev-container) ships the full forensic toolchain *and* the Claude Code CLI, so "Reopen in Container" gives you a ready-to-investigate environment with zero local setup.
+
+### 4. Running in Docker
+
+The same container image that powers the Dev Container can be run directly with Docker — no VS Code required. It bundles the full forensic toolchain and the Claude Code CLI, so once the container is up you use any of the three paths above (scripts, Claude CLI, or — if you forward the workspace into VS Code — the extension) from inside it.
+
+```bash
+# 1. Build the image from the devcontainer Dockerfile (build context is the repo root)
+cd ~/FanGetFameFast
+docker build -t fangetfamefast -f .devcontainer/Dockerfile .
+
+# 2. Run it: mount the repo as the workspace and your evidence read-only
+docker run -it --rm \
+  -v "$PWD":/workspaces/FanGetFameFast \
+  -v /path/to/your/evidence:/home/vscode/evidence:ro \
+  -w /workspaces/FanGetFameFast \
+  fangetfamefast bash
+
+# 3. Inside the container, finish provisioning once (Python deps, Suricata,
+#    bulk_extractor, Claude Code CLI — the same step the Dev Container runs)
+bash .devcontainer/post-create.sh
+```
+
+With the shell open inside the container you drive the platform exactly as on a host:
+
+```bash
+# Script-driven
+./scripts/analyze_pcap.sh /home/vscode/evidence/capture.pcap --case-id FAN-2025-001
+
+# Conversational — Claude as coordinator
+claude
+# then: /fan /home/vscode/evidence/capture.pcap --case-id FAN-2025-001
+#       /fame   ·   /fast   ·   /investigate-all /home/vscode/evidence
+```
+
+Notes:
+
+- Evidence is mounted **read-only** (`:ro`) at `/home/vscode/evidence`, matching the Dev Container and the platform's evidence-integrity rule. Point the `-v` source at wherever your images live.
+- Pass API credentials in with `--env-file ~/.soc_env` (or repeat `-e PERPLEXITY_API_KEY=… -e OPENCTI_URL=… -e OPENCTI_API_KEY=…`) if you want the OpenCTI / Perplexity enrichment layer; both are optional.
+- To keep the vault, reports, and analysis output across container restarts, also mount the repo (as shown) or bind-mount `./vault`, `./reports`, and `./analysis` to host paths.
+- Some FAST operations (read-only loopback / NBD mounts of disk images) need extra kernel capabilities; add `--cap-add SYS_ADMIN --device /dev/fuse` (and `--device /dev/nbd0` for VMDK/raw via qemu-nbd) to the `docker run` line when analyzing disk images.
+
+---
+
+## Sample prompt to demonstrate its full potential
+
+There are two ways to drive the platform. The **script-driven** path (see [Quick start](#quick-start)) runs a single module end to end and automatically records the session transcript and packages + uploads the artifact ZIP. The **conversational** path lets Claude act as the coordinator across all the evidence at once — deciding which module to run, pivoting between them, and correlating findings.
+
+For the conversational path, the prompt below is the one that gets the most value out of the solution. It is deliberately explicit about the things that most often make or break an investigation: testing a hypothesis rather than assuming it, examining *every* artifact (screen recordings included), separating correlation from causation, pinning down host attribution and time zones, and producing the full chain-of-evidence output. Fill in the `<…>` placeholders and paste it as your first message.
+
+```text
+You are a senior DFIR investigator using the FanGetFameFast solution
+(FAN network · FAME memory · FAST storage · cross-module correlation).
+Conduct a complete, rigorous investigation.
+
+CASE:  <CASE-ID>   —   <isolated case | part of campaign <ID>>
+INCIDENT LOCATION TIMEZONE:  <e.g. CET>   (if unknown, use UTC and state it)
+
+EVIDENCE — examine ALL of these thoroughly, skip nothing:
+  - <pcap path>
+  - <memory image path>
+  - <disk image path>
+  - <logs, screen recordings / video, images, and any other artifacts>
+
+HYPOTHESIS TO TEST:  <the SOC analyst's theory>.
+Treat this strictly as a hypothesis to CONFIRM OR REFUTE on the evidence —
+do not assume it. Actively try to disprove it. Give me a calibrated confidence
+level and state what single piece of evidence would change your conclusion.
+
+HOW TO WORK:
+1. List/verify available tooling first. Work read-only on copies; never write to evidence.
+2. Examine every artifact, INCLUDING any screen recording / video / image —
+   extract and read frames; do not treat media as opaque.
+3. Log each step to research notes before starting the next (sequential).
+4. Pin down topology and attribution precisely: which host actually did what,
+   NAT vs egress identity, reverse-DNS/PTR, and reconcile all clocks/time zones.
+5. Distinguish CORRELATION from CAUSATION. For any "X caused Y" claim, find the
+   direct connecting evidence; if it is only inferred, say so explicitly and go
+   find the artifact that would prove it.
+6. Query the vault first, Perplexity on a miss, then record confirmed findings
+   back to the vault + OpenCTI. Run cross-module correlation (FAN<->FAME<->FAST).
+7. Compute SHA-256 of every evidence file (chain of custody).
+
+DELIVERABLES:
+  - Management PowerPoint (CISO language, NO technical identifiers).
+  - Technical Word document: precise identifiers; every conclusion scoped and
+    citing its evidence source; an explicit Assumptions section; and an
+    artifact-to-evidence map (what was found where, with confidence).
+  - Record the full coordination session as a chain-of-evidence transcript, then
+    package ALL artifacts into a timestamped ZIP with a SHA-256 manifest and
+    upload to the investigations vault.
+  - Enhance and elaborate when necessary.
+
+End with: your conclusion, the confidence level, and the strongest single
+piece of evidence behind it.
+```
+
+> When you drive an investigation conversationally rather than through the analyze scripts, the explicit "record the session transcript" and "package + upload the artifact ZIP" lines matter — those steps are wired into the scripts but not into an ad-hoc session, so naming them guarantees the chain-of-evidence outputs are produced.
 
 ---
 
@@ -148,195 +417,29 @@ the solution and supply evidence paths manually later.
 
 ### Verify the installation
 
+Pipeline & MCP servers:
+
 ```bash
-./scripts/test_solution.sh                  # end-to-end smoke test
-./scripts/test_mcp_servers.sh               # evidence / investigations / opencti MCP servers
+./scripts/test_solution.sh                  # end-to-end FAN smoke test (auto-generates a test PCAP if none given)
+./scripts/test_mcp_servers.sh               # evidence / investigations / opencti MCP servers reachable
+```
+
+Guardrails & supply chain:
+
+```bash
 python3 lib/path_guard.py --test            # write-path allow/deny matrix (evidence stays read-only)
 python3 scripts/generate_sbom.py --check    # confirm sbom.json matches requirements.txt
 ```
 
----
-
-## How FAN works
-
-You point FAN at a PCAP — either by dropping it into the evidence vault or by passing a path directly — and the script asks for a case ID if you didn't supply one, then opens a running research-notes log that every subsequent step appends to. It starts by extracting the netflow picture (unique IPs, FQDNs, conversations) and then sweeps the capture with its full battery of protocol threat detectors: ARP, DHCP, DNS, HTTP/S, ICMP, LLMNR, mDNS, NBNS, NetBIOS, NTP, QUIC, SNMP, SSDP, STUN, TCP, UDP, and TLS (including certificate inspection and JA4 fingerprinting). On top of the protocol layer it extracts and hashes transferred files, runs a Suricata IDS pass, and sweeps both the raw capture and any carved files with YARA rules. When OpenCTI or Perplexity are configured, the IPs and FQDNs are enriched against external threat intelligence; when they are not, FAN leans on the local vault cache and continues.
-
-From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP with a SHA-256 integrity manifest. The reports and that artifact ZIP are uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop, and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — recorded *before* the ZIP so it travels inside it, and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
-
-## How FAME works
-
-You hand FAME a memory image and a case ID (and optionally a hostname), and it first works out whether the image is Windows or Linux. For Windows images it runs the Volatility 3 plugins that matter for triage — process listings and scans (`pslist`, `psscan`, `pstree`, `cmdline`), the network view (`netstat`, `netscan`), injected-code detection (`malfind`), services and drivers (`svcscan`, `modules`, `modscan`), the file-object scan (`filescan`), and registry artifacts (`userassist`, `hivelist`) plus image metadata. When a clean-system baseline is present at `baselines/baseline.json`, Memory Baseliner adds a process/driver/service comparison, and on x86-64 hosts MemProcFS runs as a second, independent analysis pathway. Linux images run their own Volatility plugins (`pslist`, `pstree`, `netstat`, `malfind`, banners) and fall back to strings extraction and YARA scanning when ISF symbols aren't available, so the pipeline still produces results on images Volatility can't fully parse.
-
-The findings become a full report set — Markdown, PDF, a PowerPoint management deck, and a technical Word document. FAME then looks for sibling FAN or FAST reports under the same case ID; when it finds them it generates a combined, cross-module report and embeds the correlation analysis where available. The coordination session is recorded as the same chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`); everything — reports and transcript — is then bundled into a timestamped ZIP with a SHA-256 manifest, and the reports and that ZIP are uploaded to the investigations vault.
-
-## How FAST works
-
-You give FAST a disk image in any TSK-compatible format — E01, VMDK, raw, and so on. For EnCase/EWF images it first runs `ewfinfo` and `ewfverify` to confirm integrity, then mounts the image **read-only** (via `ewfmount`, falling back to a network block device for other formats) so the evidence is never altered. With the volume mounted it walks the disk with The Sleuth Kit: `mmls` to map partitions, `fsstat` for filesystem detail, `fls` to list files recursively and emit a timeline bodyfile, and `ils`/`icat` to reach inodes and recover content. It then pulls the artifacts that drive most investigations — Windows event logs (EVTX), registry hives, prefetch, the MFT, the USN journal, SRUM, and browser history — and runs `bulk_extractor` (with foremost, scalpel, and binwalk as fallback carvers) to carve deleted and unallocated data.
-
-As with the other modules, the results are written as Markdown, PDF, a PowerPoint deck, and a Word document; if FAN or FAME reports already exist for the case, a combined cross-module report is produced automatically. The full Claude Code session is preserved as the chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`), then the reports and transcript are bundled into a timestamped ZIP with a SHA-256 manifest; the reports and that ZIP are uploaded to the investigations vault.
-
----
-
-## Report format
-
-Every investigation produces a single report written in two registers, so one document serves every audience from the boardroom to law enforcement.
-
-The **management summary** is plain language for a CISO, legal team, or law-enforcement reader: it carries the business causality — what happened, when, and what the impact was — and deliberately omits technical identifiers like IPs, ports, and file sizes.
-
-The **technical body** is for the analyst: precise identifiers (workstation names, IP addresses, ports, protocols, payload sizes, malware family names) and scoped conclusions that explicitly name the evidence source they rest on — for example, "no signs of lateral movement were observed *in the PCAP file*."
-
-Reports are produced as Markdown, PDF, PPTX (Microsoft PowerPoint), and DOCX (Microsoft Word). At the end of every run, each module bundles its complete artifact set — reports, exhibits, evidence ZIPs, and the chain-of-evidence transcript — into a timestamped ZIP with a SHA-256 integrity manifest and uploads it to the investigations vault. When more than one module has run against the same case ID, a combined cross-module report is generated in all four formats — with the cross-module correlation woven in — so the network, memory, and disk findings read as one narrative rather than three separate documents.
-
----
-
-## Conducting an investigation
-
-There are two ways to drive the platform. The **script-driven** path (see [Quick start](#quick-start)) runs a single module end to end and automatically records the session transcript and packages + uploads the artifact ZIP. The **conversational** path lets Claude act as the coordinator across all the evidence at once — deciding which module to run, pivoting between them, and correlating findings.
-
-For the conversational path, the prompt below is the one that gets the most value out of the solution. It is deliberately explicit about the things that most often make or break an investigation: testing a hypothesis rather than assuming it, examining *every* artifact (screen recordings included), separating correlation from causation, pinning down host attribution and time zones, and producing the full chain-of-evidence output. Fill in the `<…>` placeholders and paste it as your first message.
-
-```text
-You are a senior DFIR investigator using the FanGetFameFast solution
-(FAN network · FAME memory · FAST storage · cross-module correlation).
-Conduct a complete, rigorous investigation.
-
-CASE:  <CASE-ID>   —   <isolated case | part of campaign <ID>>
-INCIDENT LOCATION TIMEZONE:  <e.g. CET>   (if unknown, use UTC and state it)
-
-EVIDENCE — examine ALL of these thoroughly, skip nothing:
-  - <pcap path>
-  - <memory image path>
-  - <disk image path>
-  - <logs, screen recordings / video, images, and any other artifacts>
-
-HYPOTHESIS TO TEST:  <the SOC analyst's theory>.
-Treat this strictly as a hypothesis to CONFIRM OR REFUTE on the evidence —
-do not assume it. Actively try to disprove it. Give me a calibrated confidence
-level and state what single piece of evidence would change your conclusion.
-
-HOW TO WORK:
-1. List/verify available tooling first. Work read-only on copies; never write to evidence.
-2. Examine every artifact, INCLUDING any screen recording / video / image —
-   extract and read frames; do not treat media as opaque.
-3. Log each step to research notes before starting the next (sequential).
-4. Pin down topology and attribution precisely: which host actually did what,
-   NAT vs egress identity, reverse-DNS/PTR, and reconcile all clocks/time zones.
-5. Distinguish CORRELATION from CAUSATION. For any "X caused Y" claim, find the
-   direct connecting evidence; if it is only inferred, say so explicitly and go
-   find the artifact that would prove it.
-6. Query the vault first, Perplexity on a miss, then record confirmed findings
-   back to the vault + OpenCTI. Run cross-module correlation (FAN<->FAME<->FAST).
-7. Compute SHA-256 of every evidence file (chain of custody).
-
-DELIVERABLES:
-  - Management PowerPoint (CISO language, NO technical identifiers).
-  - Technical Word document: precise identifiers; every conclusion scoped and
-    citing its evidence source; an explicit Assumptions section; and an
-    artifact-to-evidence map (what was found where, with confidence).
-  - Record the full coordination session as a chain-of-evidence transcript, then
-    package ALL artifacts into a timestamped ZIP with a SHA-256 manifest and
-    upload to the investigations vault.
-  - Enhance and elaborate when necessary.
-
-End with: your conclusion, the confidence level, and the strongest single
-piece of evidence behind it.
-```
-
-> When you drive an investigation conversationally rather than through the analyze scripts, the explicit "record the session transcript" and "package + upload the artifact ZIP" lines matter — those steps are wired into the scripts but not into an ad-hoc session, so naming them guarantees the chain-of-evidence outputs are produced.
-
----
-
-## Obsidian vault (institutional memory)
-
-The vault at `./vault/` is the platform's long-term memory: a plain-Markdown knowledge graph where TTPs, IOCs, threat actors, malware profiles, risks, and cybersecurity concepts accumulate across every investigation. Because it is just Markdown, it opens directly in Obsidian (or any editor) as a navigable, cross-linked graph — no database, no server, fully portable, and reviewable by a human at any time.
-
-```
-vault/
-├── TTPs/          — One note per MITRE ATT&CK (sub)technique
-├── IOCs/          — One note per indicator (hash, IP, domain, URL, …)
-├── ThreatActors/  — Threat group profiles
-├── Malware/       — Malware family profiles
-├── Concepts/      — Generic cybersecurity concepts
-├── Risks/         — Risk assessments per case/asset
-├── Cases/         — Post-investigation summaries
-├── Templates/     — Note schemas (do not edit manually)
-└── Dashboard.md   — Auto-maintained index
-```
-
-**Why it matters.** The vault is what turns a sequence of one-off investigations into compounding institutional knowledge — the second time an indicator, technique, or malware family appears, the platform already knows what it learned the first time. Concretely, it adds value in four ways:
-
-- **It answers first, so you don't pay for the same lookup twice.** Every investigation consults the vault *before* reaching out to OpenCTI or Perplexity (`vault → Perplexity → record back to vault`). A FAN IP/FQDN lookup that found fresh intel on a prior case reuses the cached note instead of re-querying the network, which keeps investigations fast and works even when external services are offline or unconfigured.
-- **It carries context between cases.** Querying the vault before an investigation surfaces what is already known — that a port was used for C2 in a previous incident, that a hash belongs to a known tool, that an actor has a documented playbook — so the analyst starts with history instead of a blank page.
-- **It preserves conflicting intel instead of overwriting it.** When two cases disagree (e.g., the same port serving different purposes), both entries are kept with their case context, so the knowledge graph reflects reality rather than the most recent write.
-- **It is safe to share and audit.** All IOC values are stored **defanged** (`192[.]168[.]1[.]1`, `evil[.]com`, `hxxps://…`), so the vault can be opened, reviewed, and circulated without risk of accidentally clicking a live malicious indicator. Case notes hold metadata only — never raw evidence.
-
-Query the vault before an investigation:
+Obsidian vault read/write path:
 
 ```bash
-./scripts/vault_context.sh "Cobalt Strike"
-python3 lib/vault_query.py --search powershell
+python3 lib/obsidian_bridge.py              # vault write/read/search round-trip
+python3 lib/knowledge_extractor.py --test   # all record types + Dashboard refresh
+python3 lib/vault_query.py --search powershell   # read-path query
 ```
 
-Validate the vault read/write path with the built-in self-tests:
-
-```bash
-python3 lib/obsidian_bridge.py             # write/read/search round-trip
-python3 lib/knowledge_extractor.py --test  # all record types + Dashboard refresh
-```
-
----
-
-## MCP servers
-
-Model Context Protocol (MCP) servers are how the AI coordinator reaches the outside world under controlled, auditable rules — instead of giving Claude raw shell access to evidence and case storage, each server exposes a small, explicit set of tools with a fixed root directory and a fixed access mode. Three servers are wired in:
-
-| Server | Access | Root |
-|--------|--------|------|
-| `evidence` | Read-only (SSH) | `/home/sansforensics/evidence/` on ubuntudesktop |
-| `investigations` | Read-write | `/home/sansforensics/cases/` on ubuntudesktop |
-| `opencti` | Read-write | Your OpenCTI instance |
-
-- **`evidence` — read-only access to the source material.** This server lets the coordinator list, read, and fingerprint evidence files (and find PCAPs) over SSH, but it is **physically incapable of writing** — the connection is read-only by design. This is the first line of defence for evidence integrity: even if the coordinator were instructed to modify a memory image or disk image, this path cannot do it. Tools: `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`.
-- **`investigations` — read-write access to the case vault.** This is where finalized reports, transcripts, and artifact bundles are stored, organized per case under `/home/sansforensics/cases/<case_id>/reports/`. It is the *only* write path the coordinator has to durable storage, and it independently enforces the write policy — it rejects any write under `/mnt`, `/media`, or the evidence root, and jails every path inside the case root — so a malformed case ID or a path-traversal attempt cannot escape it. Tools: `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`.
-- **`opencti` — structured threat-intelligence exchange.** This server connects the platform to your OpenCTI instance so the coordinator can both *consume* accumulated STIX intelligence (searching entities and indicators) and *contribute* new indicators discovered during an investigation, closing the loop between what is found on the wire/in memory/on disk and your organization's central CTI knowledge base. Tools: `opencti_search_stix`, `opencti_search_ioc`, `opencti_create_indicator`. This server is optional — see [Live threat intel](#live-threat-intel-perplexity) and the requirements note above.
-
----
-
-## Live threat intel (Perplexity)
-
-The vault remembers what *this* deployment has already seen, and OpenCTI holds structured intel you've curated — but a live incident routinely turns up something neither knows: a brand-new CVE, a freshly registered domain, a malware family or tool the team hasn't encountered yet. Perplexity fills exactly that gap. It is the platform's **live, web-sourced research layer**: real-time search with citations, so an unknown artifact can be identified during the investigation rather than parked as a TODO for later.
-
-Its value compounds with the rest of the system because it sits in a deliberate pipeline — `vault → Perplexity → record back to vault`. The vault is consulted first; only when it has no answer does Perplexity reach out to the web; and whatever it confirms is written back into the vault as a defanged, cited note. That means **the platform only has to learn each thing once** — the next investigation that meets the same indicator answers instantly from memory, with the citation preserved for the report's chain of evidence. The result is a system that gets smarter over time while still being able to research something it has never seen.
-
-When the vault has no answer for an unknown artifact, CVE, malware family, threat actor, or tool, the platform queries Perplexity for real-time web-sourced intelligence:
-
-```bash
-./scripts/perplexity_search.sh ioc     203.0.113.42
-./scripts/perplexity_search.sh malware "Cobalt Strike"
-./scripts/perplexity_search.sh ttp     T1071.001
-./scripts/perplexity_search.sh cve     CVE-2024-1234
-./scripts/perplexity_search.sh actor   APT29
-./scripts/perplexity_search.sh tool    mimikatz
-
-# Save result to vault automatically
-./scripts/perplexity_search.sh malware "Cobalt Strike" --save-vault
-```
-
-Privacy rule: never include live case hostnames, usernames, or internal IPs in Perplexity queries.
-
----
-
-## Constraints
-
-These are not style guidelines — they are the rules that make the platform trustworthy in a forensic and legal context. Each one exists for a reason:
-
-- **Evidence is never written to — and that's enforced in code, not by convention.** The platform must never write to `/mnt/`, `/media/`, or any `evidence/` directory, because altering source material would destroy its evidentiary value and break chain of custody. This is guaranteed by `lib/path_guard.py`, the single source of truth for the write policy: every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail with `WritePolicyError` on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). Two independent layers back this up: the `investigations` MCP server separately rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`, and the shell analyze scripts source `scripts/pathguard.sh` to confirm evidence mounts are read-only *before* any analysis runs. Validate the whole allow/deny matrix with `python3 lib/path_guard.py --test`.
-- **Untrusted evidence input is validated before it can reach a dangerous sink.** Evidence is attacker-controlled data, so anything derived from it is treated as hostile until proven safe: a `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` so it cannot traverse out of the case/output root, PDF rendering blocks `file://`/SSRF resource fetches that malicious text in an evidence file might trigger, and the MCP file servers jail every path with `Path.is_relative_to` rather than a string prefix. The full guardrail table is in [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md), and a CycloneDX SBOM of the dependency set is checked in at [sbom.json](sbom.json) (regenerate with `python3 scripts/generate_sbom.py`) so the supply chain is auditable.
-- **Working files live only in `./analysis/`, and that folder is emptied when an investigation completes.** All intermediate, work-in-progress output is confined to one place so it is easy to reason about and clean up; a completed investigation leaves `./analysis/` empty, which is both a tidiness guarantee and a signal that the pipeline ran to the end and the only surviving outputs are the finalized reports.
-- **Finalized reports live in the investigations vault, not in the project directory.** The authoritative copy of every report is stored per case under `/home/sansforensics/cases/<case_id>/reports/` (via the `investigations` MCP server), so deliverables are centralized, durable, and separated from the working code checkout.
-- **Report timestamps use the incident's local timezone; when it's unknown, UTC is used and said so explicitly.** A forensic timeline is only meaningful if the reader knows which clock it's on, so reports are anchored to the timezone where the incident actually happened — and never silently default to UTC, which would misrepresent when events occurred.
-- **All internal processing, vault storage, and log entries use UTC.** While *reports* speak in incident-local time for the reader, the platform's own bookkeeping is kept in a single, unambiguous reference timezone so records from different cases and machines can be ordered and compared without conversion errors.
-- **Every scoped conclusion must name the evidence source it rests on.** Conclusions are written as scoped, sourced statements — e.g. "as observed in the PCAP file" or "as found in the memory dump" — so a reader (or a court) can always see exactly which artifact supports a claim, and an absence of evidence in one source is never overstated as proof across all sources.
+A clean install passes every check above. `test_solution.sh` needs no API keys and skips vault writes; `test_mcp_servers.sh` accepts `--evidence-only` / `--investigations-only` / `--opencti-only` to check a single server (the `opencti` check is expected to fail until `OPENCTI_URL` / `OPENCTI_API_KEY` are set, since that server is optional).
 
 ---
 
