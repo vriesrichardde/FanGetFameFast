@@ -469,8 +469,9 @@ mkdir -p "$CASE_DIR" "$DOCS_DIR" "$CASE_ROOT/raw"
 export FGFF_CASE_DIR="$CASE_ROOT"   # record/package write to CASE_ROOT/documents/
 EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 echo "[fame] Preserving analysis artifacts → $EVIDENCE_DIR ..."
-mkdir -p "$EVIDENCE_DIR/memory"
-rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/memory/" 2>/dev/null || true
+mkdir -p "$EVIDENCE_DIR/memory" "$EVIDENCE_DIR/exports"
+rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/memory/"  2>/dev/null || true
+rsync -a "$EXPORTS_DIR/"  "$EVIDENCE_DIR/exports/" 2>/dev/null || true
 
 for artifact_file in \
     "$EVIDENCE_DIR/memory/pslist.txt" \
@@ -610,6 +611,14 @@ fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$MEMORY_IMAGE"
 source "$PROJECT_ROOT/scripts/package_artifacts.sh"
 fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" \
     "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Clean up local artifacts ───────────────────────────────────────────────────
+# Mirrors fast_analyze.sh: WIP under analysis/ and exports/ is preserved above
+# (rsync'd into the per-case evidence folder), then wiped so it doesn't
+# accumulate at the repo root between runs.
+echo "[fame] Cleaning up local artifacts (preserved in case evidence folder)..."
+rm -rf "${ANALYSIS_DIR:?}"/* "${EXPORTS_DIR:?}"/* 2>/dev/null || true
+echo "[fame] Local cleanup complete."
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
