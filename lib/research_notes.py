@@ -34,13 +34,19 @@ _PLACEHOLDER = "<!-- summary-placeholder -->"
 # ---------------------------------------------------------------------------
 
 def _notes_path(case_id: str, output_dir: str | None, case_dir: str | None = None) -> Path:
+    """Resolve the research-notes file path.
+
+    - If *case_dir* is provided, it is treated as the directory that will contain
+      `<case_id>_research_notes.md` (often a module directory like `.../FAME/<host>/`).
+    - Else if *output_dir* is provided, it is treated as that containing directory.
+    - Else defaults to `./reports/<case_id>/`.
+    """
     if case_dir:
         d = Path(case_dir)
     elif output_dir:
         d = Path(output_dir)
     else:
-        d = REPORTS_DIR / case_id  # new default: per-case subdirectory
-    d.mkdir(parents=True, exist_ok=True)
+        d = REPORTS_DIR / case_id  # default: per-case subdirectory
     return d / f"{case_id}_research_notes.md"
 
 
