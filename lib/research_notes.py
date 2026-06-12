@@ -449,6 +449,41 @@ def cmd_event(args: argparse.Namespace) -> None:
     print(f"[research_notes] Event {event_num} [{event_id}] [{severity}] appended: {args.description[:60]} — {ts_label}")
 
 
+def cmd_followup(args: argparse.Namespace) -> None:
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
+    if not path.exists():
+        print(
+            f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    text = path.read_text(encoding="utf-8")
+    if "## Follow-up Questions" not in text:
+        text += "\n## Follow-up Questions\n\n"
+        path.write_text(text, encoding="utf-8")
+
+    output_files = getattr(args, "output_file", None) or []
+    outputs_block = ""
+    if output_files:
+        outputs_block = "\n| **Output file(s)** | " + ", ".join(f"`{f}`" for f in output_files) + " |"
+
+    entry = (
+        f"### [{_now_utc()}] — Follow-up\n\n"
+        "| | |\n"
+        "|---|---|\n"
+        f"| **Question** | {args.question} |\n"
+        f"| **Answer / action** | {args.answer_summary} |"
+        f"{outputs_block}\n\n"
+        "---\n\n"
+    )
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(entry)
+
+    print(f"[research_notes] Follow-up appended: {args.question[:60]}")
+
+
 def cmd_finalize(args: argparse.Namespace) -> None:
     path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
@@ -509,6 +544,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
     pa.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
+    # followup — post-report analyst question, logged for chain of custody
+    pu = sub.add_parser("followup", help="Log a post-report follow-up question and its answer/output")
+    pu.add_argument("--case-id",         required=True, metavar="ID",   help="Case ID")
+    pu.add_argument("--question",        required=True, metavar="TEXT", help="The analyst's follow-up question")
+    pu.add_argument("--answer-summary",  required=True, metavar="TEXT", help="Summary of the action taken / answer given")
+    pu.add_argument("--output-file",     action="append", metavar="PATH",
+                    help="Path to a new/changed output file produced for this question (repeatable)")
+    pu.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pu.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
+
     # finalize
     pf = sub.add_parser("finalize", help="Insert investigation summary and mark complete")
     pf.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
@@ -553,4 +598,5 @@ if __name__ == "__main__":
         "reflect":    cmd_reflect,
         "finalize":   cmd_finalize,
         "event":      cmd_event,
+        "followup":   cmd_followup,
     }[args.command](args)

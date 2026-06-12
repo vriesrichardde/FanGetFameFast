@@ -50,6 +50,7 @@ try:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -65,6 +66,7 @@ except ModuleNotFoundError:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -412,67 +414,9 @@ def _build_fast_hallucination_guard_section(
 
 
 def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
-    steps  = _parse_research_steps(case_id, str(reports_dir))
-    events = _parse_research_events(case_id, str(reports_dir))
-    if not steps and not events:
+    lines = report_sections.build_evidence_trail_section(case_id, reports_dir, include_dismissed=True)
+    if not lines:
         return []
-
-    lines: list[str] = [
-        "---", "",
-        "## Appendix B — Investigation Evidence Trail", "",
-    ]
-
-    # Attacker timeline — events sorted by evidence timestamp
-    if events:
-        def _ev_sort(ev: dict) -> tuple:
-            ts = ev.get("timestamp", "")
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
-                    return (0, dt.replace(tzinfo=timezone.utc))
-                except ValueError:
-                    pass
-            from datetime import datetime, timezone
-            return (1, datetime.min.replace(tzinfo=timezone.utc))
-
-        sorted_events = sorted(events, key=_ev_sort)
-        lines += [
-            "### Attacker Timeline", "",
-            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
-            "| Timestamp (UTC) | Severity | Event | Source |",
-            "|-----------------|----------|-------|--------|",
-        ]
-        for ev in sorted_events:
-            ts   = ev.get("timestamp", "") or "—"
-            sev  = ev.get("severity", "info").upper()
-            desc = ev.get("description", "")[:160].replace("|", "\\|")
-            if len(ev.get("description", "")) > 160:
-                desc += "…"
-            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
-            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
-        lines += ["", ""]
-
-    # Analysis timeline — analyst investigation steps
-    if steps:
-        lines += [
-            "### Analysis Timeline", "",
-            "Steps recorded in the research notes during this investigation. "
-            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
-            "| Step ID | Timestamp | Analysis Step | Outcome | Dismissed |",
-            "|---------|-----------|---------------|---------|-----------|",
-        ]
-        for s in steps:
-            sid = f"`{s['id']}`" if s["id"] else "—"
-            outcome   = s["outcome"].replace("|", "\\|")
-            dismissed = (s.get("dismissed") or "—").replace("|", "\\|")
-            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} | {dismissed} |")
-        lines += [
-            "",
-            "*Cross-reference step IDs with the research notes and preserved artifacts "
-            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
-            "",
-    ]
 
     reflections = _parse_research_reflections(case_id, str(reports_dir))
     if reflections:
@@ -815,70 +759,43 @@ def _build_recyclebin_section(data: dict[str, Any], case_id: str) -> list[str]:
     return lines
 
 
-def _build_ioc_reference_section(data: dict[str, Any]) -> list[str]:
+# IOC Reference categories — used to derive the canonical "category" column
+# from iocs.json's per-indicator "category" (an indicator-type label, e.g. "ip").
+_IOC_REFERENCE_CATEGORIES: list[tuple[str, list[str]]] = [
+    ("Network Indicators",      ["ip", "mac", "domain", "url", "fqdn"]),
+    ("User Identifiers",        ["username", "fullname", "email", "sid"]),
+    ("File System Indicators",  ["filepath", "deleted_filepath", "hash", "filename"]),
+    ("Persistence Indicators",  ["registry_key", "scheduled_task", "service"]),
+    ("Suspicious Applications", ["suspicious_app"]),
+]
+
+
+def _iocs_reference_to_canonical(data: dict[str, Any]) -> list[dict]:
     """
-    Build the 'IOC Reference' section from iocs.json.
-    Presents categorised IOCs with source citations linking back to research note steps.
+    Map iocs.json entries ({category, value/raw_value, confidence, source_step})
+    to the canonical IOC schema shared with FAN/FAME via report_sections.build_ioc_section.
     """
     iocs = data.get("iocs_reference")
     if not iocs:
         return []
 
-    lines: list[str] = ["---", "", "## IOC Reference", ""]
-    a = lines.append
-
-    a("> Consolidated indicators of compromise discovered during this investigation.")
-    a("> All values are defanged. The **Source** column references the pipeline step or")
-    a("> research note (RN-NNN) where the indicator was first observed.")
-    a("> Cross-reference with the Appendix B evidence trail for full context.")
-    a("")
-
-    categories: list[tuple[str, list[str]]] = [
-        ("Network Indicators",      ["ip", "mac", "domain", "url", "fqdn"]),
-        ("User Identifiers",        ["username", "fullname", "email", "sid"]),
-        ("File System Indicators",  ["filepath", "deleted_filepath", "hash", "filename"]),
-        ("Persistence Indicators",  ["registry_key", "scheduled_task", "service"]),
-        ("Suspicious Applications", ["suspicious_app"]),
-    ]
-
-    rendered_indices: set[int] = set()
-
-    for cat_title, cat_types in categories:
-        cat_iocs = [
-            (i, ioc) for i, ioc in enumerate(iocs)
-            if (ioc.get("category") or "").lower() in cat_types
-        ]
-        if not cat_iocs:
-            continue
-
-        a(f"### {cat_title}")
-        a("")
-        a("| Value | Confidence | Source |")
-        a("|-------|------------|--------|")
-        for idx, ioc in cat_iocs:
-            val  = ioc.get("value") or ioc.get("raw_value") or "—"
-            conf = ioc.get("confidence") or "CONFIRMED"
-            step = ioc.get("source_step") or "—"
-            a(f"| `{val}` | {conf} | {step} |")
-            rendered_indices.add(idx)
-        a("")
-
-    # Catch any uncategorised IOCs not matched above
-    uncategorised = [(i, ioc) for i, ioc in enumerate(iocs) if i not in rendered_indices]
-    if uncategorised:
-        a("### Other Indicators")
-        a("")
-        a("| Category | Value | Confidence | Source |")
-        a("|----------|-------|------------|--------|")
-        for _, ioc in uncategorised:
-            cat  = ioc.get("category") or "—"
-            val  = ioc.get("value") or ioc.get("raw_value") or "—"
-            conf = ioc.get("confidence") or "CONFIRMED"
-            step = ioc.get("source_step") or "—"
-            a(f"| {cat} | `{val}` | {conf} | {step} |")
-        a("")
-
-    return lines
+    out: list[dict] = []
+    for ioc in iocs:
+        raw_type = (ioc.get("category") or "").lower()
+        category = "Other Indicators"
+        for cat_title, cat_types in _IOC_REFERENCE_CATEGORIES:
+            if raw_type in cat_types:
+                category = cat_title
+                break
+        out.append({
+            "type": raw_type or "indicator",
+            "value": ioc.get("value") or ioc.get("raw_value") or "—",
+            "severity": "info",
+            "category": category,
+            "source": ioc.get("source_step") or "—",
+            "confidence": ioc.get("confidence") or "CONFIRMED",
+        })
+    return out
 
 
 def _build_markdown(
@@ -1196,57 +1113,28 @@ def _build_markdown(
         a("")
 
     # ── MITRE ATT&CK ─────────────────────────────────────────────────────────
-    a("---")
-    a("")
-    a("## 16. MITRE ATT&CK coverage")
-    a("")
-    a("> Claude: enhance and elaborate when necessary — add sub-technique context")
-    a("> and procedural examples observed in this investigation.")
-    a("")
     techniques = _derive_techniques(data)
-    if techniques:
-        a("| Technique | Name | Tactic | Observation |")
-        a("|-----------|------|--------|-------------|")
-        for tid, name, tactic, obs in techniques:
-            url = f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/"
-            a(f"| [{tid}]({url}) | {name} | {tactic} | {obs} |")
-    else:
-        a("No MITRE ATT&CK techniques mapped — insufficient evidence for attribution.")
-    a("")
-
-    # ── IOC Reference (from iocs.json) ───────────────────────────────────────
-    lines.extend(_build_ioc_reference_section(data))
-
-    # ── IOCs (bulk_extractor carves + legacy) ─────────────────────────────────
+    technique_dicts = [
+        {"id": tid, "name": name, "tactic": tactic, "observation": obs}
+        for tid, name, tactic, obs in techniques
+    ]
     a("---")
     a("")
-    a("## 17. Carved Indicators of Compromise")
-    a("")
-    a("> Claude: enhance and elaborate when necessary — defang all IOC values and add")
-    a("> OSINT context or OpenCTI attribution where available.")
-    a("")
-    iocs = _extract_iocs(data)
-    if iocs:
-        a("| Type | Value | Severity | Context |")
-        a("|------|-------|----------|---------|")
-        for ioc in iocs:
-            a(f"| {ioc['type']} | `{ioc['value']}` | {ioc['severity']} | {ioc['context']} |")
-    else:
-        a("No malicious indicators of compromise identified from storage analysis.")
-    a("")
+    a("\n".join(report_sections.build_mitre_section(
+        technique_dicts, heading="MITRE ATT&CK Coverage", section_num="16",
+        show_severity=False,
+        empty_message="No MITRE ATT&CK techniques mapped — insufficient evidence for attribution.")))
+
+    # ── Indicators of Compromise (iocs.json + bulk_extractor carves) ──────────
+    merged_iocs = _iocs_reference_to_canonical(data) + _extract_iocs(data)
+    a("\n".join(report_sections.build_ioc_section(
+        merged_iocs, heading="Indicators of Compromise", section_num="17",
+        empty_message="No malicious indicators of compromise identified from storage analysis.")))
 
     # ── Recommendations ───────────────────────────────────────────────────────
-    a("---")
-    a("")
-    a("## 18. Recommendations")
-    a("")
-    a("> Claude: enhance and elaborate when necessary — prioritise by risk and add")
-    a("> implementation detail appropriate to the target environment.")
-    a("")
     recs = _build_recommendations(data)
-    for i, rec in enumerate(recs, 1):
-        a(f"{i}. {rec}")
-    a("")
+    a("\n".join(report_sections.build_recommendations_section(
+        recs, heading="Recommendations", section_num="18", numbered=True)))
 
     # ── Appendix ──────────────────────────────────────────────────────────────
     a("---")
@@ -1324,7 +1212,9 @@ def _extract_iocs(data: dict[str, Any]) -> list[dict]:
             iocs.append({
                 "type": "File",
                 "value": f"./exports/carved/{cf}",
-                "severity": "Medium",
+                "severity": report_sections.normalize_severity("Medium"),
+                "category": "Carved Artifact",
+                "source": "bulk_extractor",
                 "context": "bulk_extractor URL feature file — review for C2 or exfiltration endpoints",
             })
             break
@@ -1332,7 +1222,9 @@ def _extract_iocs(data: dict[str, Any]) -> list[dict]:
             iocs.append({
                 "type": "File",
                 "value": f"./exports/carved/{cf}",
-                "severity": "Medium",
+                "severity": report_sections.normalize_severity("Medium"),
+                "category": "Carved Artifact",
+                "source": "bulk_extractor",
                 "context": "bulk_extractor domain feature file — cross-reference with FAN DNS findings",
             })
             break

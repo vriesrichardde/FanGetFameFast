@@ -45,6 +45,7 @@ from typing import Any
 
 try:
     from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -56,6 +57,7 @@ except ModuleNotFoundError:
     # rather than run as a script — put lib/ on the path for the sibling import.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from research_notes import parse_steps as _parse_research_steps, parse_events as _parse_research_events
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -67,14 +69,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"
 REPORTS_DIR  = PROJECT_ROOT / "reports"
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-SEVERITY_BADGE = {
-    "critical": "**[CRITICAL]**",
-    "high":     "**[HIGH]**",
-    "medium":   "[MEDIUM]",
-    "low":      "[LOW]",
-    "info":     "[INFO]",
-}
+# Severity normalization/badges and the generic table helper now live in
+# report_sections.py (shared with FAME/FAST) — kept as local aliases here to
+# avoid touching the ~40 existing call sites in this file.
+SEVERITY_ORDER = report_sections.SEVERITY_ORDER
+SEVERITY_BADGE = report_sections.SEVERITY_BADGE
 
 MAX_TIMELINE_ROWS = 150   # cap on timeline events
 
@@ -1451,12 +1450,7 @@ def build_recommendations(data: dict, overall_sev: str) -> list[str]:
 
 # ── Report sections ────────────────────────────────────────────────────────────
 
-def _md_table(headers: list[str], rows: list[list[str]]) -> list[str]:
-    lines = ["| " + " | ".join(headers) + " |"]
-    lines.append("|" + "|".join([" --- " for _ in headers]) + "|")
-    for row in rows:
-        lines.append("| " + " | ".join(str(c) for c in row) + " |")
-    return lines
+_md_table = report_sections.md_table
 
 
 def sec_header(stem: str, case_id: str, overall_sev: str, now: str,
@@ -2460,51 +2454,6 @@ def sec_timeline(timeline: list[dict]) -> list[str]:
         ["Timestamp (UTC)", "Protocol", "Event Type", "Severity", "Source", "Destination", "Description"],
         rows
     )
-    lines += ["", "---", ""]
-    return lines
-
-
-def sec_iocs(iocs: list[dict]) -> list[str]:
-    lines = ["## 4. Indicators of Compromise", ""]
-
-    if not iocs:
-        lines += ["No indicators of compromise extracted.", "", "---", ""]
-        return lines
-
-    lines.append(f"*{len(iocs)} unique indicator(s) extracted from all analysis outputs.*")
-    lines.append("")
-
-    rows = [[SEVERITY_BADGE.get(i["severity"], i["severity"]),
-             i["type"], f"`{i['value']}`", i["category"], i["source"]]
-            for i in iocs]
-    lines += _md_table(["Severity", "Type", "Value", "Category", "Source"], rows)
-    lines += ["", "---", ""]
-    return lines
-
-
-def sec_mitre(coverage: list[dict]) -> list[str]:
-    lines = ["## 5. MITRE ATT&CK Coverage", ""]
-
-    if not coverage:
-        lines += ["No MITRE ATT&CK techniques observed.", "", "---", ""]
-        return lines
-
-    rows = [[
-        f"[{t['id']}](https://attack.mitre.org/techniques/{t['id'].replace('.', '/')}/ )",
-        t["name"],
-        t["tactic"],
-        SEVERITY_BADGE.get(t["severity"], t["severity"]),
-        t["category"],
-    ] for t in coverage]
-    lines += _md_table(["Technique", "Name", "Tactic", "Severity", "Triggered By"], rows)
-    lines += ["", "---", ""]
-    return lines
-
-
-def sec_recommendations(recs: list[str]) -> list[str]:
-    lines = ["## 6. Recommendations", ""]
-    for r in recs:
-        lines.append(f"- {r}")
     lines += ["", "---", ""]
     return lines
 
@@ -3588,74 +3537,6 @@ def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Pa
     return section_md.splitlines()
 
 
-# ── Evidence trail ────────────────────────────────────────────────────────────
-
-def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
-    if not case_id:
-        return []
-    steps  = _parse_research_steps(case_id, str(reports_dir))
-    events = _parse_research_events(case_id, str(reports_dir))
-    if not steps and not events:
-        return []
-
-    lines: list[str] = [
-        "---", "",
-        "## Appendix B — Investigation Evidence Trail", "",
-    ]
-
-    # Attacker timeline — events sorted by evidence timestamp
-    if events:
-        def _ev_sort(ev: dict) -> tuple:
-            ts = ev.get("timestamp", "")
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
-                    return (0, dt.replace(tzinfo=timezone.utc))
-                except ValueError:
-                    pass
-            from datetime import datetime, timezone
-            return (1, datetime.min.replace(tzinfo=timezone.utc))
-
-        sorted_events = sorted(events, key=_ev_sort)
-        lines += [
-            "### Attacker Timeline", "",
-            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
-            "| Timestamp (UTC) | Severity | Event | Source |",
-            "|-----------------|----------|-------|--------|",
-        ]
-        for ev in sorted_events:
-            ts   = ev.get("timestamp", "") or "—"
-            sev  = ev.get("severity", "info").upper()
-            desc = ev.get("description", "")[:160].replace("|", "\\|")
-            if len(ev.get("description", "")) > 160:
-                desc += "…"
-            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
-            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
-        lines += ["", ""]
-
-    # Analysis timeline — analyst investigation steps
-    if steps:
-        lines += [
-            "### Analysis Timeline", "",
-            "Steps recorded in the research notes during this investigation. "
-            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
-            "| Step ID | Timestamp | Analysis Step | Outcome |",
-            "|---------|-----------|---------------|---------|",
-        ]
-        for s in steps:
-            sid = f"`{s['id']}`" if s["id"] else "—"
-            outcome = s["outcome"].replace("|", "\\|")
-            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} |")
-        lines += [
-            "",
-            "*Cross-reference step IDs with the research notes and preserved artifacts "
-            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
-            "",
-        ]
-    return lines
-
-
 def _sec_incident_timeline(case_id: str, out_dir: Path) -> list[str]:
     """Incident Timeline section sourced from Claude-generated narrative."""
     narrative = _load_narrative(case_id, out_dir)
@@ -3783,12 +3664,12 @@ def generate_report(
     sections.extend(sec_network_summary(data, duration))
     sections.extend(sec_cti_enrichment(data))
     sections.extend(sec_timeline(timeline))
-    sections.extend(sec_iocs(iocs))
-    sections.extend(sec_mitre(coverage))
-    sections.extend(sec_recommendations(recs))
+    sections.extend(report_sections.build_ioc_section(iocs, heading="Indicators of Compromise", section_num="4"))
+    sections.extend(report_sections.build_mitre_section(coverage, heading="MITRE ATT&CK Coverage", section_num="5", show_severity=True))
+    sections.extend(report_sections.build_recommendations_section(recs, heading="Recommendations", section_num="6", numbered=False))
     sections.extend(sec_appendix(stem, data, case_id))
     sections.extend(_build_fan_hallucination_guard_section(data, case_id, out_dir))
-    sections.extend(_build_evidence_trail(case_id, out_dir))
+    sections.extend(report_sections.build_evidence_trail_section(case_id, out_dir))
 
     md_content = "\n".join(sections) + "\n"
 

@@ -402,29 +402,22 @@ def _mitre_table_md(rows: list[dict]) -> str:
 
 def _merge_iocs(module_texts: dict[str, str]) -> tuple[dict[str, list[dict]], list[str]]:
     """Merge per-module IOC tables into one table per category, deduplicated
-    by IOC value. Tolerates the differing layouts used by FAST (IOCs grouped
-    under ### category headings, columns Value | Confidence | Source) and FAN
-    (a single flat table: Severity | Type | Value | Category | Source). IOCs
-    confirmed by more than one module are upgraded to
+    by IOC value. All three module reports now render a single flat table
+    (Severity | Type | Value | Category | Source | ...) via
+    report_sections.build_ioc_section, so "category" is always a column.
+    IOCs confirmed by more than one module are upgraded to
     "CONFIRMED (multi-module)"."""
     categories: dict[str, dict[str, dict]] = {}
     cat_order: list[str] = []
     for label, md_text in module_texts.items():
-        for heading, rows in _iter_tables(_extract_iocs(md_text)):
+        for _heading, rows in _iter_tables(_extract_iocs(md_text)):
             for row in rows:
                 value = row.get("value", "").strip()
                 if not value:
                     continue
-                if heading and "confidence" in row:
-                    cat = heading
-                    confidence = row.get("confidence", "").strip()
-                    source = row.get("source", "").strip()
-                else:
-                    # FAN-style flat table: Severity | Type | Value | Category | Source
-                    type_ = row.get("type", "").strip().lower()
-                    cat = "Network Indicators" if type_ in ("ip", "domain", "url", "fqdn") else "Other Indicators"
-                    confidence = row.get("confidence", "").strip() or row.get("severity", "").strip()
-                    source = " / ".join(p for p in (row.get("source", "").strip(), row.get("category", "").strip()) if p)
+                cat = row.get("category", "").strip() or "Other Indicators"
+                confidence = row.get("confidence", "").strip() or row.get("severity", "").strip()
+                source = row.get("source", "").strip()
                 cat_entries = categories.setdefault(cat, {})
                 if cat not in cat_order:
                     cat_order.append(cat)

@@ -596,6 +596,12 @@ fi
 source "$PROJECT_ROOT/scripts/record_session.sh"
 fgff_record_session "$CASE_ID" "$DOCS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
+# ── Chain-of-custody manifest ─────────────────────────────────────────────────
+# Hash every artifact (and the source memory image) into a durable, append-only
+# integrity manifest for court use. Best-effort; never fails the investigation.
+source "$PROJECT_ROOT/scripts/chain_of_custody.sh"
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$MEMORY_IMAGE"
+
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Package every artifact for this case (reports, transcript, exhibits, …) into a
 # timestamped ZIP and upload it to the investigations vault. Runs after the

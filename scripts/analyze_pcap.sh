@@ -314,23 +314,11 @@ run_step "Incident report v${REPORT_VERSION}" \
 
 REPORT_MD="$CASE_DIR/${STEM}_incident_report.md"
 REPORT_PDF="$DOCS_DIR/${STEM}_incident_report.pdf"
-REPORT_PPTX="$DOCS_DIR/${STEM}_management_briefing.pptx"
+REPORT_PPTX="$DOCS_DIR/${STEM}_fan_presentation.pptx"
+REPORT_DOCX="$DOCS_DIR/${STEM}_fan_report.docx"
 
 [[ ! -f "$REPORT_MD" ]] && { err "Report markdown not found — aborting upload."; exit 1; }
 ok "Report v${REPORT_VERSION}: $REPORT_MD"
-
-# ── Management PowerPoint ─────────────────────────────────────────────────────
-header "Generating Management PowerPoint"
-
-REPORT_PPTX="$DOCS_DIR/${STEM}_incident_briefing_v${REPORT_VERSION}.pptx"
-
-run_step "Management briefing (PPTX)" \
-    "$SCRIPT_DIR/generate_pcap_presentation.sh" \
-    --stem "$STEM" \
-    --case-id "$CASE_ID" \
-    --output-dir "$DOCS_DIR" \
-    --base-dir "$ANALYSIS" \
-    --report-version "$REPORT_VERSION"
 
 # ── Bundle all artefacts into a zip ──────────────────────────────────────────
 header "Bundling Artefacts"
@@ -384,8 +372,36 @@ run_step "Upload report" \
     --md "$REPORT_MD" \
     $( [[ -f "$REPORT_PDF"   ]] && echo "--pdf $REPORT_PDF" ) \
     $( [[ -f "$REPORT_PPTX"  ]] && echo "--pptx $REPORT_PPTX" ) \
+    $( [[ -f "$REPORT_DOCX"  ]] && echo "--docx $REPORT_DOCX" ) \
     $( [[ -f "$REPORT_ZIP"   ]] && echo "--zip $REPORT_ZIP" ) \
     $( [[ -f "$EVIDENCE_ZIP" ]] && echo "--zip $EVIDENCE_ZIP" )
+
+# ── Campaign report (if hand-authored & rendered earlier this session) ───────
+CAMPAIGN_MD="$CASE_ROOT/${CASE_ID}_campaign_report.md"
+if [[ -f "$CAMPAIGN_MD" ]]; then
+    COMB_ARGS=(--case-id "$CASE_ID" --md "$CAMPAIGN_MD")
+    [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.pdf"         ]] && COMB_ARGS+=(--pdf  "$DOCS_DIR/${CASE_ID}_campaign_report.pdf")
+    [[ -f "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx"  ]] && COMB_ARGS+=(--pptx "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx")
+    [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.docx"        ]] && COMB_ARGS+=(--docx "$DOCS_DIR/${CASE_ID}_campaign_report.docx")
+    run_step "Upload campaign report" \
+        python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}"
+fi
+
+# ── Vault findings write ──────────────────────────────────────────────────────
+# Parse the finalised incident report Markdown and write confirmed TTPs, IOCs,
+# and risks to the Obsidian vault, then close the case.
+header "Recording Findings to Vault"
+
+if [[ $NO_VAULT -eq 0 ]]; then
+    run_step "Vault findings write" \
+        python3 "$PROJECT_ROOT/lib/vault_writer.py" \
+        --module fan \
+        --report "$REPORT_MD" \
+        --case-id "$CASE_ID" \
+        --reports-dir "$PROJECT_ROOT/reports"
+else
+    info "Vault write skipped (--no-vault)."
+fi
 
 # ── Session transcript (chain of evidence) ────────────────────────────────────
 # Record the full Claude Code coordination session as a chain-of-evidence
@@ -398,6 +414,13 @@ header "Recording Session Transcript"
 # investigations vault alongside the report. FGFF_CASE_DIR is already exported.
 source "$SCRIPT_DIR/record_session.sh"
 fgff_record_session "$CASE_ID" "$DOCS_DIR" 1
+
+# ── Chain-of-custody manifest ─────────────────────────────────────────────────
+# Hash every artifact (and the source PCAP) into a durable, append-only
+# integrity manifest for court use. Best-effort; never fails the investigation.
+header "Updating Chain-of-Custody Manifest"
+source "$SCRIPT_DIR/chain_of_custody.sh"
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$PCAP_ABS"
 
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Bundle every artifact for this case — incident reports + the analysis bundle
@@ -441,6 +464,14 @@ ok "Analysis directory cleaned."
 # ── Summary ───────────────────────────────────────────────────────────────────
 header "Investigation Complete"
 ok "Case ID   : $CASE_ID"
+echo ""
+echo "  Reports:"
+[[ -f "$REPORT_MD"   ]] && echo "    md   → $REPORT_MD"
+[[ -f "$REPORT_PDF"  ]] && echo "    pdf  → $REPORT_PDF"
+[[ -f "$REPORT_PPTX" ]] && echo "    pptx → $REPORT_PPTX"
+[[ -f "$REPORT_DOCX" ]] && echo "    docx → $REPORT_DOCX"
+[[ -f "$CAMPAIGN_MD" ]] && echo "    campaign → $CAMPAIGN_MD"
+echo ""
 ok "Report    : uploaded to investigations vault"
 echo ""
 info "Steps: ${STEP_PASS} passed, ${STEP_FAIL} failed"

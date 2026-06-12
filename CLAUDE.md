@@ -52,6 +52,8 @@ Claude is the coordinator. It decides which module to invoke, in what order, and
 
 **Stop condition:** Claude determines the investigation is complete when all available evidence sources have been queried, no new pivots remain, and findings can be stated with a scoped conclusion that cites its evidence source (e.g., "No signs of lateral movement observed in the PCAP file").
 
+**Follow-up questions (post-report):** Once a case's reports have been generated, any further analyst question that references that case — even if asked much later in the session or in a new session — must be logged via `python3 lib/research_notes.py followup --case-id <id> --case-dir reports/<case_id>/<MODULE>/<stem> --question "..." --answer-summary "..." [--output-file PATH ...]`. If answering the question produces any new or changed file (an additional analysis export, an exhibit, a written answer saved to disk), run `python3 lib/chain_of_custody.py update --case-id <id> --case-dir reports/<case_id> --trigger followup --note "<question>"` immediately afterward so the chain-of-custody manifest covers it. See "Chain of custody" below.
+
 ## Report structure & voice
 
 Every investigation produces one report with two distinct registers.
@@ -109,6 +111,7 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 | `lib/chat_recorder.py` | Chain-of-evidence session recorder: locates the active Claude Code transcript (`~/.claude/projects/<encoded>/<uuid>.jsonl`), renders it to Markdown + PDF, and preserves the raw `.jsonl` verbatim (SHA-256 recorded in the document so the rendering ties back to the original bytes). `record_chat(case_id, upload=False)` → `{md, pdf, jsonl}`. Runs automatically at the end of every FAN/FAME/FAST pipeline; also invokable via `/record-chat` |
 | `lib/generate_pptx_report.py` | Management PowerPoint generator (7 slides, CISO language, python-pptx): cover, executive summary, threat landscape, IDS/YARA alerts, IOCs, recommendations, module coverage |
 | `lib/case_packager.py` | Package investigation artifacts into a timestamped `<case_id>_<ts>.zip` and upload via SSH/SCP to the investigations vault. `--all` is the general, format-agnostic mode (bundles **every** artifact for a case — DOCX/PPTX/PDF, the chain-of-evidence chat transcript, exhibit images, evidence ZIPs — with a SHA-256 `MANIFEST.sha256`); the default mode is the legacy PCAP/stem path. Wired into every analysis script via the shared helper `scripts/package_artifacts.sh` (`fgff_package_artifacts`), which runs after `scripts/record_session.sh` so the transcript is included; both helpers are best-effort and never fail the investigation |
+| `lib/chain_of_custody.py` | Court-ready integrity manifest: `update_manifest(case_dir, case_id, evidence_paths=None, examiner=None, trigger="investigation"\|"followup"\|"manual", note=None)` recursively hashes (MD5/SHA-1/SHA-256, size, mtime) every file under `reports/<case_id>/` plus any supplied source evidence file(s), and writes/updates `reports/<case_id>/documents/<case_id>_chain_of_custody.json`. Append-only: each run adds one `history` entry recording added/changed/removed paths, the trigger, examiner, and note — a changed hash for a previously-recorded path is flagged with both old and new digests, and an evidence hash mismatch is preserved as a critical integrity alert rather than overwritten. Wired into every analysis script via `scripts/chain_of_custody.sh` (`fgff_update_custody`), which runs after `scripts/record_session.sh` and before `scripts/package_artifacts.sh`. Self-test: `python3 lib/chain_of_custody.py --test` |
 | `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop) — supports MD, PDF, PPTX, DOCX, ZIP |
 | `lib/fan_*.py` | FAN analysis modules (22 protocol detectors + pcap_analyzer, generate_pcap_report) |
 | `lib/generate_fame_report.py` | FAME report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/memory/` Volatility 3 outputs |
@@ -167,10 +170,34 @@ reports/<case_id>/
     <case_id>_campaign_presentation.pptx
     <case_id>_campaign_report.docx
     <case_id>_chat_transcript.md
+    <case_id>_chain_of_custody.json
     <case_id>_<ts>.zip
 ```
 
 The `--case-id` passed to all three module scripts is the **shared base ID** (e.g., `NIST-HACK-2026`). The module prefix (FAN/FAME/FAST) is encoded as a subdirectory, not part of the case ID.
+
+## Chain of custody
+
+`reports/<case_id>/documents/<case_id>_chain_of_custody.json` is the court-facing
+integrity manifest for the case, generated and updated by `lib/chain_of_custody.py`
+(`fgff_update_custody` in `scripts/chain_of_custody.sh`). It records:
+
+- **`evidence`** — the source PCAP/memory image/disk image: size, MD5/SHA-1/SHA-256,
+  first-recorded and last-verified timestamps. Append-only — if a later run finds a
+  different hash for the same evidence path, the original record is kept and the
+  mismatch is logged as a critical integrity alert in `history`.
+- **`artifacts`** — every file under `reports/<case_id>/` (research notes, narratives,
+  correlation output, MD/PDF/PPTX/DOCX reports, the chat transcript, exhibits, ZIP
+  bundles): size, mtime, MD5/SHA-1/SHA-256, first-recorded and last-verified timestamps.
+- **`history`** — one append-only entry per update: timestamp, trigger
+  (`investigation` | `followup` | `manual`), examiner, free-text note, and the
+  `added`/`changed`/`removed` paths since the previous run. A `changed` entry carries
+  both the old and new SHA-256 — the tamper signal.
+
+It is updated automatically at the end of every FAN/FAME/FAST run (after
+`scripts/record_session.sh`, before `scripts/package_artifacts.sh`, so the manifest
+itself is included in the case ZIP), and again for any post-report follow-up question
+(see "Follow-up questions (post-report)" above).
 
 ## Forensics agent network (FAN)
 

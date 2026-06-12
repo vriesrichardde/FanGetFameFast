@@ -45,6 +45,7 @@ try:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -60,6 +61,7 @@ except ModuleNotFoundError:
         parse_events as _parse_research_events,
         parse_reflections as _parse_research_reflections,
     )
+    import report_sections
     from hallucination_guard import (
         ConfidenceTier,
         tag_finding,
@@ -671,73 +673,6 @@ def _narr_bullets(narrative: dict, key: str) -> list[str]:
     return [_clean(b) for b in bullets]
 
 
-# ── Evidence trail ────────────────────────────────────────────────────────────
-
-def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
-    steps  = _parse_research_steps(case_id, str(reports_dir))
-    events = _parse_research_events(case_id, str(reports_dir))
-    if not steps and not events:
-        return []
-
-    lines: list[str] = [
-        "---", "",
-        "## Appendix B — Investigation Evidence Trail", "",
-    ]
-
-    # Attacker timeline — events sorted by evidence timestamp
-    if events:
-        def _ev_sort(ev: dict) -> tuple:
-            ts = ev.get("timestamp", "")
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.strptime(ts.replace(" UTC", "").strip(), "%Y-%m-%d %H:%M:%S")
-                    return (0, dt.replace(tzinfo=timezone.utc))
-                except ValueError:
-                    pass
-            from datetime import datetime, timezone
-            return (1, datetime.min.replace(tzinfo=timezone.utc))
-
-        sorted_events = sorted(events, key=_ev_sort)
-        lines += [
-            "### Attacker Timeline", "",
-            "Attacker events observed in the evidence, ordered by evidence timestamp.", "",
-            "| Timestamp (UTC) | Severity | Event | Source |",
-            "|-----------------|----------|-------|--------|",
-        ]
-        for ev in sorted_events:
-            ts   = ev.get("timestamp", "") or "—"
-            sev  = ev.get("severity", "info").upper()
-            desc = ev.get("description", "")[:160].replace("|", "\\|")
-            if len(ev.get("description", "")) > 160:
-                desc += "…"
-            src = (ev.get("source_detail", "") or "—").replace("|", "\\|")
-            lines.append(f"| {ts} | **{sev}** | {desc} | {src} |")
-        lines += ["", ""]
-
-    # Analysis timeline — analyst investigation steps
-    if steps:
-        lines += [
-            "### Analysis Timeline", "",
-            "Steps recorded in the research notes during this investigation. "
-            f"Preserved artifacts are in `{case_id}_evidence/`.", "",
-            "| Step ID | Timestamp | Analysis Step | Outcome | Dismissed |",
-            "|---------|-----------|---------------|---------|-----------|",
-        ]
-        for s in steps:
-            sid = f"`{s['id']}`" if s["id"] else "—"
-            outcome   = s["outcome"].replace("|", "\\|")
-            dismissed = (s.get("dismissed") or "—").replace("|", "\\|")
-            lines.append(f"| {sid} | {s['timestamp']} | {s['title']} | {outcome} | {dismissed} |")
-        lines += [
-            "",
-            "*Cross-reference step IDs with the research notes and preserved artifacts "
-            f"in `{case_id}_evidence/` to verify any conclusion in this report.*",
-            "",
-        ]
-    return lines
-
-
 # ── Markdown generation ────────────────────────────────────────────────────────
 
 def _build_markdown(
@@ -1063,13 +998,6 @@ def _build_markdown(
         a("")
 
     # ── MITRE ATT&CK ─────────────────────────────────────────────────────────
-    a("---")
-    a("")
-    a("## 13. MITRE ATT&CK coverage")
-    a("")
-    a("> Claude: enhance and elaborate when necessary — add sub-technique context and")
-    a("> procedural examples observed in this investigation for each technique.")
-    a("")
     techniques = []
     if "msfadmin" in shutdown_md or "sudo" in shutdown_md:
         techniques += [
@@ -1086,33 +1014,22 @@ def _build_markdown(
             ("T1055", "Process Injection", "Defense Evasion / Privilege Escalation",
              "malfind output present — triage hits to distinguish injection from JIT false positives.")
         )
-    if techniques:
-        a("| Technique | Name | Tactic | Observation |")
-        a("|-----------|------|--------|-------------|")
-        for tid, name, tactic, obs in techniques:
-            url = f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/"
-            a(f"| [{tid}]({url}) | {name} | {tactic} | {obs} |")
-    else:
-        a("No MITRE ATT&CK techniques mapped — no malicious activity confirmed in memory.")
-    a("")
-
-    # ── IOCs ──────────────────────────────────────────────────────────────────
+    technique_dicts = [
+        {"id": tid, "name": name, "tactic": tactic, "observation": obs}
+        for tid, name, tactic, obs in techniques
+    ]
     a("---")
     a("")
-    a("## 14. Indicators of compromise")
-    a("")
-    a("> Claude: enhance and elaborate when necessary — defang all IOC values and add")
-    a("> OSINT context or OpenCTI attribution where available.")
-    a("")
+    a("\n".join(report_sections.build_mitre_section(
+        technique_dicts, heading="MITRE ATT&CK Coverage", section_num="13",
+        show_severity=False,
+        empty_message="No MITRE ATT&CK techniques mapped — no malicious activity confirmed in memory.")))
+
+    # ── IOCs ──────────────────────────────────────────────────────────────────
     iocs = _extract_iocs(data, shutdown_md)
-    if iocs:
-        a("| Type | Value | Severity | Context |")
-        a("|------|-------|----------|---------|")
-        for ioc in iocs:
-            a(f"| {ioc['type']} | `{ioc['value']}` | {ioc['severity']} | {ioc['context']} |")
-    else:
-        a("No malicious indicators of compromise identified in this memory image.")
-    a("")
+    a("\n".join(report_sections.build_ioc_section(
+        iocs, heading="Indicators of Compromise", section_num="14",
+        empty_message="No malicious indicators of compromise identified in this memory image.")))
 
     # ── What Did NOT Cause the Shutdown ──────────────────────────────────────
     if "Did NOT Cause" in shutdown_md or "did not cause" in shutdown_md.lower():
@@ -1131,17 +1048,11 @@ def _build_markdown(
         a("")
 
     # ── Recommendations ───────────────────────────────────────────────────────
+    recs = _build_recommendations(data, shutdown_md)
     a("---")
     a("")
-    a("## 16. Recommendations")  # "Recommendations" is the conventional heading — keep cap
-    a("")
-    a("> Claude: enhance and elaborate when necessary — prioritise by risk and add")
-    a("> implementation detail appropriate to the target environment.")
-    a("")
-    recs = _build_recommendations(data, shutdown_md)
-    for i, rec in enumerate(recs, 1):
-        a(f"{i}. {rec}")
-    a("")
+    a("\n".join(report_sections.build_recommendations_section(
+        recs, heading="Recommendations", section_num="16", numbered=True)))
 
     # ── Confidence & Gaps ─────────────────────────────────────────────────────
     lines.extend(_build_confidence_gaps_section(data, case_id, reports_dir, opencti_findings))
@@ -1199,7 +1110,7 @@ def _build_markdown(
         a("")
 
     # ── Evidence Trail ────────────────────────────────────────────────────────
-    lines.extend(_build_evidence_trail(case_id, reports_dir))
+    lines.extend(report_sections.build_evidence_trail_section(case_id, reports_dir, include_dismissed=True))
 
     return "\n".join(lines)
 
@@ -1211,14 +1122,18 @@ def _extract_iocs(data: dict[str, Any], shutdown_md: str) -> list[dict]:
         iocs.append({
             "type": "Event",
             "value": "Failed console login × 2 on tty1",
-            "severity": "Medium",
+            "severity": report_sections.normalize_severity("Medium"),
+            "category": "Authentication",
+            "source": "FAME",
             "context": "Two failed logins with unknown credentials before successful msfadmin login (as observed in memory strings)",
         })
     if "sudo" in shutdown_md and "root" in shutdown_md:
         iocs.append({
             "type": "Event",
             "value": "Privilege escalation via sudo /bin/bash",
-            "severity": "High",
+            "severity": report_sections.normalize_severity("High"),
+            "category": "Privilege Escalation",
+            "source": "FAME",
             "context": "msfadmin → root via sudo; shell obtained 26 s after login (as observed in memory strings)",
         })
     # Extract any external IPs from netscan
@@ -1234,7 +1149,9 @@ def _extract_iocs(data: dict[str, Any], shutdown_md: str) -> list[dict]:
                 iocs.append({
                     "type": "IP",
                     "value": ip,
-                    "severity": "Medium",
+                    "severity": report_sections.normalize_severity("Medium"),
+                    "category": "Network Scan",
+                    "source": "FAME netscan",
                     "context": "External IP from memory netscan — verify with OpenCTI / FAN",
                 })
     return iocs
