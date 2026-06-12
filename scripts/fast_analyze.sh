@@ -167,6 +167,21 @@ printf '{"case_id":"%s","hostname":"%s","disk_image":"%s","started":"%s"}\n' \
 IMAGE_EXT="${DISK_IMAGE##*.}"
 IMAGE_EXT_LOWER="${IMAGE_EXT,,}"
 
+# Split raw images (FTK Imager ".001", ".002", ... convention): collect every
+# numbered sibling segment so TSK tools can read the image as a whole.
+SEGMENTS=()
+if [[ "$IMAGE_EXT_LOWER" == "001" ]]; then
+    _seg_base="${DISK_IMAGE%.001}"
+    _n=1
+    while :; do
+        _seg="$(printf '%s.%03d' "$_seg_base" "$_n")"
+        [[ -f "$_seg" ]] || break
+        SEGMENTS+=("$_seg")
+        _n=$((_n + 1))
+    done
+    echo "[fast] Split raw image: ${#SEGMENTS[@]} segment(s) detected."
+fi
+
 echo "[fast] Verifying image..."
 if [[ "$IMAGE_EXT_LOWER" == "e01" ]] || [[ "$IMAGE_EXT_LOWER" == "ewf" ]]; then
     ewfinfo  "$DISK_IMAGE" > "$ANALYSIS_DIR/ewfinfo.txt"  2>&1 || true
@@ -206,6 +221,9 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         sudo partprobe "$NBD_DEV" 2>/dev/null || true
         echo "[fast] Exposed as $NBD_DEV"
         RAW_DEVICE="$NBD_DEV"
+    elif [[ ${#SEGMENTS[@]} -gt 1 ]]; then
+        echo "[fast] Split raw image (${#SEGMENTS[@]} segments) — partition table read from segment 1."
+        RAW_DEVICE="${SEGMENTS[0]}"
     else
         RAW_DEVICE="$DISK_IMAGE"
     fi
@@ -227,11 +245,35 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         OFFSET=$(( START_SECTOR * SECTOR_SIZE ))
         echo "[fast] Partition start: sector $START_SECTOR (offset $OFFSET bytes)"
 
-        # Mount filesystem read-only
+        # Mount filesystem read-only. Split raw images can't be loop-mounted as
+        # separate segments — concatenate to a temp file first if there's room
+        # (OS temp dir is an approved write location per lib/path_guard.py),
+        # otherwise degrade gracefully (TSK tools below still read all segments
+        # natively via TSK_IMAGES).
         echo "[fast] Mounting filesystem (read-only)..."
-        sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
-        sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
-        { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+        if [[ ${#SEGMENTS[@]} -gt 1 ]]; then
+            _total_size=0
+            for _seg in "${SEGMENTS[@]}"; do
+                _total_size=$(( _total_size + $(stat -c%s "$_seg" 2>/dev/null || echo 0) ))
+            done
+            _avail=$(df --output=avail -B1 /tmp 2>/dev/null | tail -1 | tr -d ' ')
+            if [[ "${_avail:-0}" -gt "$_total_size" ]]; then
+                COMBINED_RAW="/tmp/${CASE_ID//[[:space:]]/_}_combined.raw"
+                echo "[fast] Concatenating ${#SEGMENTS[@]} segments → $COMBINED_RAW ..."
+                cat "${SEGMENTS[@]}" > "$COMBINED_RAW"
+                RAW_DEVICE="$COMBINED_RAW"
+                sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+                sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+                { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+            else
+                echo "[fast] WARNING: Not enough space in /tmp ($_total_size bytes needed) to concatenate split image — continuing without mount."
+                SKIP_MOUNT=2
+            fi
+        else
+            sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+            sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+            { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+        fi
 
         # Verify the mount really is read-only before any analysis touches it.
         [[ $SKIP_MOUNT -eq 0 ]] && fgff_assert_ro_mount "$FS_MOUNT"
@@ -242,18 +284,27 @@ fi
 # ── TSK analysis ──────────────────────────────────────────────────────────────
 RAW_FOR_TSK="${RAW_DEVICE:-$DISK_IMAGE}"
 
+# When split segments couldn't be concatenated (no COMBINED_RAW), pass every
+# segment to the TSK tools — they natively support split raw images as a list
+# of positional image arguments.
+if [[ ${#SEGMENTS[@]} -gt 1 && -z "${COMBINED_RAW:-}" ]]; then
+    TSK_IMAGES=("${SEGMENTS[@]}")
+else
+    TSK_IMAGES=("$RAW_FOR_TSK")
+fi
+
 echo "[fast] Running TSK file listing (fls)..."
-sudo fls -r -p "$RAW_FOR_TSK" \
+sudo fls -r -p "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/fls_output.txt" 2>/dev/null || \
-sudo fls -r -p -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" \
+sudo fls -r -p -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/fls_output.txt" 2>/dev/null || \
     echo "[fast] WARNING: fls failed — continuing."
 echo "[fast] fls → $ANALYSIS_DIR/fls_output.txt"
 
 echo "[fast] Generating bodyfile (fls -m)..."
-sudo fls -r -m / "$RAW_FOR_TSK" \
+sudo fls -r -m / "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/bodyfile.txt" 2>/dev/null || \
-sudo fls -r -m / -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" \
+sudo fls -r -m / -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/bodyfile.txt" 2>/dev/null || \
     echo "[fast] WARNING: bodyfile generation failed."
 
@@ -265,12 +316,12 @@ mactime -b "$ANALYSIS_DIR/bodyfile.txt" -z UTC -d \
 echo "[fast] Timeline → $EXPORTS_DIR/fs_timeline.txt"
 
 echo "[fast] Running fsstat..."
-sudo fsstat "$RAW_FOR_TSK" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || \
-sudo fsstat -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || true
+sudo fsstat "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || \
+sudo fsstat -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || true
 
 echo "[fast] Running ils (inode listing)..."
-sudo ils "$RAW_FOR_TSK" > "$ANALYSIS_DIR/ils_output.txt" 2>/dev/null || true
-sudo ils -p "$RAW_FOR_TSK" > "$ANALYSIS_DIR/ils_orphan.txt" 2>/dev/null || true
+sudo ils "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/ils_output.txt" 2>/dev/null || true
+sudo ils -p "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/ils_orphan.txt" 2>/dev/null || true
 
 # ── Artefact extraction (from mounted filesystem) ─────────────────────────────
 if [[ $MOUNTED_FS -eq 1 ]]; then
@@ -327,13 +378,13 @@ fi
 
 # ── MFT and UsnJrnl via icat ──────────────────────────────────────────────────
 echo "[fast] Extracting MFT (\$MFT, inode 0)..."
-sudo icat "$RAW_FOR_TSK" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
-sudo icat -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
+sudo icat -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
     echo "[fast] WARNING: MFT extraction failed."
 
 echo "[fast] Extracting USN Change Journal (\$J, inode 11)..."
-sudo icat "$RAW_FOR_TSK" 11-128-4 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
-sudo icat "$RAW_FOR_TSK" 11 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 11-128-4 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 11 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
     echo "[fast] WARNING: USN journal extraction failed."
 
 # ── File hash manifest ────────────────────────────────────────────────────────
@@ -344,7 +395,10 @@ if [[ -d "$EXPORTS_DIR/files" ]] && [[ "$(ls -A "$EXPORTS_DIR/files" 2>/dev/null
 fi
 
 # ── Bulk extractor carving (on a size budget — skip if image > 20 GB) ─────────
-IMAGE_SIZE=$(stat -c%s "$DISK_IMAGE" 2>/dev/null || echo "0")
+IMAGE_SIZE=0
+for _img in "${TSK_IMAGES[@]}"; do
+    IMAGE_SIZE=$(( IMAGE_SIZE + $(stat -c%s "$_img" 2>/dev/null || echo 0) ))
+done
 if [[ "$IMAGE_SIZE" -lt 21474836480 ]]; then
     echo "[fast] Running bulk_extractor..."
     rm -rf "$EXPORTS_DIR/carved" && mkdir -p "$EXPORTS_DIR/carved"
@@ -422,6 +476,10 @@ if [[ $NBD_CONNECTED -eq 1 ]]; then
     echo "[fast] Disconnecting qemu-nbd ($NBD_DEV)..."
     sudo qemu-nbd --disconnect "$NBD_DEV" 2>/dev/null || true
     NBD_CONNECTED=0
+fi
+if [[ -n "${COMBINED_RAW:-}" && -f "$COMBINED_RAW" ]]; then
+    echo "[fast] Removing concatenated split-image temp file..."
+    rm -f "$COMBINED_RAW"
 fi
 
 # ── Evidence folder preservation (before report generation) ───────────────────

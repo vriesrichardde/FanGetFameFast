@@ -144,6 +144,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Session transcript (chain of evidence) | `/record-chat` | Record the current Claude Code session as MD + PDF + verbatim `.jsonl` (SHA-256 fingerprinted). Runs automatically at the end of FAN/FAME/FAST; invoke manually to re-record |
 | Remove Case | `/remove-case` | Remove a case directory from the investigations vault |
 | Archive reports | `/archive-reports [campaign_id]` | Move a completed campaign folder from `./reports/<id>/` to `./archive/<id>/` (also migrates legacy flat files); interactive if no id given |
+| Accuracy report | `/accuracy-report` | Reproduce/refresh `accuracy/` (accuracy.md, automated claim-traceability audit, dataset documentation) against the current case set in `reports/`/`archive/` |
 
 FAN analysis skills: `fan-arp-threats`, `fan-cert-inspector`, `fan-dhcp-threats`, `fan-dns-threats`, `fan-extract-ip-fqdn`, `fan-file-hashes`, `fan-http-threats`, `fan-icmp-threats`, `fan-ip-lookup`, `fan-llmnr-threats`, `fan-mdns-threats`, `fan-nbns-threats`, `fan-netbios-threats`, `fan-ntp-threats`, `fan-opencti-lookup`, `fan-quic-threats`, `fan-report`, `fan-snmp-threats`, `fan-ssdp-threats`, `fan-stun-threats`, `fan-suricata`, `fan-tcp-threats`, `fan-tls-inspector`, `fan-udp-threats`, `fan-yara-pcap`.
 

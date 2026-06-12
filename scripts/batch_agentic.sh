@@ -157,15 +157,26 @@ _is_processed() {
     grep -qxF "$1" "$PROCESSED_FILE" 2>/dev/null
 }
 
-# Derive module type from file extension
+# Derive module type from file extension. Takes the full path (not just the
+# basename) because ".001" is ambiguous: a lone FTK Imager raw memory dump has
+# no ".002" sibling (-> FAME), while a split raw disk image does (-> FAST,
+# fast_analyze.sh handles the multi-segment set).
 _detect_module() {
+    local file="$1"
     local ext
-    ext="${1##*.}"
+    ext="${file##*.}"
     ext="${ext,,}"
     case "$ext" in
-        mem|img|raw|lime|vmem|dmp)          echo "FAME" ;;
+        mem|img|raw|lime|vmem|dmp|mans)    echo "FAME" ;;
         e01|ewf|vmdk|vdi|qcow2|vhd|vhdx)   echo "FAST" ;;
         pcap|pcapng|cap)                     echo "FAN"  ;;
+        001)
+            if [[ -f "${file%.001}.002" ]]; then
+                echo "FAST"
+            else
+                echo "FAME"
+            fi
+            ;;
         *)                                   echo "UNKNOWN" ;;
     esac
 }
@@ -217,8 +228,8 @@ _process_file() {
         return 0
     fi
 
-    local case_id="${BATCH_ID}-${stem}"
-    echo "[batch] ── $module (agentic)  case: $case_id  file: $(basename "$file")"
+    local case_id="${BATCH_ID}"
+    echo "[batch] ── $module (agentic)  case: $case_id  hostname: $stem  file: $(basename "$file")"
 
     # Build extra args string for the skill invocation
     local extra_args=""
@@ -229,7 +240,18 @@ _process_file() {
 
     case "$module" in
         FAME)
-            if claude -p "/fame \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
+            if [[ "${ext,,}" == "mans" ]]; then
+                # Mandiant Redline collection (SQLite DB) — no Volatility plugins
+                # apply; run the lightweight triage dump instead of /fame.
+                if python3 "$PROJECT_ROOT/lib/redline_triage.py" \
+                        --input "$file" --case-id "$case_id" --hostname "$stem"; then
+                    PASS=$((PASS + 1))
+                else
+                    status="failed"
+                    FAIL=$((FAIL + 1))
+                    _manifest_add_error "Redline triage failed for: $file"
+                fi
+            elif claude -p "/fame \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
                 PASS=$((PASS + 1))
             else
                 status="failed"
@@ -353,7 +375,7 @@ done < <(find "$EVIDENCE_DIR" -type f \
      -o -iname "*.E01"    -o -iname "*.ewf"    -o -iname "*.vmdk" \
      -o -iname "*.vdi"    -o -iname "*.qcow2"  -o -iname "*.vhd"  \
      -o -iname "*.vhdx"   -o -iname "*.pcap"   -o -iname "*.pcapng" \
-     -o -iname "*.cap" \) \
+     -o -iname "*.cap"    -o -iname "*.001"    -o -iname "*.mans" \) \
     -print0 | sort -z)
 
 echo "[batch] Phase 2 complete — $direct_count direct file(s) considered."
@@ -397,9 +419,8 @@ done < <(python3 - "$MANIFEST" <<'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
-for c in data.get("cases", []):
-    if c.get("status") == "success":
-        print(c["case_id"])
+for case_id in sorted({c["case_id"] for c in data.get("cases", []) if c.get("status") == "success"}):
+    print(case_id)
 PYEOF
 )
 
