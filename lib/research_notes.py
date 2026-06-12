@@ -541,7 +541,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--source-tool", metavar="TOOL",
                     help="Tool that produced this output, e.g. 'volatility3/psscan' or 'suricata' (optional)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
-    ps.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
+    ps.add_argument("--case-dir",   metavar="DIR",  help="Directory containing the notes file (often reports/<case_id>/<MODULE>/<stem>/); takes precedence over --output-dir")
 
     # assumption
     pa = sub.add_parser("assumption", help="Record a standalone analytical assumption")
