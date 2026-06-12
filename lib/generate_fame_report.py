@@ -749,6 +749,7 @@ def _build_markdown(
     opencti_findings: str = "",
     fan_summary: str = "",
     fast_summary: str = "",
+    reports_dir: Path | None = None,
 ) -> str:
     """
     Build the full incident report in Markdown.
@@ -759,7 +760,7 @@ def _build_markdown(
     lines: list[str] = []
     a = lines.append
 
-    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     narrative = _load_narrative(case_id, reports_dir)
 
     # ── Header ────────────────────────────────────────────────────────────────
@@ -1339,6 +1340,21 @@ def _build_pptx(
     H = prs.slide_height
     M = Inches(0.4)
 
+    def _add_bullet_slide(title, bullets, fallback, max_items=8):
+        slide = prs.slides.add_slide(blank_layout)
+        _add_rect(slide, 0, 0, W, Inches(1.1), _MID_NAVY)
+        _add_text(slide, title, M, Inches(0.2), W, Inches(0.8),
+                  28, bold=True, color=_WHITE)
+        _add_text(slide, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3),
+                  12, color=_LIGHT_BLUE)
+        if bullets:
+            body = "\n\n".join(f"•  {b}" for b in bullets[:max_items])
+        else:
+            body = fallback
+        _add_text(slide, body, M, Inches(1.3), W - 2 * M, H - Inches(1.6),
+                  14, color=_TEXT_DARK)
+        return slide
+
     # ── Slide 1 — Cover ───────────────────────────────────────────────────────
     s1 = prs.slides.add_slide(blank_layout)
     _add_rect(s1, 0, 0, W, H, _DARK_NAVY)
@@ -1382,144 +1398,76 @@ def _build_pptx(
             findings_text = "See technical report for detailed findings."
     _add_text(s2, findings_text, M, Inches(1.3), W - 2*M, Inches(5.5), 14, color=_TEXT_DARK)
 
-    # ── Slide 3 — Timeline ────────────────────────────────────────────────────
-    s3 = prs.slides.add_slide(blank_layout)
-    _add_rect(s3, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _add_text(s3, "Incident timeline", M, Inches(0.2), W, Inches(0.8),
-              28, bold=True, color=_WHITE)
-    _add_text(s3, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3),
-              12, color=_LIGHT_BLUE)
-    timeline_events = []
-    if shutdown_md:
-        for line in shutdown_md.splitlines():
-            if re.match(r"\|\s*\*?\*?0[89]:", line) or re.match(r"\|\s*\*?\*?2026", line):
-                parts = [p.strip().strip("*") for p in line.strip("|").split("|")]
-                if len(parts) >= 2:
-                    timeline_events.append((parts[0], parts[1]))
-    if not timeline_events:
-        # Preferred fallback: the clean, confirmed-timestamp events from the
-        # research notes (one row per attacker action with an evidence timestamp).
-        try:
-            reports_dir = PROJECT_ROOT / "reports"
-            for ev in _parse_research_events(case_id, str(reports_dir)):
-                ts = ev.get("timestamp", "").replace(" UTC", " UTC").strip()
-                desc = ev.get("description", "").strip()
-                if ts and desc:
-                    timeline_events.append((ts, desc))
-            timeline_events.sort(key=lambda x: x[0])
-        except Exception:
-            pass
-    if not timeline_events:
-        # Last resort: pull "TIME — event" lines out of the attack_timeline prose.
-        tl = narrative.get("attack_timeline", "")
-        ts_re = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?(?:\s*[–-]\s*\d{1,2}:\d{2}(?::\d{2})?)?\s*(?:UTC|EDT|CET)?")
-        for raw in tl.splitlines():
-            line = raw.strip().lstrip("-*• ").replace("**", "").strip()
-            if not line or not re.search(r"\d{1,2}:\d{2}", line[:45]):
-                continue
-            m = ts_re.search(line)
-            if not m:
-                continue
-            tstamp = m.group(0).strip()
-            rest = line[m.end():].lstrip(" —-:,").strip()
-            rest = re.sub(r"\(\[?(RN|EVT|RF)-[0-9]+\]?[^)]*\)", "", rest).strip(" .")
-            if tstamp and len(rest) > 8:
-                timeline_events.append((tstamp, rest))
-        seen = set(); deduped = []
-        for t, e in timeline_events:
-            k = (t, e[:40])
-            if k not in seen:
-                seen.add(k); deduped.append((t, e))
-        timeline_events = deduped
-    if timeline_events:
-        row_h = Inches(0.46)
-        _add_rect(s3, M, Inches(1.15), Inches(2.2), row_h - Inches(0.04), _MID_NAVY)
-        _add_rect(s3, M + Inches(2.2), Inches(1.15), W - M - Inches(2.2) - M, row_h - Inches(0.04), _MID_NAVY)
-        _add_text(s3, "Time", M + Inches(0.1), Inches(1.2), Inches(2.0), row_h,
-                  12, bold=True, color=_WHITE)
-        _add_text(s3, "Event", M + Inches(2.3), Inches(1.2), W - M - Inches(3.0), row_h,
-                  12, bold=True, color=_WHITE)
-        for i, (t, e) in enumerate(timeline_events[:11]):
-            y = Inches(1.15) + (i + 1) * row_h
-            bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-            _add_rect(s3, M, y, Inches(2.2), row_h - Inches(0.04), bg)
-            _add_rect(s3, M + Inches(2.2), y, W - M - Inches(2.2) - M, row_h - Inches(0.04), bg)
-            _add_text(s3, t[:30], M + Inches(0.1), y + Inches(0.06), Inches(2.0), row_h,
-                      11, color=_TEXT_DARK)
-            _add_text(s3, e[:100], M + Inches(2.3), y + Inches(0.06), W - M - Inches(3.0), row_h,
-                      11, color=_TEXT_DARK)
-    else:
-        _add_text(s3, "No timeline events extracted.", M, Inches(2.0), W - 2*M, Inches(1.0),
-                  16, color=_TEXT_MID)
+    # ── Slide 3 — Business Impact ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Business Impact",
+        _narr_bullets(narrative, "pptx_impact"),
+        "Operational impact assessment is in progress; refer to the technical report.",
+    )
 
-    # ── Slide 4 — Key evidence ────────────────────────────────────────────────
-    s4 = prs.slides.add_slide(blank_layout)
-    _add_rect(s4, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _add_text(s4, "Key evidence", M, Inches(0.2), W, Inches(0.8),
-              28, bold=True, color=_WHITE)
-    _add_text(s4, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3),
-              12, color=_LIGHT_BLUE)
-    if "pam_unix" in shutdown_md or "FAILED LOGIN" in shutdown_md or "msfadmin" in shutdown_md:
-        evidence_items = [
-            ("Physical access event",
-             "Two failed login attempts followed by a successful login at the physical server console."),
-            ("Privilege escalation",
-             "Administrator access obtained within seconds of console login."),
-            ("Orderly shutdown sequence",
-             "All server services stopped in the expected sequence — no crash or panic."),
-            ("No remote activity",
-             "No external network connections or remote login sessions found in the memory image."),
-        ]
-    else:
-        risk_bullets = _narr_bullets(narrative, "pptx_risk")
-        impact_bullets = _narr_bullets(narrative, "pptx_impact")
-        evidence_items = []
+    # ── Slide 4 — Board Timeline ─────────────────────────────────────────────
+    _add_bullet_slide(
+        "Incident Timeline",
+        _narr_bullets(narrative, "pptx_timeline"),
+        "The incident timeline is under investigation; refer to the technical report for the full chronology.",
+        max_items=6,
+    )
 
-        def _split_label(b: str) -> tuple:
-            for sep in (":", " — ", " - "):
-                if sep in b:
-                    lab, desc = b.split(sep, 1)
-                    if 2 < len(lab) < 48:
-                        return (lab.strip(" *"), desc.strip())
-            words = b.split()
-            return (" ".join(words[:4]), b)
-
-        for b in impact_bullets[:3]:
-            evidence_items.append(_split_label(b))
-        for b in risk_bullets[:2]:
-            lab, desc = _split_label(b)
-            evidence_items.append((lab if "risk" in lab.lower() else f"Risk: {lab}", desc))
-        if not evidence_items:
-            evidence_items = [("Memory analysis completed",
-                               "See technical report for detailed evidence items.")]
-    row_h = Inches(1.0)
-    for i, (label, desc) in enumerate(evidence_items[:5]):
-        y = Inches(1.25) + i * row_h
-        bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-        _add_rect(s4, M, y, Inches(3.5), row_h - Inches(0.06), bg)
-        _add_rect(s4, M + Inches(3.5), y, W - M - Inches(3.5) - M, row_h - Inches(0.06), bg)
-        _add_text(s4, label, M + Inches(0.1), y + Inches(0.1), Inches(3.3), row_h,
-                  13, bold=True, color=_TEXT_DARK)
-        _add_text(s4, desc, M + Inches(3.6), y + Inches(0.1), W - M - Inches(4.1), row_h,
-                  12, color=_TEXT_DARK)
-
-    # ── Slide 5 — Recommendations ─────────────────────────────────────────────
+    # ── Slide 5 — Root Cause & Risk ──────────────────────────────────────────
     s5 = prs.slides.add_slide(blank_layout)
     _add_rect(s5, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _add_text(s5, "Recommendations", M, Inches(0.2), W, Inches(0.8),
+    _add_text(s5, "Root Cause & Risk", M, Inches(0.2), W, Inches(0.8),
               28, bold=True, color=_WHITE)
     _add_text(s5, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3),
+              12, color=_LIGHT_BLUE)
+    root_cause = narrative.get("pptx_root_cause", "").strip() or (
+        "Root cause is under investigation; refer to the technical report for the initial access vector."
+    )
+    _add_text(s5, "ROOT CAUSE", M, Inches(1.25), W - 2 * M, Inches(0.35),
+              13, bold=True, color=_LIGHT_BLUE)
+    _add_text(s5, root_cause, M, Inches(1.65), W - 2 * M, Inches(1.3),
+              14, color=_TEXT_DARK)
+    risk_bullets = _narr_bullets(narrative, "pptx_risk")
+    _add_text(s5, "KEY RISKS", M, Inches(3.1), W - 2 * M, Inches(0.35),
+              13, bold=True, color=_LIGHT_BLUE)
+    if risk_bullets:
+        risk_text = "\n\n".join(f"•  {b}" for b in risk_bullets[:5])
+    else:
+        risk_text = "Risk assessment is in progress; refer to the technical report."
+    _add_text(s5, risk_text, M, Inches(3.5), W - 2 * M, Inches(3.2),
+              14, color=_TEXT_DARK)
+
+    # ── Slide 6 — Response & Containment ─────────────────────────────────────
+    _add_bullet_slide(
+        "Response & Containment",
+        _narr_bullets(narrative, "pptx_mitigations"),
+        "Response and containment actions are in progress; refer to the technical report.",
+    )
+
+    # ── Slide 7 — Recommendations ────────────────────────────────────────────
+    s7 = prs.slides.add_slide(blank_layout)
+    _add_rect(s7, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _add_text(s7, "Recommendations", M, Inches(0.2), W, Inches(0.8),
+              28, bold=True, color=_WHITE)
+    _add_text(s7, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3),
               12, color=_LIGHT_BLUE)
     recs = _build_recommendations(data, shutdown_md)
     row_h = Inches(0.72)
     for i, rec in enumerate(recs[:7]):
         y = Inches(1.2) + i * row_h
-        _add_rect(s5, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
-        _add_text(s5, str(i + 1), M + Inches(0.1), y + Inches(0.1),
+        _add_rect(s7, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
+        _add_text(s7, str(i + 1), M + Inches(0.1), y + Inches(0.1),
                   Inches(0.3), row_h, 16, bold=True, color=_WHITE, align=PP_ALIGN.CENTER)
         rec_clean = re.sub(r"\*\*(.*?)\*\*", r"\1", rec.split(" — ")[0][:120])
-        _add_text(s5, rec_clean, M + Inches(0.6), y + Inches(0.1),
+        _add_text(s7, rec_clean, M + Inches(0.6), y + Inches(0.1),
                   W - M - Inches(1.0), row_h, 13, color=_TEXT_DARK)
+
+    # ── Slide 8 — Lessons Learned ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Lessons Learned",
+        _narr_bullets(narrative, "pptx_lessons_learned"),
+        "Lessons learned will be documented once the investigation and remediation are complete.",
+    )
 
     prs.save(str(output_path))
     print(f"[fame] PPTX saved: {output_path}")
@@ -2403,6 +2351,8 @@ def generate(
     image_path: str = "",
     analysis_dir: Path | None = None,
     output_dir: Path | None = None,
+    case_dir: Path | None = None,
+    docs_dir: Path | None = None,
     opencti_findings: str = "",
     fan_summary: str = "",
     fast_summary: str = "",
@@ -2411,21 +2361,31 @@ def generate(
     """
     Generate the full FAME report suite (Markdown, PDF, PPTX, DOCX).
 
+    case_dir: module-specific directory (reports/<case_id>/FAME/<hostname>/). When
+    supplied, Markdown goes to case_dir/. docs_dir overrides where PDF/PPTX/DOCX land
+    (default: case_dir/output/ for legacy compat, typically reports/<case_id>/documents/).
+    When both are omitted, all formats land in output_dir (legacy flat behaviour).
+
     Returns dict with keys: md, md_draft, pdf, pptx, docx — each a Path (or None).
     If the primary Markdown report already exists (analyst may have enhanced it),
     the new auto-generated content is written to <case_id>_fame_report_generated.md
     and md_draft points to that file; md always points to the primary report path.
     """
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "memory")
-    output_dir   = output_dir   or (PROJECT_ROOT / "reports")
-    path_guard.guard_output_dir(output_dir)
+
+    if case_dir is not None:
+        md_dir  = path_guard.guard_output_dir(case_dir)
+        aux_dir = path_guard.guard_output_dir(docs_dir or (case_dir / "output"))
+    else:
+        md_dir  = path_guard.guard_output_dir(output_dir or (PROJECT_ROOT / "reports"))
+        aux_dir = md_dir
 
     data = _load_analysis(analysis_dir)
     # Make the Claude-authored narrative available to the PPTX/DOCX builders too
     # (the Markdown builder loads it separately). This lets the management-facing
     # outputs fall back to the narrative's pptx_* sections for cases that are not
     # the legacy "unexpected shutdown" scenario.
-    data["_narrative"] = _load_narrative(case_id, output_dir)
+    data["_narrative"] = _load_narrative(case_id, md_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")
     stem = case_id.replace(" ", "_")
 
@@ -2433,14 +2393,15 @@ def generate(
     md_text = _build_markdown(
         data, case_id, hostname, image_path or str(analysis_dir),
         generated_utc, opencti_findings, fan_summary, fast_summary,
+        reports_dir=md_dir,
     )
-    md_path = output_dir / f"{stem}_fame_report.md"
+    md_path = md_dir / f"{stem}_fame_report.md"
     md_draft_path: Path | None = None
 
     if md_path.exists():
         # Analyst may have enhanced the primary report — write new auto-generated
         # content to a draft file so they can review and promote it if desired.
-        md_draft_path = output_dir / f"{stem}_fame_report_generated.md"
+        md_draft_path = md_dir / f"{stem}_fame_report_generated.md"
         md_draft_path.write_text(md_text)
         pdf_source = md_draft_path
         print(f"[fame] Existing report preserved: {md_path}")
@@ -2456,7 +2417,7 @@ def generate(
         try:
             sys.path.insert(0, str(PROJECT_ROOT / "lib"))
             from md_to_pdf import convert as md2pdf
-            pdf_path = output_dir / f"{stem}_fame_report.pdf"
+            pdf_path = aux_dir / f"{stem}_fame_report.pdf"
             md2pdf(pdf_source, pdf_path)
             print(f"[fame] PDF saved: {pdf_path}")
         except Exception as exc:
@@ -2465,7 +2426,7 @@ def generate(
     # ── PPTX ──────────────────────────────────────────────────────────────────
     pptx_path: Path | None = None
     if not md_only:
-        pptx_path = output_dir / f"{stem}_fame_presentation.pptx"
+        pptx_path = aux_dir / f"{stem}_fame_presentation.pptx"
         _build_pptx(
             data, case_id, hostname, image_path or str(analysis_dir),
             generated_utc, pptx_path, opencti_findings, fan_summary, fast_summary,
@@ -2474,7 +2435,7 @@ def generate(
     # ── DOCX ──────────────────────────────────────────────────────────────────
     docx_path: Path | None = None
     if not md_only:
-        docx_path = output_dir / f"{stem}_fame_report.docx"
+        docx_path = aux_dir / f"{stem}_fame_report.docx"
         _build_docx(
             data, case_id, hostname, image_path or str(analysis_dir),
             generated_utc, docx_path, opencti_findings, fan_summary, fast_summary,
@@ -2498,6 +2459,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--image-path",   default="",   metavar="PATH",  help="Path to memory image")
     p.add_argument("--analysis-dir", default=None, metavar="DIR",   help="Analysis output directory")
     p.add_argument("--output-dir",   default=None, metavar="DIR",   help="Report output directory")
+    p.add_argument("--case-dir",     default=None, metavar="DIR",   help="Module-specific dir (reports/<case_id>/FAME/<host>/); MD lands here")
+    p.add_argument("--docs-dir",     default=None, metavar="DIR",   help="Shared documents dir (reports/<case_id>/documents/); PDF/PPTX/DOCX land here")
     p.add_argument("--opencti",      default="",   metavar="TEXT",  help="OpenCTI enrichment text")
     p.add_argument("--fan-summary",  default="",   metavar="TEXT",  help="FAN (network) summary for cross-module section")
     p.add_argument("--fast-summary", default="",   metavar="TEXT",  help="FAST (storage) summary for cross-module section")
@@ -2513,6 +2476,8 @@ if __name__ == "__main__":
         image_path    = args.image_path,
         analysis_dir  = Path(args.analysis_dir) if args.analysis_dir else None,
         output_dir    = Path(args.output_dir)   if args.output_dir   else None,
+        case_dir      = Path(args.case_dir)     if args.case_dir     else None,
+        docs_dir      = Path(args.docs_dir)     if args.docs_dir     else None,
         opencti_findings = args.opencti,
         fan_summary   = args.fan_summary,
         fast_summary  = args.fast_summary,

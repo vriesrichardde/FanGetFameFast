@@ -95,12 +95,16 @@ echo ""
 python3 "$PROJECT_ROOT/lib/init_vault.py" 2>/dev/null || true
 
 # ── Research notes initialisation ─────────────────────────────────────────────
+# Pre-compute CASE_DIR early so research_notes are written to the correct
+# per-module subdir from the first step (full layout is set again below).
+_EARLY_CASE_DIR="$REPORTS_DIR/$CASE_ID/FAME/$HOSTNAME_ARG"
+mkdir -p "$_EARLY_CASE_DIR" 2>/dev/null || true
 python3 "$PROJECT_ROOT/lib/research_notes.py" init \
     --case-id    "$CASE_ID" \
     --module     fame \
     --evidence   "$MEMORY_IMAGE" \
     --hostname   "$HOSTNAME_ARG" \
-    --output-dir "$REPORTS_DIR" 2>/dev/null || true
+    --case-dir   "$_EARLY_CASE_DIR" 2>/dev/null || true
 
 # ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p \
@@ -456,7 +460,14 @@ fi
 
 # ── Evidence folder preservation (before report generation) ───────────────────
 STEM="${CASE_ID//[[:space:]]/_}"
-EVIDENCE_DIR="$REPORTS_DIR/${CASE_ID}_evidence"
+# New 3-level layout: reports/<case_id>/FAME/<hostname>/
+INVESTIGATION_NAME="${HOSTNAME_ARG:-$STEM}"
+CASE_ROOT="$REPORTS_DIR/$CASE_ID"
+CASE_DIR="$CASE_ROOT/FAME/$INVESTIGATION_NAME"
+DOCS_DIR="$CASE_ROOT/documents"
+mkdir -p "$CASE_DIR" "$DOCS_DIR" "$CASE_ROOT/raw"
+export FGFF_CASE_DIR="$CASE_ROOT"   # record/package write to CASE_ROOT/documents/
+EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 echo "[fame] Preserving analysis artifacts → $EVIDENCE_DIR ..."
 mkdir -p "$EVIDENCE_DIR/memory"
 rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/memory/" 2>/dev/null || true
@@ -476,14 +487,14 @@ for artifact_file in \
     "$EVIDENCE_DIR/memory/svc_baseline.csv"; do
     if [[ -f "$artifact_file" ]]; then
         _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
-        _relpath="${CASE_ID}_evidence/memory/$(basename "$artifact_file")"
+        _relpath="FAME/$INVESTIGATION_NAME/${CASE_ID}_evidence/memory/$(basename "$artifact_file")"
         python3 "$PROJECT_ROOT/lib/research_notes.py" step \
             --case-id "$CASE_ID" \
             --title   "Evidence preserved: $(basename "$artifact_file")" \
             --action  "sha256sum $artifact_file" \
             --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
             --outcome "Preserved to ${_relpath} — SHA-256: ${_hash}" \
-            --output-dir "$REPORTS_DIR" 2>/dev/null || true
+            --case-dir "$CASE_DIR" 2>/dev/null || true
     fi
 done
 echo "[fame] Evidence folder ready: $EVIDENCE_DIR"
@@ -494,17 +505,18 @@ echo "[fame] Generating reports (Markdown, PDF, PPTX, DOCX)..."
 # Check for existing FAN report to include cross-module summary
 FAN_MD=""
 FAST_MD=""
-[[ -f "$REPORTS_DIR/${STEM}_incident_report.md" ]] && \
-    FAN_MD="$(head -60 "$REPORTS_DIR/${STEM}_incident_report.md")"
-[[ -f "$REPORTS_DIR/${STEM}_fast_report.md" ]] && \
-    FAST_MD="$(head -60 "$REPORTS_DIR/${STEM}_fast_report.md")"
+_fan_cand=$(find "$CASE_ROOT/FAN" -name "*_incident_report.md" -type f 2>/dev/null | head -1)
+[[ -n "$_fan_cand" ]] && FAN_MD="$(head -60 "$_fan_cand")"
+_fast_cand=$(find "$CASE_ROOT/FAST" -name "*_fast_report.md" -type f 2>/dev/null | head -1)
+[[ -n "$_fast_cand" ]] && FAST_MD="$(head -60 "$_fast_cand")"
 
 python3 "$PROJECT_ROOT/lib/generate_fame_report.py" \
     --case-id      "$CASE_ID" \
     --hostname     "$HOSTNAME_ARG" \
     --image-path   "$MEMORY_IMAGE" \
     --analysis-dir "$ANALYSIS_DIR" \
-    --output-dir   "$REPORTS_DIR" \
+    --case-dir     "$CASE_DIR" \
+    --docs-dir     "$DOCS_DIR" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
     ${FAST_MD:+--fast-summary "$FAST_MD"} \
     $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
@@ -513,10 +525,10 @@ python3 "$PROJECT_ROOT/lib/generate_fame_report.py" \
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
     echo "[fame] Uploading reports to investigations vault..."
 
-    MD_PATH="$REPORTS_DIR/${STEM}_fame_report.md"
-    PDF_PATH="$REPORTS_DIR/${STEM}_fame_report.pdf"
-    PPTX_PATH="$REPORTS_DIR/${STEM}_fame_presentation.pptx"
-    DOCX_PATH="$REPORTS_DIR/${STEM}_fame_report.docx"
+    MD_PATH="$CASE_DIR/${STEM}_fame_report.md"
+    PDF_PATH="$DOCS_DIR/${STEM}_fame_report.pdf"
+    PPTX_PATH="$DOCS_DIR/${STEM}_fame_presentation.pptx"
+    DOCX_PATH="$DOCS_DIR/${STEM}_fame_report.docx"
 
     # Use an array so paths/case-id with spaces or glob chars cannot word-split
     # or inject extra --flags into investigations_upload.py.
@@ -529,28 +541,28 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     ARTIFACT_ZIP="$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip"
     [[ -f "$ARTIFACT_ZIP" ]] && UPLOAD_ARGS+=(--zip "$ARTIFACT_ZIP")
 
-    # Upload evidence folder as a ZIP
-    EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
+    # Upload evidence folder as a ZIP (written to documents dir)
+    EVIDENCE_ZIP="$DOCS_DIR/${CASE_ID}_evidence.zip"
     if [[ -d "$EVIDENCE_DIR" ]]; then
-        (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
+        (cd "$(dirname "$EVIDENCE_DIR")" && zip -r "$EVIDENCE_ZIP" "$(basename "$EVIDENCE_DIR")/" -q) && \
             UPLOAD_ARGS+=(--zip "$EVIDENCE_ZIP")
     fi
 
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
         echo "[fame] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
-    # Upload combined report if generated
-    COMBINED_MD="$REPORTS_DIR/${STEM}_combined_report.md"
-    if [[ -f "$COMBINED_MD" ]]; then
-        COMB_ARGS=(--case-id "$CASE_ID" --md "$COMBINED_MD")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_report.pdf"  ]] && \
-            COMB_ARGS+=(--pdf "$REPORTS_DIR/${STEM}_combined_report.pdf")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_presentation.pptx" ]] && \
-            COMB_ARGS+=(--pptx "$REPORTS_DIR/${STEM}_combined_presentation.pptx")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_report.docx" ]] && \
-            COMB_ARGS+=(--docx "$REPORTS_DIR/${STEM}_combined_report.docx")
+    # Upload campaign report if generated
+    CAMPAIGN_MD="$CASE_ROOT/${CASE_ID}_campaign_report.md"
+    if [[ -f "$CAMPAIGN_MD" ]]; then
+        COMB_ARGS=(--case-id "$CASE_ID" --md "$CAMPAIGN_MD")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.pdf"  ]] && \
+            COMB_ARGS+=(--pdf "$DOCS_DIR/${CASE_ID}_campaign_report.pdf")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx" ]] && \
+            COMB_ARGS+=(--pptx "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.docx" ]] && \
+            COMB_ARGS+=(--docx "$DOCS_DIR/${CASE_ID}_campaign_report.docx")
         python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}" || \
-            echo "[fame] WARNING: Combined report upload failed."
+            echo "[fame] WARNING: Campaign report upload failed."
     fi
 else
     echo "[fame] Upload skipped (--no-upload)."
@@ -561,8 +573,8 @@ fi
 # confirmed TTPs, IOCs, and risks to the Obsidian vault.  The research notes
 # Investigation Summary becomes the case-closing text.
 if [[ $NO_VAULT -eq 0 ]]; then
-    MD_PATH="$REPORTS_DIR/${STEM}_fame_report.md"
-    NOTES_PATH="$REPORTS_DIR/${STEM}_research_notes.md"
+    MD_PATH="$CASE_DIR/${STEM}_fame_report.md"
+    NOTES_PATH="$CASE_DIR/${CASE_ID}_research_notes.md"
     if [[ -f "$MD_PATH" ]]; then
         echo "[fame] Writing confirmed findings to vault..."
         python3 "$PROJECT_ROOT/lib/vault_writer.py" \
@@ -582,14 +594,15 @@ fi
 # reasoning behind every finding and feeds workflow optimisation. This step
 # must never fail the investigation.
 source "$PROJECT_ROOT/scripts/record_session.sh"
-fgff_record_session "$CASE_ID" "$REPORTS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+fgff_record_session "$CASE_ID" "$DOCS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Package every artifact for this case (reports, transcript, exhibits, …) into a
 # timestamped ZIP and upload it to the investigations vault. Runs after the
 # transcript so the bundle includes it. Best-effort; never fails the run.
+# FGFF_CASE_DIR is already set above; fgff_package_artifacts reads it.
 source "$PROJECT_ROOT/scripts/package_artifacts.sh"
-fgff_package_artifacts "$CASE_ID" "$REPORTS_DIR" "$PROJECT_ROOT/exports" "$STEM" \
+fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" \
     "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -602,13 +615,12 @@ echo "  Case ID  : $CASE_ID"
 echo "  Host     : $HOSTNAME_ARG"
 echo ""
 echo "  Reports:"
-for ext in md pdf pptx docx; do
-    f="$REPORTS_DIR/${STEM}_fame_report.$ext"
-    [[ "$ext" == "pptx" ]] && f="$REPORTS_DIR/${STEM}_fame_presentation.pptx"
-    [[ -f "$f" ]] && echo "    $ext  → $f"
-done
-[[ -f "$REPORTS_DIR/${STEM}_combined_report.md" ]] && \
-    echo "    combined → $REPORTS_DIR/${STEM}_combined_report.md"
+[[ -f "$CASE_DIR/${STEM}_fame_report.md"         ]] && echo "    md   → $CASE_DIR/${STEM}_fame_report.md"
+[[ -f "$DOCS_DIR/${STEM}_fame_report.pdf"         ]] && echo "    pdf  → $DOCS_DIR/${STEM}_fame_report.pdf"
+[[ -f "$DOCS_DIR/${STEM}_fame_presentation.pptx"  ]] && echo "    pptx → $DOCS_DIR/${STEM}_fame_presentation.pptx"
+[[ -f "$DOCS_DIR/${STEM}_fame_report.docx"        ]] && echo "    docx → $DOCS_DIR/${STEM}_fame_report.docx"
+[[ -f "$CASE_ROOT/${CASE_ID}_campaign_report.md"  ]] && \
+    echo "    campaign → $CASE_ROOT/${CASE_ID}_campaign_report.md"
 echo ""
 echo "  Analysis : $ANALYSIS_DIR/"
 [[ -f "$PROJECT_ROOT/analysis/${STEM}_kali_memory_artifacts.zip" ]] && \

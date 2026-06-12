@@ -127,20 +127,32 @@ ewfinfo → mmls → fls → mactime → artifact extraction → bulk_extractor 
 [correlate] → generate_fast_report.py
 ```
 
-### Triggering a combined report with correlation included
+### Feeding correlate's output into the campaign report
 
-After running correlate, regenerate the combined report to incorporate the findings
-into Section 2:
+`correlate_findings.py`'s output (`<case_id>_correlation.md`/`.json`) is a
+**best-effort research aid**, not the campaign report itself. The per-case
+campaign report (`<case_id>_campaign_report.*`) must be hand-authored
+following `docs/campaign_report_template.md`: read this file as one input
+when drafting Section 3 (Cross-Domain Correlation), but ground that section in
+the modules' research notes regardless. **Zero matches reported here does not
+mean no correlation exists** — `correlate_findings.py` only checks a fixed set
+of artifact paths and comparison types; real pivots visible in the research
+notes (e.g., matching timestamps, file paths referenced across modules) must
+still be written up even if this tool found nothing.
+
+Once the campaign report MD is hand-authored, render it:
 
 ```python
 import sys; sys.path.insert(0, "./lib")
-from generate_combined_report import generate
+from render_campaign_report import render
 
-paths = generate(case_id="CASE-2026-001", hostname="SERVER1234")
+paths = render(md_path="./reports/<case_id>/<case_id>_campaign_report.md",
+                case_id="<case_id>", hostname="<hostname>")
 ```
 
-The combined report generator automatically includes `<case_id>_correlation.md`
-when it exists in the reports directory.
+`lib/generate_combined_report.py`'s `generate()` is deprecated for this
+workflow — it remains only as an automated fallback for `--md-only`/headless
+batch runs or very-low-evidence cases.
 
 ---
 

@@ -25,12 +25,17 @@ fgff_record_session() {
     local case_id="${1:-}"
     local out_dir="${2:-}"
     local do_upload="${3:-0}"
+    local case_dir="${4:-${FGFF_CASE_DIR:-}}"
 
     # Validate gently: a missing argument must not abort the investigation, so
     # warn and return success rather than using ${x:?} (which hard-exits under
     # `set -e` and cannot be caught with `|| true`).
-    if [[ -z "$case_id" || -z "$out_dir" ]]; then
-        echo "[record] WARNING: case_id/output_dir missing; skipping transcript (analysis unaffected)." >&2
+    if [[ -z "$case_id" ]]; then
+        echo "[record] WARNING: case_id missing; skipping transcript (analysis unaffected)." >&2
+        return 0
+    fi
+    if [[ -z "$case_dir" && -z "$out_dir" ]]; then
+        echo "[record] WARNING: output_dir missing; skipping transcript (analysis unaffected)." >&2
         return 0
     fi
 
@@ -40,7 +45,12 @@ fgff_record_session() {
     proj="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
     echo "[record] Recording session transcript (chain of evidence) for ${case_id}..."
-    local args=(--case-id "$case_id" --output-dir "$out_dir")
+    local args=(--case-id "$case_id")
+    if [[ -n "$case_dir" ]]; then
+        args+=(--case-dir "$case_dir")
+    else
+        args+=(--output-dir "$out_dir")
+    fi
     [[ "$do_upload" -eq 1 ]] && args+=(--upload)
 
     if python3 "$proj/lib/chat_recorder.py" "${args[@]}"; then

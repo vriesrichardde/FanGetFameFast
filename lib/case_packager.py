@@ -97,6 +97,7 @@ def package_all(
     reports_dirs,
     output_dir: Path | None = None,
     stem: str | None = None,
+    case_dir: Path | None = None,
 ) -> Path | None:
     """
     General, format-agnostic packager: collect EVERY artifact for *case_id*
@@ -108,7 +109,14 @@ def package_all(
     transcript (MD/PDF/JSONL), exhibit images, evidence ZIPs, etc. — so the
     bundle is complete for FAN, FAME, FAST and batch runs alike.
 
-    Collection rules, applied to each directory in *reports_dirs*:
+    When *case_dir* is supplied (hierarchical per-case layout):
+      * The entire ``case_dir/`` tree is collected (module subdirs, documents/,
+        raw/, campaign report MD).
+      * The ZIP is written to ``case_dir/documents/``.
+      * *reports_dirs* and *output_dir* are ignored.
+
+    Legacy collection rules (when *case_dir* is None), applied to each
+    directory in *reports_dirs*:
       * a ``<case_id>/`` subfolder (in-session layout) — added whole,
       * flat ``<case_id>_*`` files,
       * flat ``<stem>_*`` files when *stem* differs from *case_id* (FAN).
@@ -117,46 +125,65 @@ def package_all(
 
     Returns the ZIP path, or ``None`` when no artifacts were found.
     """
-    dirs = [Path(d) for d in (reports_dirs if isinstance(reports_dirs, (list, tuple)) else [reports_dirs])]
-    output_dir = Path(output_dir) if output_dir else dirs[0]
-    output_dir = path_guard.guard_output_dir(output_dir)
-
-    ts        = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    zip_name  = f"{case_id}_{ts}.zip"
-    zip_path  = path_guard.assert_writable(output_dir / zip_name)
     bundle_re = re.compile(rf"{re.escape(case_id)}_\d{{8}}-\d{{6}}\.zip$")
-
     selected: dict[str, Path] = {}
 
-    def consider(f: Path, base: Path) -> None:
-        # Skip non-files, our own timestamped bundles (avoid nesting), and any
-        # pre-existing manifest (we regenerate MANIFEST.sha256 ourselves).
-        if not f.is_file() or bundle_re.search(f.name) or f.name == "MANIFEST.sha256":
-            return
-        try:
-            rel = f.relative_to(base)
-        except ValueError:
-            rel = Path(f.name)
-        arc = str(rel) if rel.parts and rel.parts[0] == case_id else f"{case_id}/{rel}"
-        selected.setdefault(arc, f)
+    if case_dir is not None:
+        # ── Hierarchical per-case layout ──────────────────────────────────
+        case_dir = Path(case_dir)
+        zip_out  = path_guard.guard_output_dir(case_dir / "documents")
+        base     = case_dir.parent  # e.g. reports/
 
-    for rd in dirs:
-        if not rd.is_dir():
-            continue
-        sub = rd / case_id
-        if sub.is_dir():
-            for f in sub.rglob("*"):
+        def _consider_hier(f: Path) -> None:
+            if not f.is_file() or bundle_re.search(f.name) or f.name == "MANIFEST.sha256":
+                return
+            try:
+                rel = f.relative_to(base)
+            except ValueError:
+                rel = Path(case_id) / f.name
+            arc = str(rel)
+            selected.setdefault(arc, f)
+
+        for f in case_dir.rglob("*"):
+            _consider_hier(f)
+    else:
+        # ── Legacy flat layout ────────────────────────────────────────────
+        dirs = [Path(d) for d in (reports_dirs if isinstance(reports_dirs, (list, tuple)) else [reports_dirs])]
+        zip_out = path_guard.guard_output_dir(Path(output_dir) if output_dir else dirs[0])
+
+        def consider(f: Path, base: Path) -> None:
+            # Skip non-files, our own timestamped bundles (avoid nesting), and any
+            # pre-existing manifest (we regenerate MANIFEST.sha256 ourselves).
+            if not f.is_file() or bundle_re.search(f.name) or f.name == "MANIFEST.sha256":
+                return
+            try:
+                rel = f.relative_to(base)
+            except ValueError:
+                rel = Path(f.name)
+            arc = str(rel) if rel.parts and rel.parts[0] == case_id else f"{case_id}/{rel}"
+            selected.setdefault(arc, f)
+
+        for rd in dirs:
+            if not rd.is_dir():
+                continue
+            sub = rd / case_id
+            if sub.is_dir():
+                for f in sub.rglob("*"):
+                    consider(f, rd)
+            for f in rd.glob(f"{case_id}_*"):
                 consider(f, rd)
-        for f in rd.glob(f"{case_id}_*"):
-            consider(f, rd)
-        if stem and stem != case_id:
-            for f in rd.glob(f"{stem}_*"):
-                consider(f, rd)
+            if stem and stem != case_id:
+                for f in rd.glob(f"{stem}_*"):
+                    consider(f, rd)
 
     if not selected:
-        print(f"[package] No artifacts found for {case_id} in {', '.join(str(d) for d in dirs)}")
+        search_desc = str(case_dir) if case_dir is not None else ", ".join(str(d) for d in dirs)  # type: ignore[union-attr]
+        print(f"[package] No artifacts found for {case_id} in {search_desc}")
         return None
 
+    ts       = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    zip_name = f"{case_id}_{ts}.zip"
+    zip_path = path_guard.assert_writable(zip_out / zip_name)
     print(f"[package] Creating {zip_path.name} ...")
     manifest = []
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -259,6 +286,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Additional report directory to scan (repeatable; --all mode)")
     p.add_argument("--analysis-dir", default="",    metavar="DIR",  help="Analysis base directory (default: reports-dir/../..)")
     p.add_argument("--output-dir",   default="",    metavar="DIR",  help="Where to write the ZIP (default: reports-dir)")
+    p.add_argument("--case-dir",      default="",    metavar="DIR",  help="Case root directory (reports/<case_id>/). When set, ZIP goes to case_dir/documents/ and the entire tree is collected.")
     p.add_argument("--all",          action="store_true",           help="General mode: bundle EVERY artifact for the case (all file types) with a SHA-256 manifest")
     p.add_argument("--upload",       action="store_true",           help="Upload the ZIP after packaging")
     return p
@@ -273,6 +301,7 @@ if __name__ == "__main__":
             reports_dirs= [args.reports_dir, *args.extra_reports_dir],
             output_dir  = Path(args.output_dir) if args.output_dir else None,
             stem        = args.stem or None,
+            case_dir    = Path(args.case_dir) if args.case_dir else None,
         )
     else:
         if not args.stem:

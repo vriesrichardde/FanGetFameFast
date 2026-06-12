@@ -90,12 +90,20 @@ ANALYSIS="$PROJECT_ROOT/analysis"
 REPORTS_TMP="$ANALYSIS/_reports/$STEM"
 mkdir -p "$REPORTS_TMP"
 
+# ── Per-case output directory (persists after WIP cleanup) ───────────────────
+# New 3-level layout: reports/<case_id>/FAN/<pcap_stem>/
+CASE_ROOT="$PROJECT_ROOT/reports/$CASE_ID"
+CASE_DIR="$CASE_ROOT/FAN/$STEM"
+DOCS_DIR="$CASE_ROOT/documents"
+mkdir -p "$CASE_DIR" "$DOCS_DIR" "$CASE_ROOT/raw"
+export FGFF_CASE_DIR="$CASE_ROOT"   # record/package write to CASE_ROOT/documents/
+
 # ── Research notes initialisation ─────────────────────────────────────────────
 python3 "$PROJECT_ROOT/lib/research_notes.py" init \
     --case-id    "$CASE_ID" \
     --module     fan \
     --evidence   "$PCAP_ABS" \
-    --output-dir "$REPORTS_TMP" 2>/dev/null || true
+    --case-dir   "$CASE_DIR" 2>/dev/null || true
 
 # ── Update Suricata rules ─────────────────────────────────────────────────────
 header "Updating Suricata Rules"
@@ -299,13 +307,14 @@ run_step "Incident report v${REPORT_VERSION}" \
     "$SCRIPT_DIR/generate_pcap_report.sh" \
     --stem "$STEM" \
     --case-id "$CASE_ID" \
-    --output-dir "$REPORTS_TMP" \
+    --case-dir "$CASE_DIR" \
+    --docs-dir "$DOCS_DIR" \
     --base-dir "$ANALYSIS" \
     --report-version "$REPORT_VERSION"
 
-REPORT_MD="$REPORTS_TMP/${STEM}_incident_report.md"
-REPORT_PDF="$REPORTS_TMP/${STEM}_incident_report.pdf"
-REPORT_PPTX="$REPORTS_TMP/${STEM}_management_briefing.pptx"
+REPORT_MD="$CASE_DIR/${STEM}_incident_report.md"
+REPORT_PDF="$DOCS_DIR/${STEM}_incident_report.pdf"
+REPORT_PPTX="$DOCS_DIR/${STEM}_management_briefing.pptx"
 
 [[ ! -f "$REPORT_MD" ]] && { err "Report markdown not found — aborting upload."; exit 1; }
 ok "Report v${REPORT_VERSION}: $REPORT_MD"
@@ -313,13 +322,13 @@ ok "Report v${REPORT_VERSION}: $REPORT_MD"
 # ── Management PowerPoint ─────────────────────────────────────────────────────
 header "Generating Management PowerPoint"
 
-REPORT_PPTX="$REPORTS_TMP/${STEM}_incident_briefing_v${REPORT_VERSION}.pptx"
+REPORT_PPTX="$DOCS_DIR/${STEM}_incident_briefing_v${REPORT_VERSION}.pptx"
 
 run_step "Management briefing (PPTX)" \
     "$SCRIPT_DIR/generate_pcap_presentation.sh" \
     --stem "$STEM" \
     --case-id "$CASE_ID" \
-    --output-dir "$REPORTS_TMP" \
+    --output-dir "$DOCS_DIR" \
     --base-dir "$ANALYSIS" \
     --report-version "$REPORT_VERSION"
 
@@ -338,7 +347,7 @@ REPORT_ZIP="$REPORTS_TMP/${STEM}_${CASE_ID}_artifacts.zip"
 
 # ── Evidence folder preservation ─────────────────────────────────────────────
 header "Preserving Analysis Artifacts"
-EVIDENCE_DIR="$PROJECT_ROOT/reports/${CASE_ID}_evidence"
+EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 mkdir -p "$EVIDENCE_DIR/analysis"
 rsync -a "$ANALYSIS/" "$EVIDENCE_DIR/analysis/" 2>/dev/null || true
 info "Evidence folder: $EVIDENCE_DIR"
@@ -352,19 +361,19 @@ for artifact_file in \
     "$EVIDENCE_DIR/analysis/suricata/${STEM}/suricata_results.json"; do
     if [[ -f "$artifact_file" ]]; then
         _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
-        _relpath="${CASE_ID}_evidence/analysis/$(realpath --relative-to="$EVIDENCE_DIR/analysis" "$artifact_file" 2>/dev/null || echo "$(basename "$artifact_file")")"
+        _relpath="FAN/$STEM/${CASE_ID}_evidence/analysis/$(realpath --relative-to="$EVIDENCE_DIR/analysis" "$artifact_file" 2>/dev/null || echo "$(basename "$artifact_file")")"
         python3 "$PROJECT_ROOT/lib/research_notes.py" step \
             --case-id "$CASE_ID" \
             --title   "Evidence preserved: $(basename "$artifact_file")" \
             --action  "sha256sum $artifact_file" \
             --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
             --outcome "Preserved to ${_relpath} — SHA-256: ${_hash}" \
-            --output-dir "$PROJECT_ROOT/reports" 2>/dev/null || true
+            --case-dir "$CASE_DIR" 2>/dev/null || true
     fi
 done
 
-EVIDENCE_ZIP="$PROJECT_ROOT/reports/${CASE_ID}_evidence.zip"
-(cd "$PROJECT_ROOT/reports" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q 2>/dev/null) || true
+EVIDENCE_ZIP="$DOCS_DIR/${CASE_ID}_evidence.zip"
+(cd "$(dirname "$EVIDENCE_DIR")" && zip -r "$EVIDENCE_ZIP" "$(basename "$EVIDENCE_DIR")/" -q 2>/dev/null) || true
 
 # ── Upload to investigations vault ────────────────────────────────────────────
 header "Uploading to Investigations Vault"
@@ -381,21 +390,23 @@ run_step "Upload report" \
 # ── Session transcript (chain of evidence) ────────────────────────────────────
 # Record the full Claude Code coordination session as a chain-of-evidence
 # Markdown + PDF (plus the verbatim .jsonl) and upload it. The transcript is
-# written to ./reports (which survives WIP cleanup) and captures the analytical
-# reasoning behind every finding, feeding workflow optimisation.
+# written to DOCS_DIR (persists after WIP cleanup) and captures the
+# analytical reasoning behind every finding, feeding workflow optimisation.
 header "Recording Session Transcript"
 
 # Best-effort, shared recorder (never fails the investigation). Uploaded to the
-# investigations vault alongside the report.
-fgff_record_session "$CASE_ID" "$PROJECT_ROOT/reports" 1
+# investigations vault alongside the report. FGFF_CASE_DIR is already exported.
+source "$SCRIPT_DIR/record_session.sh"
+fgff_record_session "$CASE_ID" "$DOCS_DIR" 1
 
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Bundle every artifact for this case — incident reports + the analysis bundle
-# from the temp reports dir, plus the transcript from ./reports — and upload it.
+# from the temp reports dir, plus the transcript — and upload it.
 # Runs before WIP cleanup so the temp reports dir ($REPORTS_TMP) still exists.
+# FGFF_CASE_DIR is already exported; fgff_package_artifacts reads it.
 header "Bundling & Uploading Artifacts"
 source "$SCRIPT_DIR/package_artifacts.sh"
-fgff_package_artifacts "$CASE_ID" "$REPORTS_TMP" "$PROJECT_ROOT/exports" "$STEM" 1 "$PROJECT_ROOT/reports"
+fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" 1 "$REPORTS_TMP"
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"
@@ -414,8 +425,8 @@ done
 # so the batch report generator can read FAN reports after WIP cleanup)
 if [[ -n "$REPORTS_PERSIST_DIR" ]]; then
     mkdir -p "$REPORTS_PERSIST_DIR"
-    cp -f "$REPORTS_TMP"/*.md  "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
-    cp -f "$REPORTS_TMP"/*.pdf "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    cp -f "$CASE_DIR"/*.md   "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
+    cp -f "$DOCS_DIR"/*.pdf  "$REPORTS_PERSIST_DIR/" 2>/dev/null || true
     ok "FAN reports copied to: $REPORTS_PERSIST_DIR"
 fi
 

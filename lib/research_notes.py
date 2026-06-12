@@ -33,8 +33,13 @@ _PLACEHOLDER = "<!-- summary-placeholder -->"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _notes_path(case_id: str, output_dir: str | None) -> Path:
-    d = Path(output_dir) if output_dir else REPORTS_DIR
+def _notes_path(case_id: str, output_dir: str | None, case_dir: str | None = None) -> Path:
+    if case_dir:
+        d = Path(case_dir)
+    elif output_dir:
+        d = Path(output_dir)
+    else:
+        d = REPORTS_DIR / case_id  # new default: per-case subdirectory
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{case_id}_research_notes.md"
 
@@ -263,7 +268,7 @@ def parse_reflections(case_id: str, output_dir: str | None = None) -> list[dict]
 # ---------------------------------------------------------------------------
 
 def cmd_init(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     module_label = args.module.upper()
     hostname = args.hostname or "—"
     evidence = args.evidence or "—"
@@ -283,7 +288,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_step(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -355,7 +360,7 @@ def cmd_step(args: argparse.Namespace) -> None:
 
 
 def cmd_assumption(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -374,7 +379,7 @@ def cmd_assumption(args: argparse.Namespace) -> None:
 
 
 def cmd_reflect(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -405,7 +410,7 @@ def cmd_reflect(args: argparse.Namespace) -> None:
 
 
 def cmd_event(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -445,7 +450,7 @@ def cmd_event(args: argparse.Namespace) -> None:
 
 
 def cmd_finalize(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(f"[research_notes] ERROR: notes file not found for {args.case_id}", file=sys.stderr)
         sys.exit(1)
@@ -476,7 +481,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--module",     required=True, choices=["fame", "fast", "fan"], help="Module name")
     pi.add_argument("--evidence",   metavar="PATH", help="Evidence file path shown in the header")
     pi.add_argument("--hostname",   metavar="NAME", help="Target hostname")
-    pi.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pi.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pi.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory (reports/<case_id>/); takes precedence over --output-dir")
 
     # step
     ps = sub.add_parser("step", help="Append a timestamped step entry")
@@ -493,19 +499,22 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Override confidence tier (default: auto-detected from --assumption flag)")
     ps.add_argument("--source-tool", metavar="TOOL",
                     help="Tool that produced this output, e.g. 'volatility3/psscan' or 'suricata' (optional)")
-    ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    ps.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # assumption
     pa = sub.add_parser("assumption", help="Record a standalone analytical assumption")
     pa.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
     pa.add_argument("--text",       required=True, metavar="TEXT", help="The assumption statement")
-    pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pa.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # finalize
     pf = sub.add_parser("finalize", help="Insert investigation summary and mark complete")
     pf.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
     pf.add_argument("--summary",    required=True, metavar="TEXT", help="Closing summary paragraph")
-    pf.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pf.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pf.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # reflect — mid-investigation or pre-finalize structured reflection
     pr = sub.add_parser("reflect", help="Log a structured reflection: re-interpretations and open leads")
@@ -513,7 +522,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--trigger",      required=True, metavar="TEXT", help="What prompted this reflection (e.g. 'post-netscan mid-investigation review')")
     pr.add_argument("--reinterpret",  metavar="TEXT", help="How current findings change interpretation of earlier steps (optional)")
     pr.add_argument("--open-leads",   metavar="TEXT", help="What needs follow-up that this investigation cannot resolve alone (optional)")
-    pr.add_argument("--output-dir",   metavar="DIR",  help="Output directory (default: ./reports/)")
+    pr.add_argument("--output-dir",   metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pr.add_argument("--case-dir",     metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # event — log a confirmed attacker action observed in the evidence
     pe = sub.add_parser("event", help="Log a timestamped attacker-observed event from the evidence")
@@ -528,7 +538,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--detail",       metavar="TEXT", help="Additional forensic context")
     pe.add_argument("--no-timestamp", action="store_true", dest="no_timestamp",
                     help="Mark as finding without a confirmed timestamp (excluded from visual timeline)")
-    pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/)")
+    pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/<case_id>/)")
+    pe.add_argument("--case-dir",     metavar="DIR", help="Per-case root directory; takes precedence over --output-dir")
 
     return p
 

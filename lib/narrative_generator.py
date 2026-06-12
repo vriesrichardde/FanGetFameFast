@@ -98,6 +98,27 @@ def _sentences(text: str, n: int = 5) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Board-language sanitization                                                 #
+# --------------------------------------------------------------------------- #
+
+_IP_RE        = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+_PATH_RE      = re.compile(r"(?:[A-Za-z]:\\[^\s,;]+|/(?:[\w.\-]+/)+[\w.\-]+)")
+_CITATION_RE  = re.compile(r"\s*(?:\(→\s*[A-Z]+-\d+[^)]*\)|\(\[?[A-Z]+-\d+\]?[^)]*\)|\[[A-Z]+-\d+\])")
+_HOSTNAME_RE  = re.compile(r"\b[A-Z]{2,6}[0-9]{2,6}\b")
+
+
+def _sanitize_for_board(text: str) -> str:
+    """Strip technical identifiers (IPs, file paths, citation refs, hostnames)
+    for board-level slides — no IPs, ports, file paths, or workstation IDs."""
+    text = _CITATION_RE.sub("", text)
+    text = _PATH_RE.sub("a system file", text)
+    text = _IP_RE.sub("an internal system", text)
+    text = _HOSTNAME_RE.sub("the affected workstation", text)
+    text = re.sub(r"  +", " ", text)
+    return text.strip(" .,;")
+
+
+# --------------------------------------------------------------------------- #
 # Research notes parsing                                                       #
 # --------------------------------------------------------------------------- #
 
@@ -321,6 +342,76 @@ def _format_recommendations(recs: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _derive_board_timeline(steps: list[dict], investigation_summary: str) -> str:
+    """Derive pptx_timeline: 4-6 plain-language milestone bullets, board-safe."""
+    skip_prefixes = ("evidence preserved:", "sha256", "deviation logged")
+    significant = [
+        s for s in steps
+        if s.get("outcome")
+        and len(s["outcome"]) > 30
+        and not any(s["title"].lower().startswith(p) for p in skip_prefixes)
+    ]
+    if not significant:
+        return "• The incident timeline is under investigation; refer to the technical report for the full chronology."
+
+    bullets: list[str] = []
+    for s in significant[:6]:
+        ts      = s.get("timestamp", "").strip()
+        outcome = _sanitize_for_board(_strip_md(_sentences(s.get("outcome", ""), 1)))
+        if not outcome:
+            continue
+        if ts:
+            bullets.append(f"• At {ts}, {outcome}")
+        else:
+            bullets.append(f"• {outcome}")
+
+    if not bullets:
+        return "• The incident timeline is under investigation; refer to the technical report for the full chronology."
+    return "\n".join(bullets)
+
+
+def _derive_root_cause(module: str, summary: str, steps: list[dict]) -> str:
+    """Derive a 1-2 sentence plain-language root-cause statement, board-safe."""
+    outcomes_text = " ".join(s.get("outcome", "") for s in steps).lower()
+
+    if any(k in outcomes_text for k in ["phishing", "malicious attachment", "malicious link"]):
+        return "The incident originated from a phishing message that led to malicious code being run on the affected system."
+    if "rdp" in outcomes_text or "remote desktop" in outcomes_text:
+        if any(k in outcomes_text for k in ["brute", "exposed", "external", "internet"]):
+            return "The incident originated from an internet-exposed remote access service that was reached without adequate restriction."
+    if any(k in outcomes_text for k in ["mimikatz", "credential", "password reuse", "weak password", "hash dump"]):
+        return "The incident was enabled by compromised or weak account credentials that allowed the attacker to authenticate as a legitimate user."
+    if any(k in outcomes_text for k in ["unpatched", "vulnerability", "cve", "exploit"]):
+        return "The incident was enabled by an unpatched software vulnerability that allowed the attacker to gain initial access."
+    if any(k in outcomes_text for k in ["physical access", "console", "usb"]):
+        return "The incident involved direct physical access to the affected system."
+    if any(k in outcomes_text for k in ["misconfigur", "default credential", "open share"]):
+        return "The incident was enabled by a system misconfiguration that exposed services or data beyond their intended scope."
+
+    return "Root cause is under investigation; refer to the technical report for the initial access vector."
+
+
+def _derive_lessons_learned(module: str, steps: list[dict], recs: list[str]) -> str:
+    """Derive pptx_lessons_learned: 3-5 bullets on what worked and what to improve."""
+    lessons: list[str] = []
+    outcomes_text = " ".join(s.get("outcome", "") for s in steps).lower()
+
+    if any(k in outcomes_text for k in ["acquired", "imaged", "memory image", "disk image", "pcap"]):
+        lessons.append("• Forensic evidence was preserved promptly, enabling a complete reconstruction of the incident timeline.")
+    if "vault" in outcomes_text or "upload" in outcomes_text:
+        lessons.append("• Established evidence-handling procedures (chain of custody, secure storage) were followed throughout the response.")
+
+    for rec in recs[:3]:
+        cleaned = _sanitize_for_board(_strip_md(_sentences(rec, 1)))
+        if cleaned:
+            lessons.append(f"• Acting on the recommendation to {cleaned[0].lower() + cleaned[1:]} would reduce the likelihood or impact of a similar incident.")
+
+    if not lessons:
+        lessons.append("• Lessons learned will be documented once the investigation and remediation are complete.")
+
+    return "\n".join(lessons[:5])
+
+
 # --------------------------------------------------------------------------- #
 # Main generator                                                               #
 # --------------------------------------------------------------------------- #
@@ -374,6 +465,9 @@ def generate_narrative(case_id: str, reports_dir: Path) -> Path:
     pptx_impact  = _derive_impact(module, primary_summary, steps)
     pptx_mit     = _derive_mitigations(steps, recs)
     pptx_recs    = _format_recommendations(recs)
+    pptx_timeline = _derive_board_timeline(steps, inv_summary)
+    pptx_root_cause = _derive_root_cause(module, primary_summary, steps)
+    pptx_lessons = _derive_lessons_learned(module, steps, recs)
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -422,6 +516,18 @@ def generate_narrative(case_id: str, reports_dir: Path) -> Path:
 ## pptx_recommendations
 
 {pptx_recs}
+
+## pptx_timeline
+
+{pptx_timeline}
+
+## pptx_root_cause
+
+{pptx_root_cause}
+
+## pptx_lessons_learned
+
+{pptx_lessons}
 """
 
     out_path = reports_dir / f"{case_id}_narrative.md"

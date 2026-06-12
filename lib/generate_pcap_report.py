@@ -28,6 +28,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -2799,6 +2800,7 @@ def _build_fan_pptx(
     recs: list[str],
     data: dict,
     output_path: Path,
+    narrative: dict | None = None,
 ) -> None:
     try:
         from pptx import Presentation
@@ -2842,8 +2844,21 @@ def _build_fan_pptx(
     H = prs.slide_height
     M = Inches(0.4)
 
-    sev_color = _SEV_COLORS.get(overall_sev, _SEV_COLORS["info"])
     pcap_name = f"{stem}.pcap"
+    narrative = narrative or {}
+
+    def _add_bullet_slide(title, bullets, fallback, max_items=8):
+        slide = prs.slides.add_slide(blank)
+        _rect(slide, 0, 0, W, Inches(1.1), _MID_NAVY)
+        _txt(slide, title, M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+        _txt(slide, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3),
+             12, color=_LIGHT_BLUE)
+        if bullets:
+            body = "\n\n".join(f"•  {b}" for b in bullets[:max_items])
+        else:
+            body = fallback
+        _txt(slide, body, M, Inches(1.3), W - 2 * M, H - Inches(1.6), 14, color=_TEXT_DARK)
+        return slide
 
     # ── Slide 1 — Cover ───────────────────────────────────────────────────────
     s1 = prs.slides.add_slide(blank)
@@ -2864,126 +2879,92 @@ def _build_fan_pptx(
     _txt(s1, "Fan Get Fame Fast  |  FAN module",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
 
-    # ── Slide 2 — Key findings ────────────────────────────────────────────────
+    # ── Slide 2 — Executive Summary ──────────────────────────────────────────
     s2 = prs.slides.add_slide(blank)
     _rect(s2, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s2, "Key findings", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s2, "Executive Summary", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
     _txt(s2, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
 
-    unique_ips   = len(data.get("unique_ips", []))
-    unique_fqdns = len(data.get("unique_fqdns", []))
-    ioc_count    = len(iocs)
-    alert_count  = sum(1 for e in timeline if e.get("severity") in ("critical", "high"))
-
-    summary = (
-        f"Network forensic analysis of {pcap_name} identified {unique_ips} unique IP "
-        f"addresses and {unique_fqdns} unique domain names. "
-        f"Overall severity: {overall_sev.upper()}. "
-        f"{ioc_count} indicator(s) of compromise extracted; "
-        f"{alert_count} critical/high-severity event(s) in the timeline."
-    )
-    _txt(s2, summary, M, Inches(1.3), W - 2*M, Inches(3.0), 15, color=_TEXT_DARK)
-
-    metrics = [
-        ("Unique IPs",    str(unique_ips)),
-        ("Unique FQDNs",  str(unique_fqdns)),
-        ("IOCs",          str(ioc_count)),
-        ("Severity",      overall_sev.upper()),
-    ]
-    col_w = (W - 2*M) // len(metrics)
-    for i, (label, value) in enumerate(metrics):
-        cx = M + i * col_w
-        val_color = sev_color if label == "Severity" else _AMBER
-        _rect(s2, cx + Inches(0.05), Inches(4.7), col_w - Inches(0.1), Inches(1.3), _MID_NAVY)
-        _txt(s2, value, cx + Inches(0.1), Inches(4.8), col_w - Inches(0.2), Inches(0.7),
-             18, bold=True, color=val_color)
-        _txt(s2, label, cx + Inches(0.1), Inches(5.5), col_w - Inches(0.2), Inches(0.4),
-             10, color=_LIGHT_BLUE)
-
-    # ── Slide 3 — Incident timeline ───────────────────────────────────────────
-    s3 = prs.slides.add_slide(blank)
-    _rect(s3, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s3, "Incident timeline", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
-    _txt(s3, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
-
-    shown_events = [e for e in timeline if e.get("severity") in ("critical", "high", "medium")][:12]
-    if not shown_events:
-        shown_events = timeline[:12]
-    if shown_events:
-        col_ws = [Inches(2.5), Inches(1.0), Inches(3.0), W - M - Inches(7.0)]
-        hdrs   = ["Timestamp", "Severity", "Category", "Description"]
-        row_h  = Inches(0.46)
-        hx = M
-        for h_t, cw_t in zip(hdrs, col_ws):
-            _rect(s3, hx, Inches(1.15), cw_t - Inches(0.05), row_h - Inches(0.04), _MID_NAVY)
-            _txt(s3, h_t, hx + Inches(0.08), Inches(1.2), cw_t - Inches(0.13), row_h,
-                 12, bold=True, color=_WHITE)
-            hx += cw_t
-        for i, ev in enumerate(shown_events[:11]):
-            y  = Inches(1.15) + (i + 1) * row_h
-            bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-            rx = M
-            vals = [
-                str(ev.get("timestamp", ""))[:24],
-                str(ev.get("severity", "")).upper(),
-                str(ev.get("category", ""))[:25],
-                str(ev.get("description", ""))[:70],
-            ]
-            for val, cw_t in zip(vals, col_ws):
-                _rect(s3, rx, y, cw_t - Inches(0.05), row_h - Inches(0.04), bg)
-                _txt(s3, val, rx + Inches(0.08), y + Inches(0.06),
-                     cw_t - Inches(0.13), row_h, 10, color=_TEXT_DARK)
-                rx += cw_t
+    exec_bullets = _narr_bullets(narrative, "pptx_executive_summary")
+    if exec_bullets:
+        summary_text = "\n\n".join(f"•  {b}" for b in exec_bullets[:7])
     else:
-        _txt(s3, "No threat events in timeline.", M, Inches(2.0), W - 2*M, Inches(1.0),
-             16, color=_TEXT_MID)
+        unique_ips   = len(data.get("unique_ips", []))
+        unique_fqdns = len(data.get("unique_fqdns", []))
+        ioc_count    = len(iocs)
+        alert_count  = sum(1 for e in timeline if e.get("severity") in ("critical", "high"))
+        summary_text = (
+            f"Network forensic analysis of {pcap_name} identified {unique_ips} unique IP "
+            f"addresses and {unique_fqdns} unique domain names. "
+            f"Overall severity: {overall_sev.upper()}. "
+            f"{ioc_count} indicator(s) of compromise extracted; "
+            f"{alert_count} critical/high-severity event(s) in the timeline."
+        )
+    _txt(s2, summary_text, M, Inches(1.3), W - 2*M, H - Inches(1.6), 15, color=_TEXT_DARK)
 
-    # ── Slide 4 — Key evidence ────────────────────────────────────────────────
-    s4 = prs.slides.add_slide(blank)
-    _rect(s4, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s4, "Key evidence", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
-    _txt(s4, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    # ── Slide 3 — Business Impact ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Business Impact",
+        _narr_bullets(narrative, "pptx_impact"),
+        "Operational impact assessment is in progress; refer to the technical report.",
+    )
 
-    module_hits = [
-        ("DNS threats",    data.get("has_dns",      False)),
-        ("HTTP threats",   data.get("has_http",     False)),
-        ("TLS inspection", data.get("has_tls",      False)),
-        ("Cert inspection",data.get("has_cert",     False)),
-        ("ICMP threats",   data.get("has_icmp",     False)),
-        ("TCP threats",    data.get("has_tcp",      False)),
-        ("Suricata IDS",   data.get("has_suricata", False)),
-        ("YARA matches",   data.get("has_yara",     False)),
-        ("CTI enrichment", data.get("has_fan_ip",   False)),
-        ("ARP threats",    data.get("has_arp",      False)),
-    ]
-    row_h = Inches(0.65)
-    for i, (label, hit) in enumerate(module_hits[:8]):
-        y  = Inches(1.25) + i * row_h
-        bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-        _rect(s4, M, y, Inches(3.5), row_h - Inches(0.06), bg)
-        _rect(s4, M + Inches(3.5), y, W - M - Inches(3.5) - M, row_h - Inches(0.06), bg)
-        mark_color = _GREEN if hit else _TEXT_MID
-        mark = "Triggered" if hit else "No findings"
-        _txt(s4, label, M + Inches(0.1), y + Inches(0.08), Inches(3.3), row_h,
-             13, bold=True, color=_TEXT_DARK)
-        _txt(s4, mark, M + Inches(3.6), y + Inches(0.08), W - M - Inches(4.1), row_h,
-             12, color=mark_color)
+    # ── Slide 4 — Incident Timeline ──────────────────────────────────────────
+    _add_bullet_slide(
+        "Incident Timeline",
+        _narr_bullets(narrative, "pptx_timeline"),
+        "The incident timeline is under investigation; refer to the technical report for the full chronology.",
+        max_items=6,
+    )
 
-    # ── Slide 5 — Recommendations ─────────────────────────────────────────────
+    # ── Slide 5 — Root Cause & Risk ──────────────────────────────────────────
     s5 = prs.slides.add_slide(blank)
     _rect(s5, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s5, "Recommendations", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s5, "Root Cause & Risk", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
     _txt(s5, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    root_cause = narrative.get("pptx_root_cause", "").strip() or (
+        "Root cause is under investigation; refer to the technical report for the initial access vector."
+    )
+    _txt(s5, "ROOT CAUSE", M, Inches(1.25), W - 2*M, Inches(0.35), 13, bold=True, color=_LIGHT_BLUE)
+    _txt(s5, root_cause, M, Inches(1.65), W - 2*M, Inches(1.3), 14, color=_TEXT_DARK)
+    risk_bullets = _narr_bullets(narrative, "pptx_risk")
+    _txt(s5, "KEY RISKS", M, Inches(3.1), W - 2*M, Inches(0.35), 13, bold=True, color=_LIGHT_BLUE)
+    if risk_bullets:
+        risk_text = "\n\n".join(f"•  {b}" for b in risk_bullets[:5])
+    else:
+        risk_text = "Risk assessment is in progress; refer to the technical report."
+    _txt(s5, risk_text, M, Inches(3.5), W - 2*M, Inches(3.2), 14, color=_TEXT_DARK)
+
+    # ── Slide 6 — Response & Containment ─────────────────────────────────────
+    _add_bullet_slide(
+        "Response & Containment",
+        _narr_bullets(narrative, "pptx_mitigations"),
+        "Response and containment actions are in progress; refer to the technical report.",
+    )
+
+    # ── Slide 7 — Recommendations ─────────────────────────────────────────────
+    s7 = prs.slides.add_slide(blank)
+    _rect(s7, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s7, "Recommendations", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s7, f"{case_id}  |  {pcap_name}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    narr_recs = _narr_bullets(narrative, "pptx_recommendations")
+    final_recs = narr_recs or recs
     row_h = Inches(0.72)
-    for i, rec in enumerate(recs[:7]):
+    for i, rec in enumerate(final_recs[:7]):
         y = Inches(1.2) + i * row_h
-        _rect(s5, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
-        _txt(s5, str(i + 1), M + Inches(0.1), y + Inches(0.1),
+        _rect(s7, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
+        _txt(s7, str(i + 1), M + Inches(0.1), y + Inches(0.1),
              Inches(0.3), row_h, 16, bold=True, color=_WHITE, align=PP_ALIGN.CENTER)
-        import re as _re
-        rec_clean = _re.sub(r"\*\*(.*?)\*\*", r"\1", rec[:120])
-        _txt(s5, rec_clean, M + Inches(0.6), y + Inches(0.1),
+        rec_clean = re.sub(r"\*\*(.*?)\*\*", r"\1", rec.split(" — ")[0][:120])
+        _txt(s7, rec_clean, M + Inches(0.6), y + Inches(0.1),
              W - M - Inches(1.0), row_h, 13, color=_TEXT_DARK)
+
+    # ── Slide 8 — Lessons Learned ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Lessons Learned",
+        _narr_bullets(narrative, "pptx_lessons_learned"),
+        "Lessons learned will be documented once the investigation and remediation are complete.",
+    )
 
     prs.save(str(output_path))
     print(f"[fan] PPTX saved: {output_path}")
@@ -3418,6 +3399,37 @@ def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
     return {k: v.strip() for k, v in sections.items()}
 
 
+def _narr_bullets(narrative: dict, key: str) -> list[str]:
+    """Return the bullet lines of a narrative pptx_* section as clean strings.
+
+    Accepts '-', '*' or '•' bullet markers; falls back to non-empty paragraph
+    lines if the section has no explicit bullets. Returns [] when absent."""
+    text = (narrative or {}).get(key, "") or ""
+
+    def _clean(s: str) -> str:
+        return re.sub(r"\*\*(.*?)\*\*", r"\1", s).replace("**", "").strip()
+
+    bullets: list[str] = []
+    marker = re.compile(r"^([-*•])\s+(.*)$")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = marker.match(line)
+        if m:
+            item = m.group(2).strip()
+            if item:
+                bullets.append(item)
+        elif bullets:
+            bullets[-1] = (bullets[-1] + " " + line).strip()
+    if not bullets:
+        for para in re.split(r"\n\s*\n", text):
+            p = " ".join(l.strip() for l in para.splitlines() if l.strip())
+            if p:
+                bullets.append(p)
+    return [_clean(b) for b in bullets]
+
+
 # ── Hallucination Guard ────────────────────────────────────────────────────────
 
 def _build_fan_hallucination_guard_section(data: dict, case_id: str, out_dir: Path) -> list[str]:
@@ -3673,15 +3685,29 @@ def generate_report(
     stem: str,
     case_id: str = "",
     output_dir: Path | None = None,
+    case_dir: Path | None = None,
+    docs_dir: Path | None = None,
     base_dir: Path | None = None,
     report_version: int = 1,
 ) -> dict[str, Path | None]:
+    """Generate PCAP incident report suite.
+
+    case_dir: module-specific directory (reports/<case_id>/FAN/<stem>/). When supplied,
+    Markdown goes to case_dir/. docs_dir overrides where PDF/PPTX/DOCX land (default:
+    case_dir/output/ for legacy compat, typically reports/<case_id>/documents/).
+    When both are omitted, all formats land in output_dir (legacy flat behaviour).
+    """
     global ANALYSIS_DIR
     if base_dir:
         ANALYSIS_DIR = base_dir
 
-    out_dir = output_dir or REPORTS_DIR
-    path_guard.guard_output_dir(out_dir)
+    if case_dir is not None:
+        md_dir  = path_guard.guard_output_dir(case_dir)
+        aux_dir = path_guard.guard_output_dir(docs_dir or (case_dir / "output"))
+    else:
+        md_dir  = path_guard.guard_output_dir(output_dir or REPORTS_DIR)
+        aux_dir = md_dir
+    out_dir = md_dir  # kept for internal section builders that receive out_dir
 
     print(f"[report] Loading analysis data for stem: {stem}")
     data = load_all_data(stem)
@@ -3766,8 +3792,8 @@ def generate_report(
 
     md_content = "\n".join(sections) + "\n"
 
-    md_path  = out_dir / f"{stem}_incident_report.md"
-    pdf_path = out_dir / f"{stem}_incident_report.pdf"
+    md_path  = md_dir  / f"{stem}_incident_report.md"
+    pdf_path = aux_dir / f"{stem}_incident_report.pdf"
 
     md_path.write_text(md_content, encoding="utf-8")
     print(f"[report] Markdown: {md_path}")
@@ -3782,18 +3808,19 @@ def generate_report(
         pdf_path = None
 
     # PPTX
-    pptx_path = out_dir / f"{stem}_fan_presentation.pptx"
+    pptx_path = aux_dir / f"{stem}_fan_presentation.pptx"
     try:
+        narrative = _load_narrative(case_id, out_dir)
         _build_fan_pptx(
             stem, case_id, generated_cet, overall_sev,
-            timeline, iocs, recs, data, pptx_path,
+            timeline, iocs, recs, data, pptx_path, narrative,
         )
     except Exception as exc:
         print(f"[report] PPTX generation failed: {exc}", file=sys.stderr)
         pptx_path = None
 
     # DOCX
-    docx_path = out_dir / f"{stem}_fan_report.docx"
+    docx_path = aux_dir / f"{stem}_fan_report.docx"
     try:
         _build_fan_docx(
             stem, case_id, generated_cet, overall_sev,
@@ -3828,6 +3855,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stem",           metavar="STEM", required=True, help="PCAP file stem (matches analysis subdirectories)")
     p.add_argument("--case-id",        metavar="ID",   default="",   help="Case ID stamped into the report")
     p.add_argument("--output-dir",     metavar="DIR",                help="Output directory (default: ./reports/)")
+    p.add_argument("--case-dir",       metavar="DIR",                help="Module-specific dir (reports/<case_id>/FAN/<stem>/); MD lands here")
+    p.add_argument("--docs-dir",       metavar="DIR",                help="Shared documents dir (reports/<case_id>/documents/); PDF/PPTX/DOCX land here")
     p.add_argument("--base-dir",       metavar="DIR",                help="Analysis base directory (default: ./analysis/)")
     p.add_argument("--report-version", metavar="N",   type=int, default=1,
                    help="Report version number stamped into the report header (default: 1)")
@@ -3837,9 +3866,11 @@ def _build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args  = _build_parser().parse_args()
     out   = Path(args.output_dir) if args.output_dir else None
+    cdir  = Path(args.case_dir)   if args.case_dir   else None
     base  = Path(args.base_dir)   if args.base_dir   else None
+    ddir  = Path(args.docs_dir)    if args.docs_dir    else None
     paths = generate_report(stem=args.stem, case_id=args.case_id, output_dir=out,
-                             base_dir=base, report_version=args.report_version)
+                             case_dir=cdir, docs_dir=ddir, base_dir=base, report_version=args.report_version)
     print("[report] Report suite complete:")
     for fmt, p in paths.items():
         if p:

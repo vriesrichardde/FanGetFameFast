@@ -195,10 +195,17 @@ def _parse_bulk_urls(carved_dir: Path) -> list[dict]:
     return results
 
 
-def _load_fan_json(analysis_dir: Path, module: str) -> list[dict]:
-    """Load threat records from a FAN module JSON file."""
+def _load_fan_json(analysis_dir: Path, module: str, case_dir: Path | None = None) -> list[dict]:
+    """Load threat records from a FAN module JSON file.
+
+    Checks the WIP `analysis/fan_*` layout first, then (for cases where
+    `./analysis/` has already been cleaned up) the preserved-evidence layout
+    under `reports/<case_id>/FAN/**/`.
+    """
     candidates: list[Path] = list(analysis_dir.glob(f"fan_{module}/**/{module}_threats.json"))
     candidates += list(analysis_dir.glob(f"{module}_threats.json"))
+    if case_dir is not None:
+        candidates += list(case_dir.glob(f"FAN/**/{module}_threats.json"))
     for c in candidates:
         try:
             data = json.loads(c.read_text(errors="replace"))
@@ -811,22 +818,37 @@ def correlate(
     memory_dir  = analysis_dir / "memory"
     storage_dir = analysis_dir / "storage"
     carved_dir  = exports_dir  / "carved"
+    case_dir    = reports_dir / case_id
 
     netscan_path = memory_dir / "netscan.txt"
     if not netscan_path.exists():
         netscan_path = memory_dir / "netstat.txt"
     pslist_path  = memory_dir / "pslist.txt"
     cmdline_path = memory_dir / "cmdline.txt"
-    fls_path     = storage_dir / "fls_output.txt"
+
+    fls_path = storage_dir / "fls_output.txt"
+    if not fls_path.exists():
+        # Preserved-evidence layout (post-cleanup): reports/<case_id>/FAST/<host>/<case_id>_evidence/storage/fls_output.txt
+        fls_candidates = list(case_dir.glob("FAST/*/*_evidence/storage/fls_output.txt"))
+        fls_candidates += list(exports_dir.glob("**/fls_output.txt"))
+        if fls_candidates:
+            fls_path = fls_candidates[0]
+
+    if not (carved_dir / "url.txt").exists() and not (carved_dir / "domain.txt").exists():
+        # Preserved-evidence layout: reports/<case_id>/FAST/<host>/<case_id>_evidence/exports/carved/
+        carved_candidates = list(case_dir.glob("FAST/*/*_evidence/exports/carved"))
+        if carved_candidates:
+            carved_dir = carved_candidates[0]
 
     artifacts: dict[str, bool] = {
         "analysis/memory/netscan.txt":       netscan_path.exists(),
         "analysis/memory/pslist.txt":        pslist_path.exists(),
         "analysis/memory/cmdline.txt":       cmdline_path.exists(),
-        "analysis/storage/fls_output.txt":   fls_path.exists(),
-        "exports/carved/url.txt":            (carved_dir / "url.txt").exists(),
-        "analysis/fan_dns/dns_threats.json": bool(
-            list(analysis_dir.glob("fan_dns*/**/dns_threats.json"))
+        "fls_output.txt":                    fls_path.exists(),
+        "carved/url.txt or domain.txt":      (carved_dir / "url.txt").exists() or (carved_dir / "domain.txt").exists(),
+        "fan_*_threats.json": bool(
+            list(analysis_dir.glob("fan_*/**/*_threats.json"))
+            or list(case_dir.glob("FAN/**/*_threats.json"))
         ),
     }
 
@@ -836,10 +858,10 @@ def correlate(
     _active, fls_deleted   = _parse_fls(fls_path)
     carved_urls            = _parse_bulk_urls(carved_dir)
 
-    dns_threats  = _load_fan_json(analysis_dir, "dns")
-    http_threats = _load_fan_json(analysis_dir, "http")
-    tcp_threats  = _load_fan_json(analysis_dir, "tcp")
-    udp_threats  = _load_fan_json(analysis_dir, "udp")
+    dns_threats  = _load_fan_json(analysis_dir, "dns", case_dir)
+    http_threats = _load_fan_json(analysis_dir, "http", case_dir)
+    tcp_threats  = _load_fan_json(analysis_dir, "tcp", case_dir)
+    udp_threats  = _load_fan_json(analysis_dir, "udp", case_dir)
     all_fan      = dns_threats + http_threats + tcp_threats + udp_threats
 
     fan_conns = _fan_connections(all_fan)

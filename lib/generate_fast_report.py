@@ -100,26 +100,31 @@ _SEV_RGB = {
 
 def _load_analysis(analysis_dir: Path, exports_dir: Path) -> dict[str, Any]:
     data: dict[str, Any] = {
-        "ewfinfo":         _read_text(analysis_dir / "ewfinfo.txt"),
-        "ewfverify":       _read_text(analysis_dir / "ewfverify.txt"),
-        "mmls":            _read_text(analysis_dir / "mmls.txt"),
-        "fsstat":          _read_text(analysis_dir / "fsstat.txt"),
-        "fls_output":      _read_text(analysis_dir / "fls_output.txt"),
-        "ils_output":      _read_text(analysis_dir / "ils_output.txt"),
-        "ils_orphan":      _read_text(analysis_dir / "ils_orphan.txt"),
-        "bodyfile":        _read_text(analysis_dir / "bodyfile.txt"),
-        "fs_timeline":     _read_text(exports_dir / "fs_timeline.txt"),
-        "fs_timeline_csv": _read_csv(exports_dir / "fs_timeline.csv"),
-        "windows_hashes":  _read_text(analysis_dir / "windows_hashes.txt"),
-        "bulk_carved":     _list_dir(exports_dir / "carved"),
-        "md5_manifest":    _read_text(exports_dir / "files" / "md5_manifest.txt"),
-        "mft_extracted":   (exports_dir / "mft" / "$MFT").exists(),
-        "usnj_extracted":  (exports_dir / "mft" / "$J").exists(),
-        "evtx_list":       _list_dir(exports_dir / "evtx"),
-        "registry_list":   _list_dir(exports_dir / "registry"),
-        "prefetch_list":   _list_dir(exports_dir / "prefetch"),
-        "srum_list":       _list_dir(exports_dir / "srum"),
-        "browser_list":    _list_dir(exports_dir / "browser"),
+        "ewfinfo":           _read_text(analysis_dir / "ewfinfo.txt"),
+        "ewfverify":         _read_text(analysis_dir / "ewfverify.txt"),
+        "mmls":              _read_text(analysis_dir / "mmls.txt"),
+        "fsstat":            _read_text(analysis_dir / "fsstat.txt"),
+        "fls_output":        _read_text(analysis_dir / "fls_output.txt"),
+        "ils_output":        _read_text(analysis_dir / "ils_output.txt"),
+        "ils_orphan":        _read_text(analysis_dir / "ils_orphan.txt"),
+        "bodyfile":          _read_text(analysis_dir / "bodyfile.txt"),
+        "fs_timeline":       _read_text(exports_dir / "fs_timeline.txt"),
+        "fs_timeline_csv":   _read_csv(exports_dir / "fs_timeline.csv"),
+        "windows_hashes":    _read_text(analysis_dir / "windows_hashes.txt"),
+        "bulk_carved":       _list_dir(exports_dir / "carved"),
+        "md5_manifest":      _read_text(exports_dir / "files" / "md5_manifest.txt"),
+        "mft_extracted":     (exports_dir / "mft" / "$MFT").exists(),
+        "usnj_extracted":    (exports_dir / "mft" / "$J").exists(),
+        "evtx_list":         _list_dir(exports_dir / "evtx"),
+        "registry_list":     _list_dir(exports_dir / "registry"),
+        "prefetch_list":     _list_dir(exports_dir / "prefetch"),
+        "srum_list":         _list_dir(exports_dir / "srum"),
+        "browser_list":      _list_dir(exports_dir / "browser"),
+        "recyclebin_list":   _list_dir(exports_dir / "recyclebin"),
+        # Deep extraction outputs (written by fast_machine_details.py)
+        "machine_details":   _load_json(exports_dir / "machine_details" / "machine_details.json"),
+        "recyclebin_parsed": _load_json(exports_dir / "recyclebin" / "recyclebin_parsed.json"),
+        "iocs_reference":    _load_json(exports_dir / "machine_details" / "iocs.json"),
     }
     # Absorb any *.json findings
     for jf in sorted(analysis_dir.glob("*.json")):
@@ -152,6 +157,24 @@ def _list_dir(path: Path) -> list[str]:
     return sorted(p.name for p in path.iterdir())
 
 
+def _load_json(path: Path) -> Any:
+    """Load a JSON file; return None if absent or unparseable."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def _humanize_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
 # ── Markdown ───────────────────────────────────────────────────────────────────
 
 def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
@@ -170,6 +193,37 @@ def _load_narrative(case_id: str, reports_dir: Path) -> dict[str, str]:
         elif current is not None:
             sections[current] += line + "\n"
     return {k: v.strip() for k, v in sections.items()}
+
+
+def _narr_bullets(narrative: dict, key: str) -> list[str]:
+    """Return the bullet lines of a narrative pptx_* section as clean strings.
+
+    Accepts '-', '*' or '•' bullet markers; falls back to non-empty paragraph
+    lines if the section has no explicit bullets. Returns [] when absent."""
+    text = (narrative or {}).get(key, "") or ""
+
+    def _clean(s: str) -> str:
+        return re.sub(r"\*\*(.*?)\*\*", r"\1", s).replace("**", "").strip()
+
+    bullets: list[str] = []
+    marker = re.compile(r"^([-*•])\s+(.*)$")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = marker.match(line)
+        if m:
+            item = m.group(2).strip()
+            if item:
+                bullets.append(item)
+        elif bullets:
+            bullets[-1] = (bullets[-1] + " " + line).strip()
+    if not bullets:
+        for para in re.split(r"\n\s*\n", text):
+            p = " ".join(l.strip() for l in para.splitlines() if l.strip())
+            if p:
+                bullets.append(p)
+    return [_clean(b) for b in bullets]
 
 
 def _build_fast_hallucination_guard_section(
@@ -289,6 +343,36 @@ def _build_fast_hallucination_guard_section(
             ["bulk_extractor"],
             ["fast"],
         ))
+
+    # Machine details extraction
+    machine = data.get("machine_details") or {}
+    if machine:
+        sam_users = (machine.get("sam") or {}).get("UserAccounts") or []
+        net_ifaces = (machine.get("system") or {}).get("NetworkInterfaces") or []
+        owner = (machine.get("software") or {}).get("RegisteredOwner") or ""
+        if owner or sam_users or net_ifaces:
+            findings.append(tag_finding(
+                f"Machine identity extracted from registry hives — "
+                f"{len(sam_users)} user account(s), {len(net_ifaces)} network interface(s)",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["fast_machine_details/python-registry"],
+                ["fast"],
+            ))
+
+    # Recycle Bin parse
+    rb_parsed = data.get("recyclebin_parsed") or []
+    if rb_parsed:
+        valid_rb = [e for e in rb_parsed if "error" not in e]
+        if valid_rb:
+            findings.append(tag_finding(
+                f"{len(valid_rb)} Recycle Bin $I file(s) parsed — original paths "
+                "and deletion timestamps confirmed",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["fast_machine_details/recyclebin-parser"],
+                ["fast"],
+            ))
 
     # Timeline
     if data.get("fs_timeline") or data.get("fs_timeline_csv"):
@@ -413,6 +497,390 @@ def _build_evidence_trail(case_id: str, reports_dir: Path) -> list[str]:
     return lines
 
 
+def _build_machine_details_section(data: dict[str, Any]) -> list[str]:
+    """
+    Build the 'Machine Investigation Details' section from machine_details.json.
+    Covers system identity, user accounts, network configuration, MAC addresses,
+    PowerShell history, installed applications, and user MRU activity.
+    """
+    machine = data.get("machine_details") or {}
+    if not machine:
+        return []
+
+    lines: list[str] = ["---", "", "## 3. Machine Investigation Details", ""]
+    a = lines.append
+
+    a("> Claude: enhance and elaborate when necessary — cross-reference every username,")
+    a("> IP address, and application with artifacts found in later sections (EVTX,")
+    a("> Prefetch, Browser History, Recycle Bin). Record new IOCs via `--record-ioc`.")
+    a("")
+
+    software = machine.get("software") or {}
+    system   = machine.get("system") or {}
+    sam      = machine.get("sam") or {}
+
+    # ── 3.1 System Identity ──────────────────────────────────────────────────
+    a("### 3.1 System Identity")
+    a("")
+    a("| Field | Value |")
+    a("|-------|-------|")
+
+    computer_name = system.get("ComputerName") or "—"
+    a(f"| Computer Name (Registry) | `{computer_name}` |")
+
+    owner = software.get("RegisteredOwner") or "—"
+    org   = software.get("RegisteredOrganization") or "—"
+    a(f"| Registered Owner | {owner} |")
+    a(f"| Registered Organization | {org} |")
+
+    os_name    = software.get("ProductName") or "—"
+    os_display = software.get("DisplayVersion") or ""
+    os_build   = software.get("CurrentBuild") or software.get("CurrentVersion") or "—"
+    os_branch  = software.get("BuildBranch") or "—"
+    a(f"| OS Product | {os_name} {os_display}".rstrip() + " |")
+    a(f"| OS Build | {os_build} |")
+    a(f"| OS Branch | {os_branch} |")
+
+    install_date = software.get("InstallDate")
+    if install_date:
+        try:
+            install_dt = datetime.fromtimestamp(int(install_date), tz=timezone.utc)
+            a(f"| OS Install Date (UTC) | {install_dt.strftime('%Y-%m-%d')} |")
+        except Exception:
+            a(f"| OS Install Date | {install_date} |")
+
+    tz_name = (
+        system.get("TimeZone_TimeZoneKeyName")
+        or system.get("TimeZone_StandardName")
+        or "—"
+    )
+    a(f"| System Timezone | {tz_name} |")
+
+    last_user = software.get("LastLoggedOnUser") or "—"
+    a(f"| Last Logged-On User (Winlogon) | `{last_user}` |")
+    a("")
+
+    # ── 3.2 User Accounts (SAM) ──────────────────────────────────────────────
+    users = sam.get("UserAccounts") or []
+    a("### 3.2 User Accounts (SAM)")
+    a("")
+    a("> Claude: for each username found here, perform a full-disk string search")
+    a("> across the mounted filesystem (`grep -ril <username> $FS_MOUNT`) and correlate")
+    a("> with EVTX logon events (4624/4625), browser profiles, and Recycle Bin SIDs.")
+    a("")
+    if users:
+        a("| Username | Full Name | Last Logon (UTC) | Logon Count | Password Last Set |")
+        a("|----------|-----------|-----------------|-------------|-------------------|")
+        for user in users:
+            uname = user.get("Username") or "—"
+            fname = user.get("FullName") or "—"
+            logon = user.get("LastLogon") or "—"
+            count = str(user.get("LogonCount") or "—")
+            pwd   = user.get("PasswordLastSet") or "—"
+            a(f"| `{uname}` | {fname} | {logon} | {count} | {pwd} |")
+    else:
+        a("*SAM hive not available or no accounts enumerated.*")
+    a("")
+
+    # ── 3.3 Network Configuration ────────────────────────────────────────────
+    interfaces = system.get("NetworkInterfaces") or []
+    a("### 3.3 Network Configuration (TCP/IP)")
+    a("")
+    if interfaces:
+        a("| Interface GUID | Static IP | DHCP IP | Subnet Mask | Default Gateway |")
+        a("|----------------|-----------|---------|-------------|-----------------|")
+        for iface in interfaces:
+            guid    = (iface.get("GUID") or "—")[:36]
+            ip      = iface.get("IPAddress") or "—"
+            dhcp_ip = iface.get("DhcpIPAddress") or "—"
+            mask    = iface.get("SubnetMask") or iface.get("DhcpSubnetMask") or "—"
+            gw      = iface.get("DefaultGateway") or iface.get("DhcpDefaultGateway") or "—"
+            for field_val in (ip, dhcp_ip, mask, gw):
+                if isinstance(field_val, list):
+                    field_val = ", ".join(str(v) for v in field_val if v)
+            ip      = ip if not isinstance(ip, list) else ", ".join(ip)
+            dhcp_ip = dhcp_ip if not isinstance(dhcp_ip, list) else ", ".join(dhcp_ip)
+            mask    = mask if not isinstance(mask, list) else ", ".join(mask)
+            gw      = gw if not isinstance(gw, list) else ", ".join(gw)
+            a(f"| `{guid}` | {ip} | {dhcp_ip} | {mask} | {gw} |")
+    else:
+        a("*No network interface configuration extracted from SYSTEM hive.*")
+    a("")
+
+    # ── 3.4 Network Adapters & MAC Addresses ─────────────────────────────────
+    adapters = system.get("NetworkAdapters") or []
+    a("### 3.4 Network Adapters & MAC Addresses")
+    a("")
+    if adapters:
+        a("| Adapter Description | MAC Address | Instance ID |")
+        a("|---------------------|-------------|-------------|")
+        for adapter in adapters:
+            desc    = adapter.get("DriverDesc") or "—"
+            mac     = adapter.get("NetworkAddress") or "—"
+            inst_id = (adapter.get("NetCfgInstanceId") or "—")[:40]
+            a(f"| {desc} | `{mac}` | `{inst_id}` |")
+    else:
+        a("*No network adapters with MAC addresses extracted from SYSTEM hive.*")
+    a("")
+
+    # ── 3.5 PowerShell History ───────────────────────────────────────────────
+    ps_history = machine.get("ps_history") or []
+    a("### 3.5 PowerShell Execution History")
+    a("")
+    a("> Claude: scan for encoded commands (Base64 blobs), download cradles")
+    a("> (`IEX`, `Invoke-WebRequest`, `curl`, `wget`), credential access patterns")
+    a("> (`mimikatz`, `sekurlsa`, `lsass`), and lateral movement commands.")
+    a("")
+    if ps_history:
+        for entry in ps_history:
+            uname    = entry.get("username") or "unknown"
+            commands = entry.get("commands") or []
+            count    = entry.get("command_count") or len(commands)
+            a(f"**User: `{uname}`** ({count} commands in history)")
+            a("")
+            if commands:
+                a("```powershell")
+                for cmd in commands[:50]:
+                    a(cmd)
+                if len(commands) > 50:
+                    a(f"# … {len(commands) - 50} more commands (see exports/machine_details/ps_history.txt)")
+                a("```")
+                a("")
+    else:
+        a("*No PowerShell history files found — either PSReadLine is not installed,*")
+        a("*the history was cleared (T1070.003), or the filesystem was not mounted.*")
+        a("")
+
+    # ── 3.6 Installed Applications ───────────────────────────────────────────
+    apps = software.get("InstalledApplications") or []
+    a("### 3.6 Installed Applications")
+    a("")
+    a("> Claude: flag dual-use tools (remote access, port scanners, network sniffers,")
+    a("> packet injectors, VPNs, anonymisers, P2P clients) and investigate them using")
+    a("> the Application Deep-Dive Workflow: locate binary via Prefetch/EVTX → scan")
+    a("> install dir and siblings → full-disk string search → check SRUM for network usage.")
+    a("")
+    if apps:
+        sorted_apps = sorted(
+            apps,
+            key=lambda x: (x.get("InstallDate") or ""),
+            reverse=True,
+        )
+        a("| Application | Version | Publisher | Install Date |")
+        a("|-------------|---------|-----------|--------------|")
+        for app in sorted_apps[:60]:
+            name  = (app.get("DisplayName") or "—")[:60].replace("|", "\\|")
+            ver   = (app.get("DisplayVersion") or "—")[:20]
+            pub   = (app.get("Publisher") or "—")[:40].replace("|", "\\|")
+            idate = app.get("InstallDate") or "—"
+            a(f"| {name} | {ver} | {pub} | {idate} |")
+        if len(apps) > 60:
+            a(f"")
+            a(f"*{len(apps) - 60} additional applications omitted — see machine_details.json.*")
+    else:
+        a("*No installed applications extracted from SOFTWARE hive.*")
+    a("")
+
+    # ── 3.7 Recent User Activity (MRU / UserAssist) ──────────────────────────
+    ntusers = machine.get("ntuser_dat") or []
+    if ntusers:
+        a("### 3.7 Recent User Activity (MRU / UserAssist)")
+        a("")
+        for ntuser in ntusers:
+            uname = ntuser.get("username") or "unknown"
+            a(f"**User: `{uname}`**")
+            a("")
+
+            typed_paths = ntuser.get("TypedPaths") or {}
+            if typed_paths:
+                a("*Explorer typed paths (address bar):*")
+                for v in list(typed_paths.values())[:15]:
+                    a(f"- `{v}`")
+                a("")
+
+            typed_urls = ntuser.get("TypedURLs") or {}
+            if typed_urls:
+                a("*IE / Legacy typed URLs:*")
+                for v in list(typed_urls.values())[:15]:
+                    a(f"- `{v}`")
+                a("")
+
+            run_mru = ntuser.get("RunMRU") or {}
+            if run_mru:
+                a("*Win+R run dialog history:*")
+                for v in list(run_mru.values())[:15]:
+                    a(f"- `{v}`")
+                a("")
+
+            rd_exts = ntuser.get("RecentDocExtensions") or []
+            if rd_exts:
+                a(f"*Recently opened document types:* {', '.join(rd_exts[:20])}")
+                a("")
+
+            ua_execs = ntuser.get("UserAssistExecutions") or []
+            if ua_execs:
+                a("*UserAssist execution history (programs launched via Explorer):*")
+                for exec_path in ua_execs[:30]:
+                    a(f"- `{exec_path}`")
+                a("")
+
+    return lines
+
+
+def _build_recyclebin_section(data: dict[str, Any], case_id: str) -> list[str]:
+    """
+    Build the 'Recycle Bin Analysis' section.
+    Uses parsed $I metadata when available; falls back to raw file listing.
+    """
+    rb_parsed  = data.get("recyclebin_parsed")
+    rb_list    = data.get("recyclebin_list") or []
+
+    if not rb_parsed and not rb_list:
+        return []
+
+    lines: list[str] = ["---", "", "## 6b. Recycle Bin Analysis", ""]
+    a = lines.append
+
+    a("> Claude: enhance and elaborate when necessary — deleted files in the Recycle Bin")
+    a("> are direct evidence of intentional file removal (MITRE T1070.004).")
+    a("> Recover `$R` content files for executables and scripts found here.")
+    a("> Map SID values to user accounts in Section 3.2 to attribute deletion activity.")
+    a("")
+
+    if rb_parsed:
+        valid   = [e for e in rb_parsed if "error" not in e]
+        errors  = [e for e in rb_parsed if "error" in e]
+
+        if valid:
+            total_size = sum(e.get("size_bytes") or 0 for e in valid)
+            dates = sorted(
+                e["deleted_at_utc"]
+                for e in valid
+                if e.get("deleted_at_utc")
+            )
+            a(f"**{len(valid)} item(s) found** — total original size: **{_humanize_bytes(total_size)}**")
+            if dates:
+                a(f"**Deletion date range:** {dates[0]} → {dates[-1]}")
+            a("")
+
+            a("| Original Path | Ext | Original Size | Deleted At (UTC) | SID | Content Recovered |")
+            a("|---------------|-----|---------------|-----------------|-----|-------------------|")
+            for entry in sorted(valid, key=lambda x: x.get("deleted_at_utc") or ""):
+                path = entry.get("original_path") or "—"
+                # Truncate long paths
+                if len(path) > 70:
+                    path = "…" + path[-67:]
+                ext       = entry.get("extension") or "—"
+                size      = _humanize_bytes(entry.get("size_bytes") or 0)
+                deleted   = entry.get("deleted_at_utc") or "—"
+                sid       = entry.get("sid") or "—"
+                recovered = "**Yes**" if entry.get("r_file_present") else "No"
+                a(f"| `{path}` | {ext} | {size} | {deleted} | {sid} | {recovered} |")
+            a("")
+
+            sids = sorted(set(e.get("sid") for e in valid if e.get("sid")))
+            if sids:
+                a("> **SID → user correlation:** cross-reference these SIDs with Section 3.2")
+                a("> (SAM user accounts) to attribute each deletion to a specific account.")
+                a("")
+                for sid in sids:
+                    a(f"- `{sid}`")
+                a("")
+
+            a("> **Recovery:** files marked 'Content Recovered: Yes' have their content preserved in")
+            a(f"> `./exports/recyclebin/$R*`. Examine executables and scripts for malware or staging artefacts.")
+            a("")
+
+        if errors:
+            a(f"*{len(errors)} $I file(s) could not be parsed (see recyclebin_parsed.json for details).*")
+            a("")
+
+    elif rb_list:
+        i_files = [f for f in rb_list if f.startswith("$I")]
+        r_files = [f for f in rb_list if f.startswith("$R")]
+        a(f"**Raw extraction:** {len(i_files)} `$I` metadata file(s) and {len(r_files)} `$R` content file(s).")
+        a("")
+        a("*Metadata not yet parsed. Run:*")
+        a("```bash")
+        a("python3 lib/fast_machine_details.py --exports ./exports")
+        a("```")
+        a("")
+        a("Raw Recycle Bin file listing:")
+        for f in rb_list[:30]:
+            a(f"- `./exports/recyclebin/{f}`")
+        if len(rb_list) > 30:
+            a(f"- *… and {len(rb_list) - 30} more*")
+        a("")
+
+    return lines
+
+
+def _build_ioc_reference_section(data: dict[str, Any]) -> list[str]:
+    """
+    Build the 'IOC Reference' section from iocs.json.
+    Presents categorised IOCs with source citations linking back to research note steps.
+    """
+    iocs = data.get("iocs_reference")
+    if not iocs:
+        return []
+
+    lines: list[str] = ["---", "", "## IOC Reference", ""]
+    a = lines.append
+
+    a("> Consolidated indicators of compromise discovered during this investigation.")
+    a("> All values are defanged. The **Source** column references the pipeline step or")
+    a("> research note (RN-NNN) where the indicator was first observed.")
+    a("> Cross-reference with the Appendix B evidence trail for full context.")
+    a("")
+
+    categories: list[tuple[str, list[str]]] = [
+        ("Network Indicators",      ["ip", "mac", "domain", "url", "fqdn"]),
+        ("User Identifiers",        ["username", "fullname", "email", "sid"]),
+        ("File System Indicators",  ["filepath", "deleted_filepath", "hash", "filename"]),
+        ("Persistence Indicators",  ["registry_key", "scheduled_task", "service"]),
+        ("Suspicious Applications", ["suspicious_app"]),
+    ]
+
+    rendered_indices: set[int] = set()
+
+    for cat_title, cat_types in categories:
+        cat_iocs = [
+            (i, ioc) for i, ioc in enumerate(iocs)
+            if (ioc.get("category") or "").lower() in cat_types
+        ]
+        if not cat_iocs:
+            continue
+
+        a(f"### {cat_title}")
+        a("")
+        a("| Value | Confidence | Source |")
+        a("|-------|------------|--------|")
+        for idx, ioc in cat_iocs:
+            val  = ioc.get("value") or ioc.get("raw_value") or "—"
+            conf = ioc.get("confidence") or "CONFIRMED"
+            step = ioc.get("source_step") or "—"
+            a(f"| `{val}` | {conf} | {step} |")
+            rendered_indices.add(idx)
+        a("")
+
+    # Catch any uncategorised IOCs not matched above
+    uncategorised = [(i, ioc) for i, ioc in enumerate(iocs) if i not in rendered_indices]
+    if uncategorised:
+        a("### Other Indicators")
+        a("")
+        a("| Category | Value | Confidence | Source |")
+        a("|----------|-------|------------|--------|")
+        for _, ioc in uncategorised:
+            cat  = ioc.get("category") or "—"
+            val  = ioc.get("value") or ioc.get("raw_value") or "—"
+            conf = ioc.get("confidence") or "CONFIRMED"
+            step = ioc.get("source_step") or "—"
+            a(f"| {cat} | `{val}` | {conf} | {step} |")
+        a("")
+
+    return lines
+
+
 def _build_markdown(
     data: dict[str, Any],
     case_id: str,
@@ -422,6 +890,7 @@ def _build_markdown(
     opencti_findings: str = "",
     fan_summary: str = "",
     fame_summary: str = "",
+    reports_dir: Path | None = None,
 ) -> str:
     """
     Build the full FAST incident report in Markdown.
@@ -432,7 +901,7 @@ def _build_markdown(
     lines: list[str] = []
     a = lines.append
 
-    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     narrative = _load_narrative(case_id, reports_dir)
 
     a("# FAST Storage Forensics Report")
@@ -508,6 +977,9 @@ def _build_markdown(
         a("> *Incident timeline not yet generated. Run the FAST skill to produce*")
         a(f"> *`{case_id}_narrative.md` with the `attack_timeline` section.*")
     a("")
+
+    # ── Machine Investigation Details ─────────────────────────────────────────
+    lines.extend(_build_machine_details_section(data))
 
     # ── Image Verification ────────────────────────────────────────────────────
     ewfinfo   = data.get("ewfinfo", "")
@@ -618,6 +1090,9 @@ def _build_markdown(
             a(f"*{deleted_count - 50} additional deleted entries not shown — see `./analysis/storage/fls_output.txt`.*")
         a("")
 
+    # ── Recycle Bin Analysis ──────────────────────────────────────────────────
+    lines.extend(_build_recyclebin_section(data, case_id))
+
     # ── MFT / UsnJrnl ─────────────────────────────────────────────────────────
     mft = data.get("mft_extracted", False)
     usn = data.get("usnj_extracted", False)
@@ -638,15 +1113,31 @@ def _build_markdown(
     # ── Extracted Artifacts ───────────────────────────────────────────────────
     artifact_sections = [
         ("evtx_list",     "8. Windows Event Logs",
-         "Ingest into Timeline Explorer, Chainsaw, or Hayabusa for rapid log analysis."),
+         "Ingest into Timeline Explorer, Chainsaw, or Hayabusa for rapid log analysis. "
+         "**Deep-dive:** run `python3 -m evtx` or `chainsaw hunt` for logon events "
+         "(4624/4625), service installs (7045), process creation (4688), and PowerShell "
+         "script block logging (4103/4104)."),
         ("registry_list", "9. Registry Hives",
-         "Analyzewith RegRipper, Registry Explorer, or RECmd to extract run keys, services, and user artifacts."),
+         "Analyze with RegRipper, Registry Explorer, or RECmd to extract run keys, services, and user artifacts. "
+         "**Key paths:** `SYSTEM\\ControlSet001\\Services` (service persistence), "
+         "`SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run` (autorun), "
+         "`NTUSER.DAT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist` (execution history), "
+         "`SYSTEM\\ControlSet001\\Control\\Session Manager\\AppCompatCache` (ShimCache)."),
         ("prefetch_list", "10. Prefetch Execution Artifacts",
-         "Parse with PECmd to reconstruct program execution history and first/last run times."),
+         "Parse with PECmd to reconstruct program execution history and first/last run times. "
+         "**Deep-dive:** `python3 -m prefetch_parser -d ./exports/prefetch/` or "
+         "`PECmd.exe -d ./exports/prefetch/ --csv ./exports/` — extract run count, "
+         "first/last run timestamps, and loaded DLLs. Flag executables run only once "
+         "or within the incident window. Cross-reference with Section 3.6 installed apps."),
         ("srum_list",     "11. SRUM Database",
-         "Parse SRUDB.dat with srum-dump or SRUM-DUMP2 for per-app network and CPU usage."),
+         "Parse SRUDB.dat with srum-dump or SRUM-DUMP2 for per-app network and CPU usage. "
+         "**Deep-dive:** correlates each application's network bytes sent/received with "
+         "timestamps — identifies data exfiltration and C2 beaconing patterns."),
         ("browser_list",  "12. Browser History",
-         "AnalyzeHistory files with DB Browser for SQLite or BrowsingHistoryView."),
+         "Analyze History files with DB Browser for SQLite or BrowsingHistoryView. "
+         "**Deep-dive SQL:** `SELECT url, title, visit_count, last_visit_time FROM urls "
+         "ORDER BY last_visit_time DESC LIMIT 100;` — surface browsing patterns, "
+         "downloads table for installer URLs, and keyword-search against case IOCs."),
     ]
     for key, title, note in artifact_sections:
         items = data.get(key, [])
@@ -723,10 +1214,13 @@ def _build_markdown(
         a("No MITRE ATT&CK techniques mapped — insufficient evidence for attribution.")
     a("")
 
-    # ── IOCs ──────────────────────────────────────────────────────────────────
+    # ── IOC Reference (from iocs.json) ───────────────────────────────────────
+    lines.extend(_build_ioc_reference_section(data))
+
+    # ── IOCs (bulk_extractor carves + legacy) ─────────────────────────────────
     a("---")
     a("")
-    a("## 17. Indicators of compromise")
+    a("## 17. Carved Indicators of Compromise")
     a("")
     a("> Claude: enhance and elaborate when necessary — defang all IOC values and add")
     a("> OSINT context or OpenCTI attribution where available.")
@@ -1080,11 +1574,23 @@ def _build_pptx(
     H = prs.slide_height
     M = Inches(0.4)
 
+    def _add_bullet_slide(title, bullets, fallback, max_items=8):
+        slide = prs.slides.add_slide(blank)
+        _rect(slide, 0, 0, W, Inches(1.1), _MID_NAVY)
+        _txt(slide, title, M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+        _txt(slide, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+        if bullets:
+            body = "\n\n".join(f"•  {b}" for b in bullets[:max_items])
+        else:
+            body = fallback
+        _txt(slide, body, M, Inches(1.3), W - 2 * M, H - Inches(1.6), 14, color=_TEXT_DARK)
+        return slide
+
     fls      = data.get("fls_output", "")
     deleted  = fls.count("\n* ") if fls else 0
     evtx     = data.get("evtx_list", [])
     prefetch = data.get("prefetch_list", [])
-    timeline_rows = data.get("fs_timeline_csv", [])
+    narrative = data.get("_narrative", {})
 
     # ── Slide 1 — Cover ───────────────────────────────────────────────────────
     s1 = prs.slides.add_slide(blank)
@@ -1105,13 +1611,8 @@ def _build_pptx(
     _txt(s1, "Fan Get Fame Fast  |  FAST module",
          M, H - Inches(0.7), W - 2*M, Inches(0.4), 11, color=_TEXT_MID, align=PP_ALIGN.CENTER)
 
-    # ── Slide 2 — Key findings ────────────────────────────────────────────────
-    s2 = prs.slides.add_slide(blank)
-    _rect(s2, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s2, "Key findings", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
-    _txt(s2, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
-
-    summary = (
+    # ── Slide 2 — Executive Summary ──────────────────────────────────────────
+    fallback_summary = (
         f"Storage forensic analysis was conducted on the disk image of {hostname}. "
         f"The analysis identified {deleted} deleted file entries, "
         f"{len(evtx)} Windows Event Log file(s), and "
@@ -1119,102 +1620,74 @@ def _build_pptx(
         "The filesystem timeline has been reconstructed for cross-reference with "
         "network and memory forensics findings."
     )
-    _txt(s2, summary, M, Inches(1.3), W - 2*M, Inches(3.0), 15, color=_TEXT_DARK)
+    _add_bullet_slide(
+        "Executive Summary",
+        _narr_bullets(narrative, "pptx_executive_summary"),
+        fallback_summary,
+    )
 
-    metrics = [
-        ("Deleted files",  str(deleted)),
-        ("Event logs",     str(len(evtx))),
-        ("Prefetch files", str(len(prefetch))),
-        ("MFT extracted",  "Yes" if data.get("mft_extracted") else "No"),
-    ]
-    col_w = (W - 2*M) // len(metrics)
-    for i, (label, value) in enumerate(metrics):
-        cx = M + i * col_w
-        _rect(s2, cx + Inches(0.05), Inches(4.7), col_w - Inches(0.1), Inches(1.3), _MID_NAVY)
-        _txt(s2, value, cx + Inches(0.1), Inches(4.8), col_w - Inches(0.2), Inches(0.7),
-             18, bold=True, color=_AMBER)
-        _txt(s2, label, cx + Inches(0.1), Inches(5.5), col_w - Inches(0.2), Inches(0.4),
-             10, color=_LIGHT_BLUE)
+    # ── Slide 3 — Business Impact ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Business Impact",
+        _narr_bullets(narrative, "pptx_impact"),
+        "Operational impact assessment is in progress; refer to the technical report.",
+    )
 
-    # ── Slide 3 — Incident timeline ───────────────────────────────────────────
-    s3 = prs.slides.add_slide(blank)
-    _rect(s3, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s3, "Incident timeline", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
-    _txt(s3, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    # ── Slide 4 — Board Timeline ─────────────────────────────────────────────
+    _add_bullet_slide(
+        "Incident Timeline",
+        _narr_bullets(narrative, "pptx_timeline"),
+        "The incident timeline is under investigation; refer to the technical report for the full chronology.",
+        max_items=6,
+    )
 
-    if timeline_rows:
-        headers_t = list(timeline_rows[0].keys())[:4] if timeline_rows else []
-        shown_t   = timeline_rows[:11]
-        row_h = Inches(0.46)
-        col_ws_t = [Inches(2.0), Inches(1.5), Inches(4.0), W - M - Inches(8.0)]
-        hx = M
-        for h_t, cw_t in zip(headers_t, col_ws_t):
-            _rect(s3, hx, Inches(1.15), cw_t - Inches(0.05), row_h - Inches(0.04), _MID_NAVY)
-            _txt(s3, h_t, hx + Inches(0.08), Inches(1.2), cw_t - Inches(0.13), row_h,
-                 12, bold=True, color=_WHITE)
-            hx += cw_t
-        for i, row_t in enumerate(shown_t):
-            y = Inches(1.15) + (i + 1) * row_h
-            bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-            rx = M
-            for h_t, cw_t in zip(headers_t, col_ws_t):
-                _rect(s3, rx, y, cw_t - Inches(0.05), row_h - Inches(0.04), bg)
-                _txt(s3, str(row_t.get(h_t, ""))[:50], rx + Inches(0.08), y + Inches(0.06),
-                     cw_t - Inches(0.13), row_h, 10, color=_TEXT_DARK)
-                rx += cw_t
-        if len(timeline_rows) > 11:
-            _txt(s3, f"… {len(timeline_rows) - 11} additional entries in fs_timeline.csv",
-                 M, H - Inches(0.45), W - 2*M, Inches(0.3), 10, color=_TEXT_MID)
-    else:
-        _txt(s3, "No filesystem timeline available — run mactime against the bodyfile.",
-             M, Inches(2.0), W - 2*M, Inches(1.0), 16, color=_TEXT_MID)
-
-    # ── Slide 4 — Key evidence ────────────────────────────────────────────────
-    s4 = prs.slides.add_slide(blank)
-    _rect(s4, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s4, "Key evidence", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
-    _txt(s4, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
-
-    evidence_items = [
-        ("Deleted file entries",
-         f"{deleted} deleted entries identified in the file system listing (fls)."),
-        ("Windows Event Logs",
-         f"{len(evtx)} EVTX file(s) extracted — import into Hayabusa or Timeline Explorer."),
-        ("Prefetch artifacts",
-         f"{len(prefetch)} Prefetch file(s) — parse with PECmd for execution history."),
-        ("MFT / USN journal",
-         ("Extracted — run MFTECmd for high-resolution file activity."
-          if data.get("mft_extracted") else "Not extracted from this image.")),
-        ("Carved artifacts",
-         (f"{len(data.get('bulk_carved', []))} file(s) recovered by bulk_extractor."
-          if data.get("bulk_carved") else "bulk_extractor produced no output.")),
-    ]
-    row_h = Inches(1.0)
-    for i, (label, desc) in enumerate(evidence_items[:5]):
-        y = Inches(1.25) + i * row_h
-        bg = _LIGHT_BG if i % 2 == 0 else _ROW_ALT
-        _rect(s4, M, y, Inches(3.5), row_h - Inches(0.06), bg)
-        _rect(s4, M + Inches(3.5), y, W - M - Inches(3.5) - M, row_h - Inches(0.06), bg)
-        _txt(s4, label, M + Inches(0.1), y + Inches(0.1), Inches(3.3), row_h,
-             13, bold=True, color=_TEXT_DARK)
-        _txt(s4, desc, M + Inches(3.6), y + Inches(0.1), W - M - Inches(4.1), row_h,
-             12, color=_TEXT_DARK)
-
-    # ── Slide 5 — Recommendations ─────────────────────────────────────────────
+    # ── Slide 5 — Root Cause & Risk ──────────────────────────────────────────
     s5 = prs.slides.add_slide(blank)
     _rect(s5, 0, 0, W, Inches(1.1), _MID_NAVY)
-    _txt(s5, "Recommendations", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s5, "Root Cause & Risk", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
     _txt(s5, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
-    recs = _build_recommendations(data)
+    root_cause = narrative.get("pptx_root_cause", "").strip() or (
+        "Root cause is under investigation; refer to the technical report for the initial access vector."
+    )
+    _txt(s5, "ROOT CAUSE", M, Inches(1.25), W - 2 * M, Inches(0.35), 13, bold=True, color=_LIGHT_BLUE)
+    _txt(s5, root_cause, M, Inches(1.65), W - 2 * M, Inches(1.3), 14, color=_TEXT_DARK)
+    risk_bullets = _narr_bullets(narrative, "pptx_risk")
+    _txt(s5, "KEY RISKS", M, Inches(3.1), W - 2 * M, Inches(0.35), 13, bold=True, color=_LIGHT_BLUE)
+    if risk_bullets:
+        risk_text = "\n\n".join(f"•  {b}" for b in risk_bullets[:5])
+    else:
+        risk_text = "Risk assessment is in progress; refer to the technical report."
+    _txt(s5, risk_text, M, Inches(3.5), W - 2 * M, Inches(3.2), 14, color=_TEXT_DARK)
+
+    # ── Slide 6 — Response & Containment ─────────────────────────────────────
+    _add_bullet_slide(
+        "Response & Containment",
+        _narr_bullets(narrative, "pptx_mitigations"),
+        "Response and containment actions are in progress; refer to the technical report.",
+    )
+
+    # ── Slide 7 — Recommendations ────────────────────────────────────────────
+    s7 = prs.slides.add_slide(blank)
+    _rect(s7, 0, 0, W, Inches(1.1), _MID_NAVY)
+    _txt(s7, "Recommendations", M, Inches(0.2), W, Inches(0.8), 28, bold=True, color=_WHITE)
+    _txt(s7, f"{case_id}  |  {hostname}", M, Inches(0.75), W, Inches(0.3), 12, color=_LIGHT_BLUE)
+    recs = _narr_bullets(narrative, "pptx_recommendations") or _build_recommendations(data)
     row_h = Inches(0.72)
     for i, rec in enumerate(recs[:7]):
         y = Inches(1.2) + i * row_h
-        _rect(s5, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
-        _txt(s5, str(i + 1), M + Inches(0.1), y + Inches(0.1), Inches(0.3), row_h,
+        _rect(s7, M, y, Inches(0.5), row_h - Inches(0.08), _BLUE)
+        _txt(s7, str(i + 1), M + Inches(0.1), y + Inches(0.1), Inches(0.3), row_h,
              16, bold=True, color=_WHITE, align=PP_ALIGN.CENTER)
         rec_clean = re.sub(r"\*\*(.*?)\*\*", r"\1", rec.split(" — ")[0][:120])
-        _txt(s5, rec_clean, M + Inches(0.6), y + Inches(0.1), W - M - Inches(1.0), row_h,
+        _txt(s7, rec_clean, M + Inches(0.6), y + Inches(0.1), W - M - Inches(1.0), row_h,
              13, color=_TEXT_DARK)
+
+    # ── Slide 8 — Lessons Learned ────────────────────────────────────────────
+    _add_bullet_slide(
+        "Lessons Learned",
+        _narr_bullets(narrative, "pptx_lessons_learned"),
+        "Lessons learned will be documented once the investigation and remediation are complete.",
+    )
 
     prs.save(str(output_path))
     print(f"[fast] PPTX saved: {output_path}")
@@ -1755,17 +2228,34 @@ def generate(
     analysis_dir: Path | None = None,
     exports_dir: Path | None = None,
     output_dir: Path | None = None,
+    case_dir: Path | None = None,
+    docs_dir: Path | None = None,
     opencti_findings: str = "",
     fan_summary: str = "",
     fame_summary: str = "",
     md_only: bool = False,
 ) -> dict[str, Path | None]:
+    """Generate the full FAST report suite.
+
+    case_dir: module-specific directory (reports/<case_id>/FAST/<hostname>/). When
+    supplied, Markdown goes to case_dir/. docs_dir overrides where PDF/PPTX/DOCX land
+    (default: case_dir/output/ for legacy compat, typically reports/<case_id>/documents/).
+    When both are omitted, all formats land in output_dir (legacy flat behaviour).
+    """
     analysis_dir = analysis_dir or (PROJECT_ROOT / "analysis" / "storage")
     exports_dir  = exports_dir  or (PROJECT_ROOT / "exports")
-    output_dir   = output_dir   or (PROJECT_ROOT / "reports")
-    path_guard.guard_output_dir(output_dir)
+
+    if case_dir is not None:
+        md_dir  = path_guard.guard_output_dir(case_dir)
+        aux_dir = path_guard.guard_output_dir(docs_dir or (case_dir / "output"))
+    else:
+        md_dir  = path_guard.guard_output_dir(output_dir or (PROJECT_ROOT / "reports"))
+        aux_dir = md_dir
 
     data = _load_analysis(analysis_dir, exports_dir)
+    # Make the Claude-authored narrative available to the PPTX board deck too
+    # (the Markdown builder loads it separately).
+    data["_narrative"] = _load_narrative(case_id, md_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")
     stem = case_id.replace(" ", "_")
 
@@ -1773,8 +2263,9 @@ def generate(
     md_text = _build_markdown(
         data, case_id, hostname, disk_image or str(analysis_dir),
         generated_utc, opencti_findings, fan_summary, fame_summary,
+        reports_dir=md_dir,
     )
-    md_path = output_dir / f"{stem}_fast_report.md"
+    md_path = md_dir / f"{stem}_fast_report.md"
     md_path.write_text(md_text)
     print(f"[fast] Markdown saved: {md_path}")
 
@@ -1784,7 +2275,7 @@ def generate(
         try:
             sys.path.insert(0, str(PROJECT_ROOT / "lib"))
             from md_to_pdf import convert as md2pdf
-            pdf_path = output_dir / f"{stem}_fast_report.pdf"
+            pdf_path = aux_dir / f"{stem}_fast_report.pdf"
             md2pdf(md_path, pdf_path)
             print(f"[fast] PDF saved: {pdf_path}")
         except Exception as exc:
@@ -1793,7 +2284,7 @@ def generate(
     # PPTX
     pptx_path: Path | None = None
     if not md_only:
-        pptx_path = output_dir / f"{stem}_fast_presentation.pptx"
+        pptx_path = aux_dir / f"{stem}_fast_presentation.pptx"
         _build_pptx(
             data, case_id, hostname, disk_image or str(analysis_dir),
             generated_utc, pptx_path, opencti_findings, fan_summary, fame_summary,
@@ -1802,7 +2293,7 @@ def generate(
     # DOCX
     docx_path: Path | None = None
     if not md_only:
-        docx_path = output_dir / f"{stem}_fast_report.docx"
+        docx_path = aux_dir / f"{stem}_fast_report.docx"
         _build_docx(
             data, case_id, hostname, disk_image or str(analysis_dir),
             generated_utc, docx_path, opencti_findings, fan_summary, fame_summary,
@@ -1826,6 +2317,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--analysis-dir", default=None, metavar="DIR")
     p.add_argument("--exports-dir",  default=None, metavar="DIR")
     p.add_argument("--output-dir",   default=None, metavar="DIR")
+    p.add_argument("--case-dir",     default=None, metavar="DIR",  help="Module-specific dir (reports/<case_id>/FAST/<host>/); MD lands here")
+    p.add_argument("--docs-dir",     default=None, metavar="DIR",  help="Shared documents dir (reports/<case_id>/documents/); PDF/PPTX/DOCX land here")
     p.add_argument("--opencti",      default="",   metavar="TEXT")
     p.add_argument("--fan-summary",  default="",   metavar="TEXT")
     p.add_argument("--fame-summary", default="",   metavar="TEXT")
@@ -1842,6 +2335,8 @@ if __name__ == "__main__":
         analysis_dir = Path(args.analysis_dir) if args.analysis_dir else None,
         exports_dir  = Path(args.exports_dir)  if args.exports_dir  else None,
         output_dir   = Path(args.output_dir)   if args.output_dir   else None,
+        case_dir     = Path(args.case_dir)     if args.case_dir     else None,
+        docs_dir     = Path(args.docs_dir)     if args.docs_dir     else None,
         opencti_findings = args.opencti,
         fan_summary  = args.fan_summary,
         fame_summary = args.fame_summary,

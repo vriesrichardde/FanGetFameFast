@@ -17,11 +17,12 @@ raw tool output.
 
 | Output | Format | Path | Batch (`--md-only`) |
 |--------|--------|------|---------------------|
-| Technical report | Markdown | `./reports/<case_id>_fame_report.md` | Always |
-| Investigative log | Markdown | `./reports/<case_id>_research_notes.md` | Always |
-| Technical report | PDF | `./reports/<case_id>_fame_report.pdf` | Standalone only |
-| Management briefing | Microsoft PowerPoint (.pptx) | `./reports/<case_id>_fame_presentation.pptx` | Standalone only |
-| Full report | Microsoft Word (.docx) | `./reports/<case_id>_fame_report.docx` | Standalone only |
+| Technical report | Markdown | `./reports/<case_id>/FAME/<hostname>/<case_id>_fame_report.md` | Always |
+| Investigative log | Markdown | `./reports/<case_id>/FAME/<hostname>/<case_id>_research_notes.md` | Always |
+| Technical report | PDF | `./reports/<case_id>/documents/<case_id>_fame_report.pdf` | Standalone only |
+| Management briefing | Microsoft PowerPoint (.pptx) | `./reports/<case_id>/documents/<case_id>_fame_presentation.pptx` | Standalone only |
+| Full report | Microsoft Word (.docx) | `./reports/<case_id>/documents/<case_id>_fame_report.docx` | Standalone only |
+| Campaign report | Markdown/PDF/PPTX/DOCX | `./reports/<case_id>/<case_id>_campaign_report.*` (MD) + `documents/` (PDF/PPTX/DOCX) | Standalone only |
 
 The unified cross-case report (`CAMPAIGN_<batch_id>_report.*`) is generated once at the
 end of a batch by `/investigate-all` — not per individual FAME case.
@@ -30,7 +31,7 @@ end of a batch by `/investigate-all` — not per individual FAME case.
 
 ## Research Notes
 
-Every FAME investigation produces a **research notes file** (`./reports/<case_id>_research_notes.md`)
+Every FAME investigation produces a **research notes file** (`./reports/<case_id>/FAME/<hostname>/<case_id>_research_notes.md`)
 alongside the formal report. The notes are a timestamped, step-by-step investigative log that lets
 any analyst follow the complete workflow, rationale, and findings from start to finish.
 
@@ -165,7 +166,7 @@ python3 lib/research_notes.py event \
 Before calling `finalize`, read the complete research notes file from top to bottom:
 
 ```bash
-cat ./reports/<case_id>_research_notes.md
+cat ./reports/<case_id>/FAME/<hostname>/<case_id>_research_notes.md
 ```
 
 For every finding marked `[ASSUMPTION]`, every event without a confirmed timestamp, and every
@@ -194,8 +195,8 @@ Then include the notes file in the upload call.
 ```bash
 python3 lib/investigations_upload.py \
   --case-id <case_id> \
-  --md    ./reports/<case_id>_fame_report.md \
-  --notes ./reports/<case_id>_research_notes.md \
+  --md    ./reports/<case_id>/FAME/<hostname>/<case_id>_fame_report.md \
+  --notes ./reports/<case_id>/FAME/<hostname>/<case_id>_research_notes.md \
   --interactive
 ```
 
@@ -203,11 +204,11 @@ python3 lib/investigations_upload.py \
 ```bash
 python3 lib/investigations_upload.py \
   --case-id <case_id> \
-  --md    ./reports/<case_id>_fame_report.md \
-  --pdf   ./reports/<case_id>_fame_report.pdf \
-  --pptx  ./reports/<case_id>_fame_presentation.pptx \
-  --docx  ./reports/<case_id>_fame_report.docx \
-  --notes ./reports/<case_id>_research_notes.md \
+  --md    ./reports/<case_id>/FAME/<hostname>/<case_id>_fame_report.md \
+  --pdf   ./reports/<case_id>/documents/<case_id>_fame_report.pdf \
+  --pptx  ./reports/<case_id>/documents/<case_id>_fame_presentation.pptx \
+  --docx  ./reports/<case_id>/documents/<case_id>_fame_report.docx \
+  --notes ./reports/<case_id>/FAME/<hostname>/<case_id>_research_notes.md \
   --interactive
 ```
 
@@ -227,12 +228,17 @@ After all Volatility / Memory Baseliner steps are complete and **before** callin
 `python3 lib/generate_fame_report.py`, Claude must write the narrative file:
 
 ```
-./reports/<case_id>_narrative.md
+./reports/<case_id>/FAME/<hostname>/<case_id>_narrative.md
 ```
 
 This file feeds the Incident Timeline section, the enhanced technical chapters,
-and all five board-deck slides in the PPTX. Without it those sections show placeholder
-text.
+and all eight slides of the board PPTX deck (Executive Summary, Business Impact,
+Incident Timeline, Root Cause & Risk, Response & Containment, Recommendations,
+Lessons Learned). Without it those slides show generic placeholder text — write
+every section yourself, in your own words, based on what you actually found. Do not
+rely on `lib/narrative_generator.py`'s keyword-matching heuristics to fill these in;
+that generator is a headless fallback for batch/no-Claude runs only and produces
+noticeably weaker, often generic content.
 
 ### Schema (copy exactly, fill every section)
 
@@ -298,11 +304,32 @@ was accessed or exfiltrated based on current evidence."]
 "• Review server room physical access policy — CISO / Facilities
 • Enable console login alerting — IT Operations
 • Confirm whether maintenance was authorised — Line Manager"]
+
+## pptx_timeline
+
+[4-6 bullets: the board-level timeline. Same chronology as attack_timeline, but
+plain language, no IPs/ports/PIDs/workstation IDs/RN-NNN citations — "On [date]
+at [time], ..." Each bullet should be readable on its own as a slide line.]
+
+## pptx_root_cause
+
+[1-2 sentences: how did this happen, in plain language — e.g. phishing, an
+exposed/weak service, compromised credentials, an unpatched vulnerability,
+physical access, misconfiguration. Be specific to what you actually found in
+this memory image; do not use a generic placeholder if the evidence supports a
+real conclusion.]
+
+## pptx_lessons_learned
+
+[3-5 bullets: what worked well in this investigation/response, and what gaps
+or improvements this incident points to. Plain language, board-appropriate.]
 ```
 
 ### Rules
 - Write **all** sections even if evidence is thin — note the gap explicitly.
-- Keep management sections (`pptx_*`) free of IPs, ports, PID numbers, or hash values.
+- Keep management sections (`pptx_*`) free of IPs, ports, PID numbers, hash values,
+  file paths, hostnames/workstation IDs, and RN-/EVT- citation references — write
+  them as you would for a board/CISO audience, not a technical one.
 - Use RN-NNN references in `attack_timeline` to link back to research notes.
 - If a section genuinely has no content (e.g., no malfind hits), write one sentence
   explaining that and why (e.g., "No code injection was detected — malfind returned
@@ -500,14 +527,42 @@ python3 lib/research_notes.py step \
 | FAME ↔ FAST | Process image names matched to deleted fls entries — confirms post-execution cleanup (T1070.004) |
 | FAN ↔ FAST | DNS-queried domains matched to bulk_extractor carved URLs — confirms active endpoint use |
 
-After running correlate, trigger the combined report to embed the findings:
+`correlate_findings.py`'s output (`<case_id>_correlation.md`/`.json`) is a
+**best-effort research aid**, not the campaign report itself: read it as one
+input when drafting Section 3 of the campaign report, but ground that section
+in the research notes regardless — zero matches reported by the tool does not
+mean no correlation exists.
 
-```python
-import sys; sys.path.insert(0, "./lib")
-from generate_combined_report import generate
+---
 
-paths = generate(case_id="CASE-2026-001", hostname="SERVER1234")
-```
+## Campaign Report (hand-authored)
+
+If FAN, FAST, or another FAME run already exists for this case ID, the
+per-case campaign report (`<case_id>_campaign_report.*`) must be hand-authored,
+not auto-generated:
+
+1. Read this module's research notes end-to-end, plus the research notes of
+   every other module that has completed for this case ID.
+2. Hand-author `./reports/<case_id>/<case_id>_campaign_report.md` following
+   `docs/campaign_report_template.md` — Incident Timeline merged across
+   modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs from at least
+   two modules (or stating explicitly that none exist), unified MITRE/IOC
+   tables, and a hand-curated Hallucination Guard FND-list with an overall
+   confidence percentage. `lib/correlate_findings.py`'s output and
+   `lib/generate_combined_report.py`'s `_merge_*`/`_extract_*` helpers may be
+   used as research aids when pre-populating tables.
+3. Render it to PDF/PPTX/DOCX:
+   ```python
+   import sys; sys.path.insert(0, "./lib")
+   from render_campaign_report import render
+
+   paths = render(md_path="./reports/<case_id>/<case_id>_campaign_report.md",
+                   case_id="<case_id>", hostname="<hostname>")
+   ```
+
+`lib/generate_combined_report.py`'s `generate()` is deprecated for this
+workflow — it remains only as an automated fallback for `--md-only`/headless
+batch runs or very-low-evidence cases.
 
 ---
 
@@ -572,6 +627,140 @@ Use `--no-vault` to suppress vault writes (offline environments).
 ./scripts/vault_context.sh ttp T1548
 ./scripts/vault_context.sh cases
 ```
+
+---
+
+## Deep-dive methodology (manual Volatility 3 + strings analysis)
+
+After all standard Volatility plugins have run, perform a manual deep-dive before writing the
+narrative. This surfaces attacker detail that automated plugin output does not directly expose.
+All deep-dive steps are logged as `step` calls (RN-NNN) with `--title "Deep Dive N: <title>"`.
+
+### Deep Dive 1 — Process relationship mapping
+
+```bash
+# Full process tree with PIDs, PPIDs, start/exit times
+vol -f "$IMAGE" windows.pstree 2>/dev/null
+
+# Cross-reference pslist vs psscan to detect DKOM-hidden processes
+vol -f "$IMAGE" windows.pslist 2>/dev/null | awk '{print $2}' | sort > /tmp/pslist_pids.txt
+vol -f "$IMAGE" windows.psscan 2>/dev/null | awk '{print $2}' | sort > /tmp/psscan_pids.txt
+comm -13 /tmp/pslist_pids.txt /tmp/psscan_pids.txt   # in psscan only = DKOM-hidden
+```
+
+Any process present in `psscan` but absent from `pslist` is DKOM-hidden (T1014). For each
+hidden process, run `cmdline` against its offset, note the full image path, and check
+`netscan` for associated network connections.
+
+### Deep Dive 2 — Network connection and process correlation
+
+```bash
+# Windows XP/2003: netscan (pool-based, catches closed connections)
+vol -f "$IMAGE" windows.netscan 2>/dev/null
+
+# Windows Vista+: netstat (live connection table — may miss recently closed)
+vol -f "$IMAGE" windows.netstat 2>/dev/null
+
+# Cross-reference PIDs from netscan against pslist/psscan
+```
+
+For each external IP in netscan output: cross-reference with FAN module findings when a PCAP is
+available for the same case. A netscan PID connecting to an IP seen in the PCAP is a direct
+cross-module corroboration. Document as `[PIVOT: FAN ↔ FAME — PID <N> → <IP> confirmed in both]`.
+
+### Deep Dive 3 — Injected code and unsigned modules (malfind + modules)
+
+```bash
+# Regions with RWX permissions and no backing file (injection indicators)
+vol -f "$IMAGE" windows.malfind 2>/dev/null
+
+# Loaded kernel modules — look for unsigned or mismatched names
+vol -f "$IMAGE" windows.modules 2>/dev/null
+
+# Drivers not in module list (DKOM-hidden kernel drivers)
+vol -f "$IMAGE" windows.driverscan 2>/dev/null
+```
+
+For each `malfind` hit: check whether the process is known benign (JIT compilers — clr.dll,
+jvm.dll — produce false positives). For genuine hits: note the VAD protection flags (PAGE_EXECUTE_READWRITE
+is strongest indicator), start/end address, and any embedded PE header in the hex dump.
+
+### Deep Dive 4 — Service and persistence analysis
+
+```bash
+# All services (name, binary path, start type)
+vol -f "$IMAGE" windows.svcscan 2>/dev/null | grep -v "^Offset\|^---"
+
+# Handles for a suspicious PID (files, registry keys, mutexes it has open)
+vol -f "$IMAGE" windows.handles --pid <PID> 2>/dev/null
+
+# Open file handles per process (identify locking of exfil staging files)
+vol -f "$IMAGE" windows.filescan 2>/dev/null | grep -i "\.exe\|\.dll\|Temp\|AppData"
+```
+
+Services with binary paths outside `C:\Windows\System32\` or `C:\Program Files\` are suspicious.
+Services with `StartType=AUTO_START` and a deleted-on-disk binary (cross-reference with FAST fls)
+indicate persistence that survives reboot.
+
+### Deep Dive 5 — String extraction and keyword grep
+
+Use when Volatility plugins are unavailable (no ISF symbols, Linux image without profile):
+
+```bash
+# Full strings extraction (both endiannesses)
+strings -a -td "$IMAGE" > /tmp/strings_le.txt
+strings -a -td -el "$IMAGE" >> /tmp/strings_le.txt
+
+# Pattern grep: credentials, shell history, syslog lines
+grep -iE "password|passwd|login|sudo|su -|root:" /tmp/strings_le.txt | head -40
+grep -iE "^[A-Za-z]{3}\s+[0-9]+ [0-9:]{8} .*(sshd|login|sudo|pam)" /tmp/strings_le.txt | head -40
+
+# IPv4 addresses carved from strings
+grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}" /tmp/strings_le.txt | sort | uniq -c | sort -rn | head -30
+
+# URLs
+grep -oE "https?://[^[:space:]\"'<>]+" /tmp/strings_le.txt | sort -u | head -40
+
+# Timestamps in ISO format or syslog format (for timeline reconstruction)
+grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}" /tmp/strings_le.txt | sort -u
+```
+
+Log each grep as its own step, noting what was found and what was deliberately dismissed
+(e.g., "grep for 'password' returned 842 hits — all in configuration file plaintext already
+in FAST artifact set; no credential reuse or password spray patterns identified").
+
+### Deep Dive 6 — Memory baseline comparison
+
+When a `baselines/baseline.json` is present, Memory Baseliner runs automatically. Interpret the diff:
+
+```bash
+# New processes (not in baseline)
+python3 /opt/memory-baseliner/baseline.py diff baselines/baseline.json ./analysis/memory/baseliner_current.json \
+  --type proc 2>/dev/null
+
+# New drivers (not in baseline)
+python3 /opt/memory-baseliner/baseline.py diff baselines/baseline.json ./analysis/memory/baseliner_current.json \
+  --type driver 2>/dev/null
+```
+
+Any process or driver in the current image but absent from the clean baseline is either:
+- A newly installed application (expected) — verify against event log install timestamps
+- Malware / attacker tool — if no corresponding install event exists, treat as HIGH finding
+
+### Deep Dive 7 — Cross-module pivot triggers (mandatory review)
+
+After completing all Volatility steps, explicitly check:
+
+| If FAME found... | Pivot to... |
+|-----------------|-------------|
+| External IP in `netscan` | FAN — does the PCAP show traffic to this IP? If yes: confirmed C2 channel |
+| Deleted executable path in `filescan` | FAST — does `fls` show the file deleted? Does MFT entry still exist? |
+| Injected code in browser process (`iexplore`, `chrome`, `firefox`) | FAN — look for beaconing or data exfil in the PCAP matching the injection window |
+| Service with no on-disk binary | FAST — check pagefile.sys strings, prefetch, and USN journal for the binary name |
+| Suspicious kernel driver | FAST — check driver signing via Amcache; search for installer in prefetch |
+
+Document each pivot check as a research notes step, even if the result is negative.
+Negative cross-module results are evidence of scope containment and must be cited.
 
 ---
 

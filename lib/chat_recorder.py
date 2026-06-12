@@ -314,10 +314,15 @@ def record_chat(
     transcript: Path | str | None = None,
     project_dir: Path | str | None = None,
     output_dir: Path | str = DEFAULT_REPORTS_DIR,
+    case_dir: Path | str | None = None,
     md_only: bool = False,
     upload: bool = False,
 ) -> dict[str, Path]:
     """Record the active Claude Code session as a chain-of-evidence MD + PDF.
+
+    case_dir: case root directory (reports/<case_id>/). When supplied, all
+    transcript formats (MD, PDF, JSONL) are written to case_dir/documents/. When
+    omitted, falls back to output_dir (legacy flat behaviour).
 
     Returns a dict with the produced paths (keys: ``md``, ``pdf``, ``jsonl``).
     Writes are policy-checked through :mod:`path_guard`.
@@ -330,7 +335,10 @@ def record_chat(
     entries = parse_transcript(src)
     md_text = render_markdown(entries, case_id, src, sha256, generated_utc)
 
-    out_dir = path_guard.guard_output_dir(output_dir)
+    if case_dir is not None:
+        out_dir = path_guard.guard_output_dir(Path(case_dir) / "documents")
+    else:
+        out_dir = path_guard.guard_output_dir(output_dir)
     stem = _case_stem(case_id)
 
     md_path = out_dir / f"{stem}_chat_transcript.md"
