@@ -149,7 +149,7 @@ def build_mitre_section(
     if show_severity:
         headers = ["Technique", "Name", "Tactic", "Severity", "Triggered By"]
         rows = [[
-            f"[{t['id']}](https://attack.mitre.org/techniques/{t['id'].replace('.', '/')}/ )",
+            f"[{t['id']}](https://attack.mitre.org/techniques/{t['id'].replace('.', '/')}/)",
             t["name"],
             t["tactic"],
             severity_badge(t.get("severity", "info")),
