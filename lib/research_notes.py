@@ -523,7 +523,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--evidence",   metavar="PATH", help="Evidence file path shown in the header")
     pi.add_argument("--hostname",   metavar="NAME", help="Target hostname")
     pi.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
-    pi.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory (reports/<case_id>/); takes precedence over --output-dir")
+    pi.add_argument("--case-dir",   metavar="DIR",  help="Directory to write the notes file into (often reports/<case_id>/<MODULE>/<stem>/); takes precedence over --output-dir")
 
     # step
     ps = sub.add_parser("step", help="Append a timestamped step entry")
