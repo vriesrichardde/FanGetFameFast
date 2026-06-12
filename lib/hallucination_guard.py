@@ -152,10 +152,10 @@ def detect_contradictions(findings: List[Finding]) -> List[Tuple[Finding, Findin
             a_lower = a.text.lower()
             b_lower = b.text.lower()
             for pos_set, neg_set in _CONTRADICTION_PAIRS:
-                a_pos = any(kw in a_lower for kw in pos_set)
                 a_neg = any(kw in a_lower for kw in neg_set)
-                b_pos = any(kw in b_lower for kw in pos_set)
                 b_neg = any(kw in b_lower for kw in neg_set)
+                a_pos = (not a_neg) and any(kw in a_lower for kw in pos_set)
+                b_pos = (not b_neg) and any(kw in b_lower for kw in pos_set)
                 if (a_pos and b_neg) or (a_neg and b_pos):
                     if (a, b) not in pairs:
                         pairs.append((a, b))
