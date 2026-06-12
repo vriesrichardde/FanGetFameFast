@@ -158,7 +158,7 @@ def build_mitre_section(
     else:
         headers = ["Technique", "Name", "Tactic", "Observation"]
         rows = [[
-            f"[{t['id']}](https://attack.mitre.org/techniques/{t['id'].replace('.', '/')}/ )",
+            f"[{t['id']}](https://attack.mitre.org/techniques/{t['id'].replace('.', '/')}/)",
             t["name"],
             t["tactic"],
             t.get("observation", ""),
