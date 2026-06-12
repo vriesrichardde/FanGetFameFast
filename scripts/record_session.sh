@@ -47,7 +47,7 @@ fgff_record_session() {
     echo "[record] Recording session transcript (chain of evidence) for ${case_id}..."
     local args=(--case-id "$case_id")
     if [[ -n "$case_dir" ]]; then
-        args+=(--case-dir "$case_dir")
+        args+=(--output-dir "$case_dir/documents")
     else
         args+=(--output-dir "$out_dir")
     fi
