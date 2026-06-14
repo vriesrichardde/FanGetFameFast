@@ -15,6 +15,7 @@
 
 ## Table of contents
 
+0. [Architectural pattern (FIND EVIL! taxonomy)](#0-architectural-pattern-find-evil-taxonomy)
 1. [One-slide system overview](#1-one-slide-system-overview)
 2. [The agentic investigation loop (reason → act → verify → self-correct)](#2-the-agentic-investigation-loop)
 3. [Trust & reliability layer](#3-trust--reliability-layer)
@@ -25,6 +26,31 @@
 8. [Cross-module correlation (the FAN ↔ FAME ↔ FAST conversation)](#8-cross-module-correlation)
 9. [Batch / campaign scale-out](#9-batch--campaign-scale-out)
 10. [Judging-criteria crosswalk](#10-judging-criteria-crosswalk)
+
+---
+
+## 0. Architectural pattern (FIND EVIL! taxonomy)
+
+> **Speaks to:** *Constraint Implementation* / *Usability*. Names where this submission sits in
+> the hackathon's four-pattern architecture taxonomy, so the panel can map the diagrams below to
+> their rubric without inferring it.
+
+The FIND EVIL! rules describe four reference patterns: **Direct Agent Extension**, **Custom MCP
+Server**, **Multi-Agent Framework**, and **Alternative Agentic IDE**. FanGetFameFast is a
+deliberate combination of the **first two**:
+
+| Pattern | Used? | How it shows up here |
+|---------|-------|----------------------|
+| **Direct Agent Extension** | ✅ **Primary** | A single **Claude Code** coordinator is extended in-place with project skills / slash commands (`/fan`, `/fame`, `/fast`, `/investigate-all`, `/correlate`, …) and shell pipelines under `scripts/`. The agent reasons, runs SIFT tools, and self-corrects within one Claude Code session — see §1, §2. |
+| **Custom MCP Server** | ✅ **Primary** | Three purpose-built MCP servers under `mcp/` — `evidence_server.py` (read-only), `investigations_server.py` (write-jailed), and `opencti_server.py` — enforce the security boundary in code, not in the prompt. See §5. |
+| **Multi-Agent Framework** | ❌ Not used | There is **one** coordinating agent, not a fleet of agents exchanging messages. The "conversation between modules" (§8) is the single agent pivoting across FAN/FAME/FAST tools, not autonomous peer agents. |
+| **Alternative Agentic IDE** | ❌ Not used | The platform runs on Claude Code (CLI and the VS Code Claude extension), not a third-party agentic IDE. |
+
+**One-line classification:** *Direct Agent Extension (Claude Code + skills/slash commands) layered
+over Custom MCP Servers (`evidence`, `investigations`, `opencti`) — a single-agent coordinator, not
+a multi-agent framework.* The guardrails that enforce this boundary are **architectural, not
+prompt-based** (§3, §5): they are implemented in server and library code that the agent cannot talk
+its way past.
 
 ---
 
