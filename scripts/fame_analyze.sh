@@ -27,6 +27,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/pathguard.sh"
 VOL="${VOL:-/opt/volatility3-2.20.0/vol.py}"
 [[ -x "$VOL" ]] || VOL="/opt/volatility3/vol.py"
+[[ -x "$VOL" ]] || VOL="$(command -v vol || true)"
 BASELINE="/opt/memory-baseliner/baseline.py"
 
 MEMORY_IMAGE=""
@@ -35,8 +36,8 @@ HOSTNAME_ARG="unknown"
 NO_VAULT=0
 SKIP_UPLOAD=0
 MD_ONLY=0
-ANALYSIS_DIR="$PROJECT_ROOT/analysis/memory"
-EXPORTS_DIR="$PROJECT_ROOT/exports"
+ANALYSIS_DIR="${FGFF_ANALYSIS_DIR:-$PROJECT_ROOT/analysis/memory}"
+EXPORTS_DIR="${FGFF_EXPORTS_DIR:-$PROJECT_ROOT/exports}"
 REPORTS_DIR="$PROJECT_ROOT/reports"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -471,7 +472,13 @@ EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 echo "[fame] Preserving analysis artifacts → $EVIDENCE_DIR ..."
 mkdir -p "$EVIDENCE_DIR/memory" "$EVIDENCE_DIR/exports"
 rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/memory/"  2>/dev/null || true
-rsync -a "$EXPORTS_DIR/"  "$EVIDENCE_DIR/exports/" 2>/dev/null || true
+# Only this run's export subdirs (dumpfiles/malfind/memdump, created above) —
+# $EXPORTS_DIR is shared across cases and may hold other cases' WIP artifacts.
+for _exp_sub in dumpfiles malfind memdump; do
+    if [[ -d "$EXPORTS_DIR/$_exp_sub" ]]; then
+        rsync -a "$EXPORTS_DIR/$_exp_sub/" "$EVIDENCE_DIR/exports/$_exp_sub/" 2>/dev/null || true
+    fi
+done
 
 for artifact_file in \
     "$EVIDENCE_DIR/memory/pslist.txt" \
@@ -485,7 +492,16 @@ for artifact_file in \
     "$EVIDENCE_DIR/memory/mem_timeline.txt" \
     "$EVIDENCE_DIR/memory/proc_baseline.csv" \
     "$EVIDENCE_DIR/memory/drv_baseline.csv" \
-    "$EVIDENCE_DIR/memory/svc_baseline.csv"; do
+    "$EVIDENCE_DIR/memory/svc_baseline.csv" \
+    "$EVIDENCE_DIR/memory/linux_pslist.txt" \
+    "$EVIDENCE_DIR/memory/linux_pstree.txt" \
+    "$EVIDENCE_DIR/memory/linux_netstat.txt" \
+    "$EVIDENCE_DIR/memory/linux_malfind.txt" \
+    "$EVIDENCE_DIR/memory/banners.txt" \
+    "$EVIDENCE_DIR/memory/isf_investigation.txt" \
+    "$EVIDENCE_DIR/memory/syslog_patterns.txt" \
+    "$EVIDENCE_DIR/memory/strings_all.txt" \
+    "$EVIDENCE_DIR/memory/strings_unicode.txt"; do
     if [[ -f "$artifact_file" ]]; then
         _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
         _relpath="FAME/$INVESTIGATION_NAME/${CASE_ID}_evidence/memory/$(basename "$artifact_file")"
@@ -521,6 +537,12 @@ python3 "$PROJECT_ROOT/lib/generate_fame_report.py" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
     ${FAST_MD:+--fast-summary "$FAST_MD"} \
     $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
+
+# ── Completeness check ─────────────────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --check \
+    --case-id "$CASE_ID" --module FAME --case-dir "$CASE_DIR" || true
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --campaign-check \
+    --case-id "$CASE_ID" --reports-dir "$PROJECT_ROOT/reports" || true
 
 # ── Upload to investigations vault ────────────────────────────────────────────
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
@@ -612,12 +634,23 @@ source "$PROJECT_ROOT/scripts/package_artifacts.sh"
 fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" \
     "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
+# ── Chain-of-custody manifest (post-package) ─────────────────────────────────
+# Re-run the custody update so the case ZIP just written above is itself hashed
+# into the manifest, and every prior artifact's hash is re-verified immediately
+# before upload. update_manifest() is idempotent. Best-effort.
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$MEMORY_IMAGE"
+
 # ── Clean up local artifacts ───────────────────────────────────────────────────
 # Mirrors fast_analyze.sh: WIP under analysis/ and exports/ is preserved above
 # (rsync'd into the per-case evidence folder), then wiped so it doesn't
 # accumulate at the repo root between runs.
 echo "[fame] Cleaning up local artifacts (preserved in case evidence folder)..."
-rm -rf "${ANALYSIS_DIR:?}"/* "${EXPORTS_DIR:?}"/* 2>/dev/null || true
+rm -rf "${ANALYSIS_DIR:?}"/* 2>/dev/null || true
+# Only remove this run's own export subdirs — $EXPORTS_DIR is shared across
+# cases and may hold other cases' WIP artifacts (see preservation step above).
+for _exp_sub in dumpfiles malfind memdump; do
+    rm -rf "${EXPORTS_DIR:?}/${_exp_sub:?}" 2>/dev/null || true
+done
 echo "[fame] Local cleanup complete."
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -53,6 +53,11 @@ spaces replaced by hyphens. Use the current year for `<YYYY>`.
 
 ## Research notes — logging rule (CLAUDE.md constraint)
 
+See `docs/investigation_discipline.md` §1 for the shared `init`/`step`/
+`reflect`/`event`/`finalize` cadence (FAN's `init` call is in Step 0 below;
+`--module fan`). The logging rule below is FAN's phase-loop-specific framing
+of that same discipline.
+
 > Do NOT run the next investigation action until the output of the current
 > action has been read, interpreted, and appended to research notes via
 > `python3 lib/research_notes.py step`. This rule is mandatory and supersedes
@@ -415,55 +420,17 @@ capture window. No raw IPs or port numbers — describe behaviour in business te
 Use "confirmed" when backed by direct detector output; "assumed" when inferred from
 cross-module correlation.]
 
-## pptx_executive_summary
-
-[3–5 bullet points. CISO language. No IPs, ports, or protocol names.
-Example: "• Outbound communications consistent with command-and-control activity
-were observed throughout the capture window."]
-
-## pptx_risk
-
-[Business risks — data exposure, regulatory, operational. No technical identifiers.]
-
-## pptx_impact
-
-[What was affected: services, users, data — in plain language.]
-
-## pptx_mitigations
-
-[Containment or monitoring actions taken or in progress.]
-
-## pptx_recommendations
-
-[Concrete follow-up actions with suggested owner labels.]
-
-## pptx_timeline
-
-[4-6 bullets: the board-level timeline. Same chronology as attack_timeline, but
-plain language, no IPs/ports/protocol names/RN-NNN citations — "On [date] at
-[time], ..." Each bullet should be readable on its own as a slide line.]
-
-## pptx_root_cause
-
-[1-2 sentences: how did this happen, in plain language — e.g. phishing, an
-exposed/weak service, compromised credentials, an unpatched vulnerability,
-physical access, misconfiguration. Be specific to what you actually found in
-this capture; do not use a generic placeholder if the evidence supports a
-real conclusion.]
-
-## pptx_lessons_learned
-
-[3-5 bullets: what worked well in this investigation/response, and what gaps
-or improvements this incident points to. Plain language, board-appropriate.]
+... followed by the eight shared pptx_* sections (docs/investigation_discipline.md §2)
 ```
 
-**Rules:**
-- Write all sections even if evidence is thin — note the gap explicitly.
+For the shared `pptx_*` schema and authoring rules, see
+`docs/investigation_discipline.md` §2. Example wording for FAN's
+`pptx_executive_summary`: *"• Outbound communications consistent with
+command-and-control activity were observed throughout the capture window."*
+
+**Rules (FAN-specific, in addition to docs/investigation_discipline.md §2):**
 - `attack_timeline` must span the entire capture window chronologically.
 - Use RN-NNN references to link each event to the research notes step.
-- `pptx_*` sections must be free of IPs, ports, protocol names, file paths,
-  hostnames/workstation IDs, and RN-/EVT- citation references — write them as
-  you would for a board/CISO audience, not a technical one.
 
 ---
 
@@ -591,35 +558,16 @@ cross-references for any analyst reading either file.
 
 ---
 
-## Campaign Report (hand-authored)
+## Cross-module correlation, Campaign Report & completeness gate
 
-If FAME, FAST, or another FAN run already exists for this case ID, the
-per-case campaign report (`<case_id>_campaign_report.*`) must be hand-authored,
-not auto-generated:
-
-1. Read this module's research notes end-to-end, plus the research notes of
-   every other module that has completed for this case ID.
-2. Hand-author `./reports/<case_id>/<case_id>_campaign_report.md` following
-   `docs/campaign_report_template.md` — Incident Timeline merged across
-   modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs from at least
-   two modules (or stating explicitly that none exist), unified MITRE/IOC
-   tables, and a hand-curated Hallucination Guard FND-list with an overall
-   confidence percentage. `lib/correlate_findings.py`'s output (a best-effort
-   research aid) and `lib/generate_combined_report.py`'s
-   `_merge_*`/`_extract_*` helpers may be used as research aids when
-   pre-populating tables.
-3. Render it to PDF/PPTX/DOCX:
-   ```python
-   import sys; sys.path.insert(0, "./lib")
-   from render_campaign_report import render
-
-   paths = render(md_path="./reports/<case_id>/<case_id>_campaign_report.md",
-                   case_id="<case_id>", hostname="<hostname>")
-   ```
-
-`lib/generate_combined_report.py`'s `generate()` is deprecated for this
-workflow — it remains only as an automated fallback for `--md-only`/headless
-batch runs or very-low-evidence cases.
+Follow `docs/investigation_discipline.md` §3 (cross-module correlation via
+`lib/correlate_findings.py`), §4 (hand-authored campaign report if FAME, FAST,
+or another FAN run already exists for this case ID, plus the
+`lib/report_completeness.py --campaign-check`), and §5 (the
+`generate_pcap_report.py` completeness gate — narrative + research-notes
+reasoning checks, the `⚠️ INVESTIGATION INCOMPLETE` banner, and
+`<case_id>_INVESTIGATION_INCOMPLETE.json`). If the generated report shows that
+banner, address it per §5 before considering this investigation complete.
 
 ---
 

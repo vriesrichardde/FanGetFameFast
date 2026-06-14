@@ -41,6 +41,7 @@ except ImportError:
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import path_guard  # noqa: E402  write-path policy enforcement
+import report_completeness  # noqa: E402  narrative/reasoning completeness gate
 from typing import Any
 
 try:
@@ -3637,6 +3638,17 @@ def generate_report(
     # Assemble sections
     sections: list[str] = []
     sections.extend(sec_header(stem, case_id, overall_sev, now, first_ts, last_ts, duration, report_version))
+
+    if case_id:
+        narrative_result = report_completeness.check_narrative(case_id, "FAN", out_dir)
+        reasoning_result = report_completeness.check_research_notes(case_id, out_dir)
+        report_completeness.write_incomplete_marker(out_dir, case_id, narrative_result, reasoning_result)
+        incomplete_banner = report_completeness.format_incomplete_banner(narrative_result, reasoning_result)
+        if incomplete_banner:
+            print(f"[report] WARNING: investigation incomplete for {case_id}/{stem} — "
+                  f"see {case_id}_INVESTIGATION_INCOMPLETE.json", file=sys.stderr)
+            sections.extend(incomplete_banner)
+
     sections.extend(sec_management_summary(data, overall_sev, first_ts, last_ts, duration))
     sections.extend(_sec_incident_timeline(case_id, out_dir))
     sections.extend(sec_findings_silk(data))

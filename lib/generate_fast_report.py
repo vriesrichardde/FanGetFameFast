@@ -42,6 +42,7 @@ except ImportError:
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import path_guard  # noqa: E402  write-path policy enforcement
+import report_completeness  # noqa: E402  narrative/reasoning completeness gate
 from typing import Any
 
 try:
@@ -821,6 +822,14 @@ def _build_markdown(
     reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     narrative = _load_narrative(case_id, reports_dir)
 
+    narrative_result = report_completeness.check_narrative(case_id, "FAST", reports_dir)
+    reasoning_result = report_completeness.check_research_notes(case_id, reports_dir)
+    report_completeness.write_incomplete_marker(reports_dir, case_id, narrative_result, reasoning_result)
+    incomplete_banner = report_completeness.format_incomplete_banner(narrative_result, reasoning_result)
+    if incomplete_banner:
+        print(f"[fast] WARNING: investigation incomplete for {case_id}/{hostname} — "
+              f"see {case_id}_INVESTIGATION_INCOMPLETE.json", file=sys.stderr)
+
     a("# FAST Storage Forensics Report")
     a("")
     a("| Field | Value |")
@@ -832,6 +841,8 @@ def _build_markdown(
     a(f"| Analyst | Claude Code — FAST skill |")
     a(f"| Generated (UTC) | {generated_utc} |")
     a("")
+    if incomplete_banner:
+        lines.extend(incomplete_banner)
 
     # ── Cross-Module Intelligence ─────────────────────────────────────────────
     if fan_summary or fame_summary:
@@ -2150,6 +2161,10 @@ def generate(
     data["_narrative"] = _load_narrative(case_id, md_dir)
     generated_utc = datetime.now(_CET).strftime("%Y-%m-%d %H:%M CET")
     stem = case_id.replace(" ", "_")
+    # docs_dir (when supplied) is shared across all hosts in this case — disambiguate
+    # the PDF/PPTX/DOCX filenames with the hostname so multiple hosts don't collide
+    # and silently overwrite each other's reports in reports/<case_id>/documents/.
+    aux_stem = f"{stem}_{hostname.replace(' ', '_')}" if docs_dir is not None else stem
 
     # Markdown
     md_text = _build_markdown(
@@ -2167,7 +2182,7 @@ def generate(
         try:
             sys.path.insert(0, str(PROJECT_ROOT / "lib"))
             from md_to_pdf import convert as md2pdf
-            pdf_path = aux_dir / f"{stem}_fast_report.pdf"
+            pdf_path = aux_dir / f"{aux_stem}_fast_report.pdf"
             md2pdf(md_path, pdf_path)
             print(f"[fast] PDF saved: {pdf_path}")
         except Exception as exc:
@@ -2176,7 +2191,7 @@ def generate(
     # PPTX
     pptx_path: Path | None = None
     if not md_only:
-        pptx_path = aux_dir / f"{stem}_fast_presentation.pptx"
+        pptx_path = aux_dir / f"{aux_stem}_fast_presentation.pptx"
         _build_pptx(
             data, case_id, hostname, disk_image or str(analysis_dir),
             generated_utc, pptx_path, opencti_findings, fan_summary, fame_summary,
@@ -2185,7 +2200,7 @@ def generate(
     # DOCX
     docx_path: Path | None = None
     if not md_only:
-        docx_path = aux_dir / f"{stem}_fast_report.docx"
+        docx_path = aux_dir / f"{aux_stem}_fast_report.docx"
         _build_docx(
             data, case_id, hostname, disk_image or str(analysis_dir),
             generated_utc, docx_path, opencti_findings, fan_summary, fame_summary,

@@ -40,6 +40,7 @@ EWF_MOUNT="/mnt/ewf"
 FS_MOUNT="/mnt/windows_mount"
 NBD_DEV=""
 NBD_CONNECTED=0
+DIRECT_E01=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -104,24 +105,6 @@ python3 "$PROJECT_ROOT/lib/research_notes.py" init \
     --hostname   "$HOSTNAME_ARG" \
     --case-dir   "$_EARLY_CASE_DIR" 2>/dev/null || true
 
-# ── Directory setup ───────────────────────────────────────────────────────────
-mkdir -p \
-    "$ANALYSIS_DIR" \
-    "$EXPORTS_DIR/files" \
-    "$EXPORTS_DIR/registry" \
-    "$EXPORTS_DIR/evtx" \
-    "$EXPORTS_DIR/prefetch" \
-    "$EXPORTS_DIR/mft" \
-    "$EXPORTS_DIR/srum" \
-    "$EXPORTS_DIR/browser" \
-    "$EXPORTS_DIR/carved" \
-    "$EXPORTS_DIR/tsk_recover" \
-    "$EXPORTS_DIR/recyclebin" \
-    "$EXPORTS_DIR/machine_details" \
-    "$EXPORTS_DIR/tasks" \
-    "$EXPORTS_DIR/autopsy" \
-    "$REPORTS_DIR"
-
 # ── Helper functions ──────────────────────────────────────────────────────────
 _cleanup_local_artifacts() {
     echo "[fast] Removing local analysis artifacts..."
@@ -143,21 +126,42 @@ _upload_reports() {
         || echo "[fast] WARNING: Upload for case $cid failed."
 }
 
-# ── Session guard: upload + clean when switching evidence ─────────────────────
+# ── Session guard: upload leftovers from a previous run, then always clean ────
+# A previous run's exports/registry, exports/evtx, exports/prefetch, etc. must
+# never be picked up by generate_fast_report.py's globs for THIS run — even if
+# that previous run crashed before its own cleanup ran. So: best-effort upload
+# of any previous case's reports first, then unconditionally wipe analysis/
+# and exports/ before this run creates anything.
 SESSION_FILE="$ANALYSIS_DIR/.fast_session.json"
 
 if [[ -f "$SESSION_FILE" ]]; then
     PREV_IMAGE="$(python3 -c "import json; print(json.load(open('$SESSION_FILE')).get('disk_image',''))" 2>/dev/null || true)"
     PREV_CASE="$(python3  -c "import json; print(json.load(open('$SESSION_FILE')).get('case_id',''))"   2>/dev/null || true)"
-    if [[ -n "$PREV_IMAGE" && "$PREV_IMAGE" != "$DISK_IMAGE" ]]; then
+    if [[ -n "$PREV_IMAGE" && "$PREV_IMAGE" != "$DISK_IMAGE" && $SKIP_UPLOAD -eq 0 ]]; then
         echo "[fast] Evidence switch detected (previous: $(basename "$PREV_IMAGE"))."
-        if [[ $SKIP_UPLOAD -eq 0 ]]; then
-            echo "[fast] Uploading artifacts from previous investigation (case: $PREV_CASE)..."
-            _upload_reports "$PREV_CASE"
-        fi
-        _cleanup_local_artifacts
+        echo "[fast] Uploading artifacts from previous investigation (case: $PREV_CASE)..."
+        _upload_reports "$PREV_CASE"
     fi
 fi
+_cleanup_local_artifacts
+
+# ── Directory setup ───────────────────────────────────────────────────────────
+mkdir -p \
+    "$ANALYSIS_DIR" \
+    "$EXPORTS_DIR/files" \
+    "$EXPORTS_DIR/registry" \
+    "$EXPORTS_DIR/evtx" \
+    "$EXPORTS_DIR/prefetch" \
+    "$EXPORTS_DIR/mft" \
+    "$EXPORTS_DIR/srum" \
+    "$EXPORTS_DIR/browser" \
+    "$EXPORTS_DIR/carved" \
+    "$EXPORTS_DIR/tsk_recover" \
+    "$EXPORTS_DIR/recyclebin" \
+    "$EXPORTS_DIR/machine_details" \
+    "$EXPORTS_DIR/tasks" \
+    "$EXPORTS_DIR/autopsy" \
+    "$REPORTS_DIR"
 
 printf '{"case_id":"%s","hostname":"%s","disk_image":"%s","started":"%s"}\n' \
     "$CASE_ID" "$HOSTNAME_ARG" "$DISK_IMAGE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -200,8 +204,15 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
 
     if [[ "$IMAGE_EXT_LOWER" == "e01" ]] || [[ "$IMAGE_EXT_LOWER" == "ewf" ]]; then
         echo "[fast] Mounting E01 via ewfmount..."
-        sudo ewfmount "$DISK_IMAGE" "$EWF_MOUNT"/ || { echo "[fast] WARNING: ewfmount failed"; SKIP_MOUNT=1; }
-        RAW_DEVICE="$EWF_MOUNT/ewf1"
+        if sudo ewfmount "$DISK_IMAGE" "$EWF_MOUNT"/ 2>/dev/null; then
+            RAW_DEVICE="$EWF_MOUNT/ewf1"
+        else
+            echo "[fast] WARNING: ewfmount unavailable (no /dev/fuse in this environment)."
+            echo "[fast] Falling back to TSK's built-in EWF support — fls/icat/fsstat will"
+            echo "[fast] read the .E01 directly, without mounting."
+            RAW_DEVICE="$DISK_IMAGE"
+            DIRECT_E01=1
+        fi
     elif [[ "$IMAGE_EXT_LOWER" =~ ^(vdi|vmdk|qcow2|vhd|vhdx)$ ]]; then
         echo "[fast] VM image ($IMAGE_EXT_LOWER) — exposing via qemu-nbd..."
         sudo modprobe nbd max_part=8 2>/dev/null || true
@@ -240,11 +251,26 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
 
         # Find NTFS/ext partition start sector (largest non-recovery partition)
         START_SECTOR=$(grep -E "NTFS|ext|Linux" "$ANALYSIS_DIR/mmls.txt" 2>/dev/null | \
-            awk '{print $3}' | sort -n | head -1 || echo "2048")
-        START_SECTOR="${START_SECTOR:-2048}"
+            awk '{print $3}' | sort -n | head -1 || echo "")
+        if [[ -z "$START_SECTOR" ]]; then
+            if [[ $DIRECT_E01 -eq 1 ]]; then
+                # Logical/volume-level EWF acquisitions have no partition table —
+                # the filesystem starts at sector 0 of the image itself.
+                START_SECTOR=0
+                echo "[fast] No partition table in mmls output — treating as a logical volume image (offset 0)."
+            else
+                START_SECTOR=2048
+            fi
+        fi
         OFFSET=$(( START_SECTOR * SECTOR_SIZE ))
         echo "[fast] Partition start: sector $START_SECTOR (offset $OFFSET bytes)"
 
+        if [[ $DIRECT_E01 -eq 1 ]]; then
+            echo "[fast] No FUSE-mounted raw device available — skipping loop-mount."
+            echo "[fast] TSK tools (fls/fsstat/icat) will read the .E01 directly; Windows"
+            echo "[fast] artefacts will be extracted via fls path lookup + icat below."
+            SKIP_MOUNT=2
+        else
         # Mount filesystem read-only. Split raw images can't be loop-mounted as
         # separate segments — concatenate to a temp file first if there's room
         # (OS temp dir is an approved write location per lib/path_guard.py),
@@ -278,6 +304,7 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         # Verify the mount really is read-only before any analysis touches it.
         [[ $SKIP_MOUNT -eq 0 ]] && fgff_assert_ro_mount "$FS_MOUNT"
         [[ $SKIP_MOUNT -eq 0 ]] && MOUNTED_FS=1 && echo "[fast] Mounted at $FS_MOUNT (verified read-only)"
+        fi
     fi
 fi
 
@@ -374,6 +401,83 @@ if [[ $MOUNTED_FS -eq 1 ]]; then
         --exports "$EXPORTS_DIR" \
         --fs-mount "$FS_MOUNT" 2>>"$ANALYSIS_DIR/fast_machine_details.log" || \
         echo "[fast] WARNING: fast_machine_details.py failed — see $ANALYSIS_DIR/fast_machine_details.log"
+
+elif [[ $DIRECT_E01 -eq 1 ]]; then
+    echo "[fast] Extracting Windows artefacts directly from image (fls path lookup + icat)..."
+    FLS="$ANALYSIS_DIR/fls_output.txt"
+
+    # Extract a single file by exact (case-insensitive) fls path.
+    _icat_path() {
+        local rel_lc="${1,,}" out="$2" meta inode
+        meta=$(awk -F'\t' -v p="$rel_lc" \
+            '$1 ~ /^r\/r/ { l=tolower($2); if (l==p) { print $1; exit } }' "$FLS" 2>/dev/null)
+        [[ -z "$meta" ]] && return 1
+        inode=$(echo "$meta" | awk '{print $2}' | tr -d ':')
+        sudo icat -o "${START_SECTOR:-0}" "${TSK_IMAGES[@]}" "$inode" > "$out" 2>/dev/null
+    }
+
+    # Extract every regular file directly inside an fls directory (non-recursive).
+    _icat_dir() {
+        local dir_lc="${1,,}/" outdir="$2"
+        mkdir -p "$outdir" 2>/dev/null || sudo mkdir -p "$outdir"
+        awk -F'\t' -v d="$dir_lc" \
+            '$1 ~ /^r\/r/ { l=tolower($2); if (index(l,d)==1 && index(substr(l,length(d)+1),"/")==0) print }' \
+            "$FLS" 2>/dev/null | while IFS=$'\t' read -r meta path; do
+            local inode fname
+            inode=$(echo "$meta" | awk '{print $2}' | tr -d ':')
+            fname="$(basename "$path")"
+            sudo icat -o "${START_SECTOR:-0}" "${TSK_IMAGES[@]}" "$inode" > "$outdir/$fname" 2>/dev/null || true
+        done
+    }
+
+    # Event logs
+    _icat_dir "Windows/System32/winevt/Logs" "$EXPORTS_DIR/evtx"
+
+    # Registry hives
+    for hive in SYSTEM SOFTWARE SECURITY SAM; do
+        _icat_path "Windows/System32/config/$hive" "$EXPORTS_DIR/registry/$hive" || true
+    done
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (l ~ /^users\/[^\/]+\/ntuser\.dat$/) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/registry/$(echo "$p" | tr '/' '_')" || true
+    done
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (l ~ /usrclass\.dat$/) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/registry/$(echo "$p" | tr '/' '_')" || true
+    done
+
+    # Prefetch
+    _icat_dir "Windows/Prefetch" "$EXPORTS_DIR/prefetch"
+
+    # SRUM
+    _icat_path "Windows/System32/sru/SRUDB.dat" "$EXPORTS_DIR/srum/SRUDB.dat" || true
+
+    # Amcache
+    _icat_path "Windows/AppCompat/Programs/Amcache.hve" "$EXPORTS_DIR/registry/Amcache.hve" || true
+
+    # Browser history
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (l ~ /chrome\/user data\/default\/history$/) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/browser/$(echo "$p" | tr '/' '_')" || true
+    done
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (l ~ /edge\/user data\/default\/history$/) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/browser/$(echo "$p" | tr '/' '_')" || true
+    done
+
+    # Recycle Bin
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (l ~ /^\$recycle\.bin\//) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/recyclebin/$(echo "$p" | tr '/' '_')" || true
+    done
+
+    # Scheduled tasks
+    awk -F'\t' '$1 ~ /^r\/r/ { l=tolower($2); if (index(l,"windows/system32/tasks/")==1) print $2 }' \
+        "$FLS" 2>/dev/null | while read -r p; do
+        _icat_path "$p" "$EXPORTS_DIR/tasks/$(echo "$p" | tr '/' '_')" || true
+    done
+
+    echo "[fast] Direct artefact extraction complete (no mount — fls + icat)."
 fi
 
 # ── MFT and UsnJrnl via icat ──────────────────────────────────────────────────
@@ -495,7 +599,13 @@ EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 echo "[fast] Preserving analysis artifacts → $EVIDENCE_DIR ..."
 mkdir -p "$EVIDENCE_DIR/storage" "$EVIDENCE_DIR/exports"
 rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/storage/" 2>/dev/null || true
-rsync -a "$EXPORTS_DIR/"  "$EVIDENCE_DIR/exports/"  2>/dev/null || true
+# exports/carved/ holds bulk_extractor's raw scanner output, which can run into
+# tens of GB per image (mostly low-value carved fragments) and is reproducible
+# from the source E01 — exclude it from the per-case evidence copy/ZIP, but keep
+# the top-level reports (report.xml, *_histogram.txt) for reference.
+rsync -a --exclude='carved/' "$EXPORTS_DIR/" "$EVIDENCE_DIR/exports/" 2>/dev/null || true
+mkdir -p "$EVIDENCE_DIR/exports/carved"
+find "$EXPORTS_DIR/carved" -maxdepth 1 -type f -size -10M -exec cp {} "$EVIDENCE_DIR/exports/carved/" \; 2>/dev/null || true
 
 for artifact_file in \
     "$EVIDENCE_DIR/storage/ewfinfo.txt" \
@@ -539,6 +649,12 @@ python3 "$PROJECT_ROOT/lib/generate_fast_report.py" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
     ${FAME_MD:+--fame-summary "$FAME_MD"} \
     $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
+
+# ── Completeness check ─────────────────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --check \
+    --case-id "$CASE_ID" --module FAST --case-dir "$CASE_DIR" || true
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --campaign-check \
+    --case-id "$CASE_ID" --reports-dir "$PROJECT_ROOT/reports" || true
 
 # ── Upload to investigations vault ────────────────────────────────────────────
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
@@ -605,6 +721,12 @@ fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$DISK_IMAGE"
 source "$PROJECT_ROOT/scripts/package_artifacts.sh"
 fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" \
     "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Chain-of-custody manifest (post-package) ─────────────────────────────────
+# Re-run the custody update so the case ZIP just written above is itself hashed
+# into the manifest, and every prior artifact's hash is re-verified immediately
+# before upload. update_manifest() is idempotent. Best-effort.
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$DISK_IMAGE"
 
 # ── Clean up local artifacts ───────────────────────────────────────────────────
 echo "[fast] Cleaning up local artifacts (preserved in investigations vault)..."

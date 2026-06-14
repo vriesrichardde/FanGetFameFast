@@ -24,6 +24,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# 7-Zip binary: Debian's "7zip" package (22.01+) ships "7zz", while older
+# p7zip-based installs provide "7z"/"7za". Prefer whichever exists.
+if command -v 7z &>/dev/null; then
+    SEVENZIP_BIN="7z"
+elif command -v 7zz &>/dev/null; then
+    SEVENZIP_BIN="7zz"
+elif command -v 7za &>/dev/null; then
+    SEVENZIP_BIN="7za"
+else
+    SEVENZIP_BIN=""
+fi
+
 # ── Defaults ───────────────────────────────────────────────────────────────────
 EVIDENCE_DIR="/home/vscode/evidence"
 BATCH_ID=""
@@ -80,15 +92,24 @@ fi
 
 [[ -z "$BATCH_ID" ]] && BATCH_ID="BATCH-$(date -u +%Y%m%d-%H%M%S)"
 
+# Since case_id == BATCH_ID (one case per evidence folder), batch-level
+# artifacts (batch report, campaign report, session transcript, packaged ZIP)
+# all belong under reports/<BATCH_ID>/ alongside the per-module reports rather
+# than at the reports/ root. Exporting FGFF_CASE_DIR lets fgff_record_session
+# and fgff_package_artifacts (sourced below) route there automatically.
+REPORTS_DOCS_DIR="$PROJECT_ROOT/reports/$BATCH_ID/documents"
+export FGFF_CASE_DIR="$PROJECT_ROOT/reports/$BATCH_ID"
+
 # ── Batch work directories ─────────────────────────────────────────────────────
 BATCH_WORK_DIR="$PROJECT_ROOT/batch_work/$BATCH_ID"
 EXTRACTED_DIR="$BATCH_WORK_DIR/extracted"
 MANIFEST="$BATCH_WORK_DIR/manifest.json"
 ERRORS_LOG="$BATCH_WORK_DIR/errors.log"
 PROCESSED_FILE="$BATCH_WORK_DIR/processed_stems.txt"
+NEEDS_FOLLOWUP_FILE="$BATCH_WORK_DIR/needs_followup.txt"
 
 mkdir -p "$BATCH_WORK_DIR" "$EXTRACTED_DIR"
-touch "$PROCESSED_FILE"
+touch "$PROCESSED_FILE" "$NEEDS_FOLLOWUP_FILE"
 
 # ── Manifest initialisation ────────────────────────────────────────────────────
 python3 - "$MANIFEST" "$BATCH_ID" "$EVIDENCE_DIR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PYEOF'
@@ -157,10 +178,26 @@ _is_processed() {
     grep -qxF "$1" "$PROCESSED_FILE" 2>/dev/null
 }
 
+# After a successful FAME/FAST run, check for
+# reports/<case_id>/<module>/<stem>/<case_id>_INVESTIGATION_INCOMPLETE.json
+# (written by generate_fame_report.py / generate_fast_report.py). If present,
+# record "module:stem" in needs_followup.txt so the nightly skill's §5a
+# remediation pass can re-process this host with full session context.
+_check_followup() {
+    local case_id="$1" module="$2" stem="$3"
+    local marker="$PROJECT_ROOT/reports/$case_id/$module/$stem/${case_id}_INVESTIGATION_INCOMPLETE.json"
+    if [[ -f "$marker" ]]; then
+        echo "${module}:${stem}" >> "$NEEDS_FOLLOWUP_FILE"
+        echo "[batch] ${module}/${stem} flagged for follow-up remediation (see $marker)"
+    fi
+}
+
 # Derive module type from file extension. Takes the full path (not just the
 # basename) because ".001" is ambiguous: a lone FTK Imager raw memory dump has
-# no ".002" sibling (-> FAME), while a split raw disk image does (-> FAST,
-# fast_analyze.sh handles the multi-segment set).
+# no ".002" sibling (-> FAME), a split raw disk image does (-> FAST,
+# fast_analyze.sh handles the multi-segment set), and a multi-volume .7z.001
+# archive segment is neither — it's handled by Phase 1 (-> UNKNOWN here so
+# Phase 2 doesn't also try to image/memory-analyze it).
 _detect_module() {
     local file="$1"
     local ext
@@ -171,7 +208,9 @@ _detect_module() {
         e01|ewf|vmdk|vdi|qcow2|vhd|vhdx)   echo "FAST" ;;
         pcap|pcapng|cap)                     echo "FAN"  ;;
         001)
-            if [[ -f "${file%.001}.002" ]]; then
+            if [[ "${file,,}" == *.7z.001 ]]; then
+                echo "UNKNOWN"
+            elif [[ -f "${file%.001}.002" ]]; then
                 echo "FAST"
             else
                 echo "FAME"
@@ -253,6 +292,7 @@ _process_file() {
                 fi
             elif claude -p "/fame \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
                 PASS=$((PASS + 1))
+                _check_followup "$case_id" "FAME" "$stem"
             else
                 status="failed"
                 FAIL=$((FAIL + 1))
@@ -262,6 +302,7 @@ _process_file() {
         FAST)
             if claude -p "/fast \"$file\" --case-id \"$case_id\" --hostname \"$stem\"$extra_args"; then
                 PASS=$((PASS + 1))
+                _check_followup "$case_id" "FAST" "$stem"
             else
                 status="failed"
                 FAIL=$((FAIL + 1))
@@ -276,9 +317,10 @@ _process_file() {
             [[ $NO_VAULT -eq 1 ]] && common_flags+=("--no-vault")
             if bash "$SCRIPT_DIR/analyze_pcap.sh" "$file" \
                     --case-id "$case_id" \
-                    --reports-persist-dir "$PROJECT_ROOT/reports" \
+                    --reports-persist-dir "$REPORTS_DOCS_DIR" \
                     "${common_flags[@]+"${common_flags[@]}"}"; then
                 PASS=$((PASS + 1))
+                _check_followup "$case_id" "FAN" "$stem"
             else
                 status="failed"
                 FAIL=$((FAIL + 1))
@@ -303,6 +345,12 @@ _process_archive() {
     local ext="${archive##*.}"
     ext="${ext,,}"
 
+    # A multi-volume 7z archive's first segment (foo.7z.001) — 7z auto-discovers
+    # the remaining .7z.002, .7z.003, ... segments alongside it.
+    if [[ "${archive,,}" == *.7z.001 ]]; then
+        ext="7z"
+    fi
+
     # Create a per-archive temp dir under batch_work so cleanup is scoped
     local extract_dir
     extract_dir="$(mktemp -d "$EXTRACTED_DIR/XXXXXX")"
@@ -312,7 +360,12 @@ _process_archive() {
     local extract_ok=1
     case "$ext" in
         7z)
-            7z x "$archive" -o"$extract_dir" -y >/dev/null 2>&1 || extract_ok=0 ;;
+            if [[ -z "$SEVENZIP_BIN" ]]; then
+                extract_ok=0
+            else
+                "$SEVENZIP_BIN" x "$archive" -o"$extract_dir" -y >/dev/null 2>&1 || extract_ok=0
+            fi
+            ;;
         zip)
             unzip -o "$archive" -d "$extract_dir" >/dev/null 2>&1 || extract_ok=0 ;;
     esac
@@ -359,7 +412,7 @@ archive_count=0
 while IFS= read -r -d '' archive; do
     archive_count=$((archive_count + 1))
     _process_archive "$archive"
-done < <(find "$EVIDENCE_DIR" -type f \( -name "*.7z" -o -name "*.zip" \) -print0 | sort -z)
+done < <(find "$EVIDENCE_DIR" -type f \( -iname "*.7z" -o -iname "*.zip" -o -iname "*.7z.001" \) -print0 | sort -z)
 
 echo "[batch] Phase 1 complete — $archive_count archive(s) processed."
 
@@ -401,47 +454,56 @@ report_flags=()
 python3 "$PROJECT_ROOT/lib/generate_batch_report.py" \
     --batch-id    "$BATCH_ID" \
     --manifest    "$MANIFEST" \
-    --reports-dir "$PROJECT_ROOT/reports" \
-    --output-dir  "$PROJECT_ROOT/reports" \
+    --reports-dir "$REPORTS_DOCS_DIR" \
+    --output-dir  "$REPORTS_DOCS_DIR" \
     "${report_flags[@]+"${report_flags[@]}"}"
 
 # ── Phase 4: Campaign report ──────────────────────────────────────────────────
 echo ""
 echo "[batch] Phase 4: Generating campaign report..."
 
-# Generate narrative files for all successfully completed cases
-while IFS= read -r case_id; do
-    [[ -z "$case_id" ]] && continue
-    python3 "$PROJECT_ROOT/lib/narrative_generator.py" \
-        --case-id     "$case_id" \
-        --reports-dir "$PROJECT_ROOT/reports" 2>/dev/null || true
-done < <(python3 - "$MANIFEST" <<'PYEOF'
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-for case_id in sorted({c["case_id"] for c in data.get("cases", []) if c.get("status") == "success"}):
-    print(case_id)
-PYEOF
-)
+# Run the headless narrative fallback for every host flagged by _check_followup
+# (reports/<BATCH_ID>/<MODULE>/<stem>/<BATCH_ID>_INVESTIGATION_INCOMPLETE.json
+# present after its /fame or /fast run). Each per-host module directory is
+# passed directly as --reports-dir (NOT $REPORTS_DOCS_DIR, which is the
+# documents/ dir and has the wrong layout for per-host narratives). This fills
+# in the narrative-section gaps (§2) but cannot resolve reasoning gaps (§2b) —
+# those still require Claude's interpretation/Reflect/pivot steps, so the host
+# stays in needs_followup.txt for the nightly skill's §5a remediation pass.
+while IFS=: read -r module stem; do
+    [[ -z "$module" || -z "$stem" ]] && continue
+    host_dir="$PROJECT_ROOT/reports/$BATCH_ID/$module/$stem"
+    if [[ -d "$host_dir" ]]; then
+        echo "[batch] Phase 4: narrative fallback for $module/$stem"
+        python3 "$PROJECT_ROOT/lib/narrative_generator.py" \
+            --case-id     "$BATCH_ID" \
+            --reports-dir "$host_dir" \
+            --module      "${module,,}" 2>/dev/null || true
+        python3 "$PROJECT_ROOT/lib/report_completeness.py" --check \
+            --case-id "$BATCH_ID" --module "$module" --case-dir "$host_dir" || true
+    fi
+done < <(sort -u "$NEEDS_FOLLOWUP_FILE" 2>/dev/null)
 
 CAMPAIGN_TITLE="${CAMPAIGN_TITLE:-Campaign Investigation — $BATCH_ID}"
 python3 "$PROJECT_ROOT/lib/generate_campaign_report.py" \
     --campaign-id "$BATCH_ID" \
     --title       "$CAMPAIGN_TITLE" \
-    --reports-dir "$PROJECT_ROOT/reports" \
-    --output-dir  "$PROJECT_ROOT/reports"
+    --reports-dir "$REPORTS_DOCS_DIR" \
+    --output-dir  "$REPORTS_DOCS_DIR"
 
 echo "[batch] Phase 4 complete — campaign report written."
 
 # ── Session transcript (chain of evidence) ────────────────────────────────────
 # Capture the full agentic-batch coordination session. Best-effort; never fails.
+# FGFF_CASE_DIR (exported above) routes this to reports/<BATCH_ID>/documents/.
 source "$PROJECT_ROOT/scripts/record_session.sh"
-fgff_record_session "$BATCH_ID" "$PROJECT_ROOT/reports" "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+fgff_record_session "$BATCH_ID" "$REPORTS_DOCS_DIR" "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Bundle every batch-level artifact (campaign report, transcript, …) and upload.
+# FGFF_CASE_DIR (exported above) routes the ZIP to reports/<BATCH_ID>/documents/.
 source "$PROJECT_ROOT/scripts/package_artifacts.sh"
-fgff_package_artifacts "$BATCH_ID" "$PROJECT_ROOT/reports" "$PROJECT_ROOT/exports" "" \
+fgff_package_artifacts "$BATCH_ID" "$REPORTS_DOCS_DIR" "$PROJECT_ROOT/exports" "" \
     "$([[ $NO_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

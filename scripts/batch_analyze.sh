@@ -22,6 +22,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# 7-Zip binary: Debian's "7zip" package (22.01+) ships "7zz", while older
+# p7zip-based installs provide "7z"/"7za". Prefer whichever exists.
+if command -v 7z &>/dev/null; then
+    SEVENZIP_BIN="7z"
+elif command -v 7zz &>/dev/null; then
+    SEVENZIP_BIN="7zz"
+elif command -v 7za &>/dev/null; then
+    SEVENZIP_BIN="7za"
+else
+    SEVENZIP_BIN=""
+fi
+
 # ── Defaults ───────────────────────────────────────────────────────────────────
 EVIDENCE_DIR="/home/vscode/evidence"
 BATCH_ID=""
@@ -263,7 +275,12 @@ _process_archive() {
     local extract_ok=1
     case "$ext" in
         7z)
-            7z x "$archive" -o"$extract_dir" -y >/dev/null 2>&1 || extract_ok=0 ;;
+            if [[ -z "$SEVENZIP_BIN" ]]; then
+                extract_ok=0
+            else
+                "$SEVENZIP_BIN" x "$archive" -o"$extract_dir" -y >/dev/null 2>&1 || extract_ok=0
+            fi
+            ;;
         zip)
             unzip -o "$archive" -d "$extract_dir" >/dev/null 2>&1 || extract_ok=0 ;;
     esac
