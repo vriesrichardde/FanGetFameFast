@@ -503,6 +503,80 @@ cd "$INSTALL_DIR"
 
 The report lands in `~/cases/FAN-2026-001/reports/` on ubuntudesktop once the investigation completes. All WIP files in `./analysis/` are deleted automatically.
 
+### Scheduling nightly per-folder evidence investigation
+
+New evidence dropped into `~/evidence` (or `EVIDENCE_ROOT`) is processed
+**one top-level folder at a time, smallest first, each folder treated as a
+single case**. Both setups below drive
+[`scripts/batch_agentic.sh`](../scripts/batch_agentic.sh) against one
+folder per run, with a **fixed batch ID per folder** (e.g. `NITROBA`,
+`NISTLEAK`, `SRL2018`) that doubles as the case ID — every evidence file
+inside the folder becomes a hostname within that one case
+(`reports/<batch_id>/FAME/<hostname>/`, `reports/<batch_id>/FAST/<hostname>/`,
+...). `batch_agentic.sh` keeps `batch_work/<batch_id>/processed_stems.txt` and
+skips any `MODULE:stem.ext` it already analysed on a previous night, so a
+folder that doesn't fit in one session (e.g. `srl-2018`, 29 evidence files)
+resumes automatically across multiple nights.
+
+Each run extracts new archives, routes new FAME/FAST hostnames through the
+agentic `/fame` / `/fast` skills (`claude -p "/fame ..."`, full research notes +
+report suite + chain of custody + vault upload), routes new FAN hostnames
+through `analyze_pcap.sh`, triages any `.mans` (Mandiant Redline) collections
+via `lib/redline_triage.py`, and regenerates the per-folder batch + campaign
+report under `./reports/<batch_id>/`.
+
+The Claude Code skill
+[`.claude/skills/nightly-folder-investigation.md`](../.claude/skills/nightly-folder-investigation.md)
+wraps this: it tracks folder progress in `batch_work/nightly_queue.json`
+(smallest-first queue + `current_index`), advances to the next folder once
+the current one's evidence is fully covered by `processed_stems.txt`, and
+re-scans for newly-dropped top-level folders once the queue is exhausted. It
+also produces a morning-summary step (reads `manifest.json`, verifies
+`./analysis/` is empty, spot-checks new reports).
+
+**Devcontainer / interactive workstation (this repo's dev environment):**
+
+Use Claude Code's built-in `CronCreate` scheduler from inside a session. The
+skill is **self-chaining**: every run reschedules tomorrow's one-shot job
+(`recurring: false`, same prompt) *before* doing any long-running work, so
+there's at most one pending job at a time and no `CronList`/`CronDelete`
+bookkeeping is needed:
+
+```
+# Inside a Claude Code session in this repo, once, to kick off the chain:
+# CronCreate cron="5 23 * * *" recurring=false
+#   prompt="Run the nightly-folder-investigation skill
+#   (.claude/skills/nightly-folder-investigation.md)"
+```
+
+> One-shot `CronCreate` jobs auto-delete after firing, and `CronCreate`'s
+> persistence across container restarts/session-exit is uncertain (the tool
+> has reported "session-only... dies when Claude exits" even with
+> `durable: true`). If the devcontainer/session is restarted, the pending
+> one-shot job may be lost and the chain stalls until someone manually
+> re-fires `/nightly-folder-investigation` once. The SIFT workstation `cron`
+> path below doesn't have this problem and is the recommended path for
+> unattended production use.
+
+**SIFT workstation (headless, no interactive Claude session required):**
+
+Add a system `cron` job that invokes the Claude Code CLI directly with `-p`
+(print mode — runs one prompt non-interactively and exits), the same pattern
+`batch_agentic.sh` itself uses for per-case analysis. Because the skill tracks
+its own per-folder queue in `batch_work/nightly_queue.json`, a plain
+**recurring** cron entry is sufficient — no self-rescheduling needed:
+
+```bash
+# Add to crontab (nightly at 23:05 — adjust for your timezone)
+(crontab -l 2>/dev/null; echo "5 23 * * * cd $INSTALL_DIR && claude -p '/nightly-folder-investigation' >> /var/log/fgff_nightly_intake.log 2>&1") | crontab -
+```
+
+This requires the `claude` CLI to be installed and authenticated for the service
+account running the cron job (see [Section 2](#2-service-account-setup)). The
+log file captures the morning summary the skill produces; review it (or the
+regenerated `<batch_id>` campaign report under `./reports/<batch_id>/` for
+whichever folder was processed) each morning.
+
 ---
 
 ## 12. Security hardening

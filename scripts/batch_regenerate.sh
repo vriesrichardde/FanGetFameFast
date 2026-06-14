@@ -50,10 +50,17 @@ count_skip=0
 if [[ -n "$SINGLE_CASE" ]]; then
     case_ids=("$SINGLE_CASE")
 else
-    mapfile -t notes_files < <(find "$REPORTS_DIR" -maxdepth 1 -name "*_research_notes.md" | sort)
+    # Discover research notes from both new hierarchical layout
+    # (reports/<case_id>/<case_id>_research_notes.md) and legacy flat layout
+    # (reports/<case_id>_research_notes.md).
+    mapfile -t notes_files < <(find "$REPORTS_DIR" -maxdepth 2 -name "*_research_notes.md" | sort)
     case_ids=()
+    seen=()
     for f in "${notes_files[@]}"; do
         base="$(basename "$f" _research_notes.md)"
+        # Skip duplicates (same case_id found in both layouts)
+        [[ " ${seen[*]} " == *" $base "* ]] && continue
+        seen+=("$base")
         case_ids+=("$base")
     done
 fi
@@ -87,9 +94,15 @@ for CASE_ID in "${case_ids[@]}"; do
     [[ "$CASE_ID" == FAN-*  ]] && MODULE="fan"
 
     # Extract hostname from research notes header
-    NOTES="$REPORTS_DIR/${CASE_ID}_research_notes.md"
+    # Check new per-case layout first, then fall back to legacy flat path.
+    NOTES=""
+    for _notes_candidate in \
+        "$REPORTS_DIR/$CASE_ID/${CASE_ID}_research_notes.md" \
+        "$REPORTS_DIR/${CASE_ID}_research_notes.md"; do
+        [[ -f "$_notes_candidate" ]] && { NOTES="$_notes_candidate"; break; }
+    done
     HOSTNAME=""
-    if [[ -f "$NOTES" ]]; then
+    if [[ -n "$NOTES" ]]; then
         # Pattern: **Hostname:** base-admin
         HOSTNAME=$(grep -m1 "\*\*Hostname:\*\*" "$NOTES" \
             | sed 's/.*\*\*Hostname:\*\*\s*//' \
@@ -198,11 +211,11 @@ echo "  Failed (cases)  : $count_fail"
 echo "  Skipped PDF     : $count_skip"
 echo ""
 
-narrative_count=$(find "$REPORTS_DIR" -maxdepth 1 -name "*_narrative.md" | grep -v CAMPAIGN | wc -l)
-pptx_count=$(find "$REPORTS_DIR" -maxdepth 1 -name "*_board_deck.pptx" | grep -v CAMPAIGN | wc -l)
-timeline_count=$(find "$REPORTS_DIR" -maxdepth 1 -name "*_timeline.png" | grep -v CAMPAIGN | wc -l)
-pdf_count=$(find "$REPORTS_DIR" -maxdepth 1 -name "*_report_new.pdf" | wc -l)
-campaign_md=$(find "$REPORTS_DIR" -maxdepth 1 -name "CAMPAIGN_*_report.md" | wc -l)
+narrative_count=$(find "$REPORTS_DIR" -maxdepth 2 -name "*_narrative.md" | grep -v CAMPAIGN | wc -l)
+pptx_count=$(find "$REPORTS_DIR" -maxdepth 3 -name "*_board_deck.pptx" | grep -v CAMPAIGN | wc -l)
+timeline_count=$(find "$REPORTS_DIR" -maxdepth 2 -name "*_timeline.png" | grep -v CAMPAIGN | wc -l)
+pdf_count=$(find "$REPORTS_DIR" -maxdepth 3 -name "*_report_new.pdf" | wc -l)
+campaign_md=$(find "$REPORTS_DIR" -maxdepth 2 -name "CAMPAIGN_*_report.md" | wc -l)
 
 echo "  Narrative files : $narrative_count"
 echo "  Board deck PPTX : $pptx_count"

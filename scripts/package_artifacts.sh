@@ -44,7 +44,15 @@ fgff_package_artifacts() {
     proj="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     mkdir -p "$output_dir" 2>/dev/null || true
 
-    local args=(--all --case-id "$case_id" --reports-dir "$reports_dir" --output-dir "$output_dir")
+    # When FGFF_CASE_DIR is set (new hierarchical layout), pass --case-dir so
+    # the packager collects from the case tree and writes the ZIP to case_dir/output/.
+    local case_dir="${FGFF_CASE_DIR:-}"
+    local args=(--all --case-id "$case_id" --reports-dir "$reports_dir")
+    if [[ -n "$case_dir" ]]; then
+        args+=(--case-dir "$case_dir")
+    else
+        args+=(--output-dir "$output_dir")
+    fi
     [[ -n "$stem" ]] && args+=(--stem "$stem")
     local d
     for d in "$@"; do

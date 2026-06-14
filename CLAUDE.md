@@ -52,6 +52,8 @@ Claude is the coordinator. It decides which module to invoke, in what order, and
 
 **Stop condition:** Claude determines the investigation is complete when all available evidence sources have been queried, no new pivots remain, and findings can be stated with a scoped conclusion that cites its evidence source (e.g., "No signs of lateral movement observed in the PCAP file").
 
+**Follow-up questions (post-report):** Once a case's reports have been generated, any further analyst question that references that case — even if asked much later in the session or in a new session — must be logged via `python3 lib/research_notes.py followup --case-id <id> --case-dir reports/<case_id>/<MODULE>/<stem> --question "..." --answer-summary "..." [--output-file PATH ...]`. If answering the question produces any new or changed file (an additional analysis export, an exhibit, a written answer saved to disk), run `python3 lib/chain_of_custody.py update --case-id <id> --case-dir reports/<case_id> --trigger followup --note "<question>"` immediately afterward so the chain-of-custody manifest covers it. See "Chain of custody" below.
+
 ## Report structure & voice
 
 Every investigation produces one report with two distinct registers.
@@ -109,12 +111,18 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 | `lib/chat_recorder.py` | Chain-of-evidence session recorder: locates the active Claude Code transcript (`~/.claude/projects/<encoded>/<uuid>.jsonl`), renders it to Markdown + PDF, and preserves the raw `.jsonl` verbatim (SHA-256 recorded in the document so the rendering ties back to the original bytes). `record_chat(case_id, upload=False)` → `{md, pdf, jsonl}`. Runs automatically at the end of every FAN/FAME/FAST pipeline; also invokable via `/record-chat` |
 | `lib/generate_pptx_report.py` | Management PowerPoint generator (7 slides, CISO language, python-pptx): cover, executive summary, threat landscape, IDS/YARA alerts, IOCs, recommendations, module coverage |
 | `lib/case_packager.py` | Package investigation artifacts into a timestamped `<case_id>_<ts>.zip` and upload via SSH/SCP to the investigations vault. `--all` is the general, format-agnostic mode (bundles **every** artifact for a case — DOCX/PPTX/PDF, the chain-of-evidence chat transcript, exhibit images, evidence ZIPs — with a SHA-256 `MANIFEST.sha256`); the default mode is the legacy PCAP/stem path. Wired into every analysis script via the shared helper `scripts/package_artifacts.sh` (`fgff_package_artifacts`), which runs after `scripts/record_session.sh` so the transcript is included; both helpers are best-effort and never fail the investigation |
+| `lib/chain_of_custody.py` | Court-ready integrity manifest: `update_manifest(case_dir, case_id, evidence_paths=None, examiner=None, trigger="investigation"\|"followup"\|"manual", note=None)` recursively hashes (MD5/SHA-1/SHA-256, size, mtime) every file under `reports/<case_id>/` plus any supplied source evidence file(s), and writes/updates `reports/<case_id>/documents/<case_id>_chain_of_custody.json`. Append-only: each run adds one `history` entry recording added/changed/removed paths, the trigger, examiner, and note — a changed hash for a previously-recorded path is flagged with both old and new digests, and an evidence hash mismatch is preserved as a critical integrity alert rather than overwritten. Wired into every analysis script via `scripts/chain_of_custody.sh` (`fgff_update_custody`), which runs after `scripts/record_session.sh` and before `scripts/package_artifacts.sh`. Self-test: `python3 lib/chain_of_custody.py --test` |
 | `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop) — supports MD, PDF, PPTX, DOCX, ZIP |
 | `lib/fan_*.py` | FAN analysis modules (22 protocol detectors + pcap_analyzer, generate_pcap_report) |
 | `lib/generate_fame_report.py` | FAME report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/memory/` Volatility 3 outputs |
 | `lib/generate_fast_report.py` | FAST report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/storage/` and `./exports/` TSK outputs |
-| `lib/generate_combined_report.py` | Unified cross-module report: merges FAN + FAME + FAST reports into a single Markdown + PDF + PPTX + DOCX; automatically embeds `<case_id>_correlation.md` in Section 2 when present |
-| `lib/correlate_findings.py` | Cross-module correlation engine: matches netscan→PCAP (FAN↔FAME), process→deleted-file (FAME↔FAST), DNS→carved-URL (FAN↔FAST); outputs `<case_id>_correlation.md` + `.json` |
+| `lib/generate_combined_report.py` | **Deprecated for interactive campaign reports** — automated fallback/batch campaign-report generator only (`--md-only`/headless or very-low-evidence cases). For interactive use, hand-author the campaign report per `docs/campaign_report_template.md` and render it with `lib/render_campaign_report.py`; this module's `_merge_mitre`/`_merge_iocs`/`_merge_recommendations`/`_extract_*` helpers remain importable utilities for pre-populating that report's tables |
+| `lib/correlate_findings.py` | Cross-module correlation engine: matches netscan→PCAP (FAN↔FAME), process→deleted-file (FAME↔FAST), DNS→carved-URL (FAN↔FAST); outputs `<case_id>_correlation.md` + `.json`. **Best-effort research aid** — read as one input when hand-authoring Cross-Domain Correlation; never embedded verbatim, and zero matches does not mean no correlation exists |
+| `lib/render_campaign_report.py` | Renders a hand-authored `<case_id>_campaign_report.md` (per `docs/campaign_report_template.md`) into PDF + PPTX + DOCX via `lib/md_to_pdf.py`, `lib/board_deck.py`, `lib/md_to_docx.py`. Each write is routed through `lib/artifact_guard.py` so a hand-edited campaign artifact is never silently overwritten |
+| `lib/board_deck.py` | Campaign-deck PPTX renderer (cover with severity ring + KPI/status cards, KPI strip, numbered exec panels, eyebrow/headline/body card grids, 5-step timeline, root-cause banner + factor chips, P0/P1/P2 priority rows). Parses the `#####` board bullet grammar (see `docs/campaign_report_template.md`) for `## 1. Management Summary` and `## Board Briefing`; falls back to `lib/md_to_pptx.py`'s generic rendering for any section that doesn't match. Campaign deck only — FAN/FAST module decks are unaffected |
+| `lib/artifact_guard.py` | Generated-artifact hash manifest (`reports/<case_id>/documents/.fgff_generated.json`) + divert-on-edit logic: if a campaign report artifact (PDF/PPTX/DOCX) was hand-edited since it was last generated (hash mismatch, or for PPTX a `docProps/core.xml` `lastModifiedBy`/`revision` signal), a re-render is diverted to `<stem>.new.<ext>` instead of overwriting it |
+| `lib/md_to_pptx.py` | Generic Markdown → PowerPoint renderer: one slide per `##`/`###` heading, tables/lists/paragraphs rendered in the FanGetFameFast dark-navy deck style. Used directly for FAN/FAST module decks, and as the structured-grammar fallback inside `lib/board_deck.py` |
+| `lib/md_to_docx.py` | Generic Markdown → Word renderer: headings, pipe tables, and lists rendered as native DOCX elements |
 
 ## Skills
 
@@ -124,6 +132,8 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 |-------|--------|---------|
 | Batch analysis (all evidence) | `/investigate-all [evidence_dir]` | Enumerate all FAME + FAST evidence files and run them sequentially in-session; default dir: `/home/vscode/evidence` |
 | Memory Forensics (FAME) | `/fame` | Run Volatility 3 (+ Memory Baseliner when a baseline is supplied); generate MD + PDF + PPTX + DOCX; upload to investigations vault |
+| Network Forensics (FAN) | `/fan <pcap> [--case-id]` | Agentic coordinator: run all 22 FAN modules sequentially, read each output, surface HIGH/CRITICAL findings in real time, then generate report. Use this instead of `analyze_pcap.sh` when Claude is in the loop. |
+| Memory Forensics (FAME) | `/fame` | Run Volatility 3 + Memory Baseliner; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Storage Forensics (FAST) | `/fast` | Run TSK / EWF tools; generate MD + PDF + PPTX + DOCX; upload to investigations vault |
 | Cross-module correlation | `/correlate` | Compute actual FAN↔FAME / FAME↔FAST / FAN↔FAST matches from raw artifact files; run before `./analysis/` is cleaned up |
 | CTI-OpenCTI-lookup | `/fan-opencti-lookup --case-id <id>` | Check extracted IPs and FQDNs against OpenCTI; write `opencti_lookup.md` to investigations vault |
@@ -134,6 +144,7 @@ User-invokable skills (invoke with `/skill-name` inside Claude Code):
 | Session transcript (chain of evidence) | `/record-chat` | Record the current Claude Code session as MD + PDF + verbatim `.jsonl` (SHA-256 fingerprinted). Runs automatically at the end of FAN/FAME/FAST; invoke manually to re-record |
 | Remove Case | `/remove-case` | Remove a case directory from the investigations vault |
 | Archive reports | `/archive-reports [campaign_id]` | Move a completed campaign folder from `./reports/<id>/` to `./archive/<id>/` (also migrates legacy flat files); interactive if no id given |
+| Accuracy report | `/accuracy-report` | Reproduce/refresh `accuracy/` (accuracy.md, automated claim-traceability audit, dataset documentation) against the current case set in `reports/`/`archive/` |
 
 FAN analysis skills: `fan-arp-threats`, `fan-cert-inspector`, `fan-dhcp-threats`, `fan-dns-threats`, `fan-extract-ip-fqdn`, `fan-file-hashes`, `fan-http-threats`, `fan-icmp-threats`, `fan-ip-lookup`, `fan-llmnr-threats`, `fan-mdns-threats`, `fan-nbns-threats`, `fan-netbios-threats`, `fan-ntp-threats`, `fan-opencti-lookup`, `fan-quic-threats`, `fan-report`, `fan-snmp-threats`, `fan-ssdp-threats`, `fan-stun-threats`, `fan-suricata`, `fan-tcp-threats`, `fan-tls-inspector`, `fan-udp-threats`, `fan-yara-pcap`.
 
@@ -141,24 +152,79 @@ FAME skill: `fame` — memory forensics pipeline (Volatility 3 + optional Memory
 
 FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact extraction + report generation + upload).
 
+## Case folder structure
+
+All investigation artifacts live under a unified case root. Every module writes to its own subdirectory:
+
+```
+reports/<case_id>/
+  FAN/<pcap_stem>/          ← FAN module: MD reports, research notes, evidence
+  FAME/<hostname>/          ← FAME module: MD reports, research notes, evidence
+  FAST/<hostname>/          ← FAST module: MD reports, research notes, evidence
+  <case_id>_campaign_report.md    ← campaign report (hand-authored per docs/campaign_report_template.md)
+  raw/                      ← analyst-populated raw artifacts
+  documents/                ← all PDF, PPTX, DOCX (shared across modules)
+    <stem>_fast_report.pdf
+    <stem>_fame_report.pdf
+    <stem>_incident_report.pdf
+    <case_id>_campaign_report.pdf
+    <case_id>_campaign_presentation.pptx
+    <case_id>_campaign_report.docx
+    <case_id>_chat_transcript.md
+    <case_id>_chain_of_custody.json
+    <case_id>_<ts>.zip
+```
+
+The `--case-id` passed to all three module scripts is the **shared base ID** (e.g., `NIST-HACK-2026`). The module prefix (FAN/FAME/FAST) is encoded as a subdirectory, not part of the case ID.
+
+## Chain of custody
+
+`reports/<case_id>/documents/<case_id>_chain_of_custody.json` is the court-facing
+integrity manifest for the case, generated and updated by `lib/chain_of_custody.py`
+(`fgff_update_custody` in `scripts/chain_of_custody.sh`). It records:
+
+- **`evidence`** — the source PCAP/memory image/disk image: size, MD5/SHA-1/SHA-256,
+  first-recorded and last-verified timestamps. Append-only — if a later run finds a
+  different hash for the same evidence path, the original record is kept and the
+  mismatch is logged as a critical integrity alert in `history`.
+- **`artifacts`** — every file under `reports/<case_id>/` (research notes, narratives,
+  correlation output, MD/PDF/PPTX/DOCX reports, the chat transcript, exhibits, ZIP
+  bundles): size, mtime, MD5/SHA-1/SHA-256, first-recorded and last-verified timestamps.
+- **`history`** — one append-only entry per update: timestamp, trigger
+  (`investigation` | `followup` | `manual`), examiner, free-text note, and the
+  `added`/`changed`/`removed` paths since the previous run. A `changed` entry carries
+  both the old and new SHA-256 — the tamper signal.
+
+It is updated automatically at the end of every FAN/FAME/FAST run (after
+`scripts/record_session.sh`, before `scripts/package_artifacts.sh`, so the manifest
+itself is included in the case ZIP), and again for any post-report follow-up question
+(see "Follow-up questions (post-report)" above).
+
 ## Forensics agent network (FAN)
 
 **FAN** is a manual PCAP investigation pipeline. There is no daemon or auto-processing. The analyst starts every investigation explicitly.
 
-```bash
-# Start a PCAP investigation (interactive — prompts for case ID)
-./scripts/analyze_pcap.sh /path/to/capture.pcap
+Two entry points — choose based on whether Claude is in the loop:
 
-# Non-interactive with explicit case ID
+| Entry point | When to use |
+|-------------|-------------|
+| `/fan <pcap> [--case-id]` | **Preferred for interactive use.** Claude runs all 22 modules as agentic coordinator, reads each output, surfaces HIGH/CRITICAL findings in real time, and generates the report. |
+| `./scripts/analyze_pcap.sh` | Headless / CI use only. Blind batch run — Claude never sees intermediate findings. |
+
+```bash
+# Agentic coordinator (Claude in the loop — preferred)
+/fan /path/to/capture.pcap --case-id FAN-2025-001
+
+# Headless batch run (no Claude coordination)
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2025-001
 ```
 
-**Pipeline:**
+**Pipeline (both modes):**
 1. Analyst drops PCAP into the evidence vault or provides a path directly.
-2. `analyze_pcap.sh` runs 22 protocol threat-detection modules. All WIP output goes to `./analysis/`.
-3. A versioned incident report (Markdown + PDF) is generated.
-4. The report is copied to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
-5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the report.
+2. 22 protocol threat-detection modules run. All WIP output goes to `./analysis/`.
+3. A versioned incident report is generated: MD to `./reports/<case_id>/FAN/<pcap_stem>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
+4. The report is uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
+5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
 6. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
 
 **Investigations vault** — case folders live at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
@@ -178,10 +244,10 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 **Pipeline:**
 1. Analyst provides a memory image path.
 2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline). If a `baselines/baseline.json` is present, it also runs Memory Baseliner (proc/drv/svc comparison); without one this step is skipped. Linux images fall back to strings-based extraction when ISF symbols are unavailable.
-3. Reports are generated: Markdown + PDF + PPTX (Microsoft PowerPoint, 8 slides) + DOCX (Microsoft Word).
-4. If FAN or FAST reports exist for the same case ID, a combined unified report is also generated.
+3. Reports are generated: MD to `./reports/<case_id>/FAME/<hostname>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
+4. If FAN or FAST reports exist for the same case ID, Claude hand-authors the campaign report per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)`.
 5. All reports are uploaded to the investigations vault via MCP (`investigations_write_file`).
-6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAME report section.
 
@@ -200,10 +266,10 @@ FAST skill: `fast` — storage forensics pipeline (TSK + EWF tools + artifact ex
 **Pipeline:**
 1. Analyst provides a disk image path (E01, VMDK, raw, or any TSK-compatible format).
 2. `fast_analyze.sh` mounts the image read-only, runs TSK tools (fls, fsstat, mmls, ils, icat), extracts artifacts (EVTX, registry, prefetch, MFT, USN journal, SRUM, browser history), and runs bulk_extractor for carving.
-3. Reports are generated: Markdown + PDF + PPTX (8 slides) + DOCX.
-4. If FAN or FAME reports exist for the same case ID, a combined unified report is also generated.
+3. Reports are generated: MD to `./reports/<case_id>/FAST/<hostname>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
+4. If FAN or FAME reports exist for the same case ID, Claude hand-authors the campaign report per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)`.
 5. All reports are uploaded to the investigations vault via MCP.
-6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) via `lib/chat_recorder.py` and uploaded alongside the reports.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAST report section.
 
@@ -278,6 +344,7 @@ change to `requirements.txt`.
 - Internal processing, vault storage, and log entries use UTC.
 - Scoped conclusions must cite their evidence source (e.g., "as observed in the PCAP file", "as found in the memory dump").
 - **Research notes are mandatory and sequential**: do NOT run the next investigation step until the output of the current step has been read, interpreted, and appended to the research notes via `python3 lib/research_notes.py step`. Parallel background tool execution is permitted only when the outputs are logged before launching subsequent steps.
+- **Hand-edited campaign report artifacts are never overwritten.** `lib/render_campaign_report.py` and `lib/generate_combined_report.py` route every PDF/PPTX/DOCX write through `lib/artifact_guard.py`; if an artifact was hand-edited since it was last generated, the new render is diverted to `<stem>.new.<ext>` with a warning instead of replacing it. Promote the new version manually (`mv` over the original) once reviewed — this re-records its hash so future regenerations resume normal overwrites.
 
 ## License
 

@@ -21,6 +21,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         # Network forensics
         tshark \
         wireshark-common \
+        silk-tools \
+        yaf \
         # File / process utilities
         inotify-tools \
         jq \

@@ -93,12 +93,16 @@ echo "  Hostname : $HOSTNAME_ARG"
 echo ""
 
 # ── Research notes initialisation ─────────────────────────────────────────────
+# Pre-compute CASE_DIR early so research_notes are written to the correct
+# per-module subdir from the first step (full layout is set again below).
+_EARLY_CASE_DIR="$REPORTS_DIR/$CASE_ID/FAST/${HOSTNAME_ARG:-$(basename "$DISK_IMAGE" | sed 's/\.[^.]*$//')}"
+mkdir -p "$_EARLY_CASE_DIR" 2>/dev/null || true
 python3 "$PROJECT_ROOT/lib/research_notes.py" init \
     --case-id    "$CASE_ID" \
     --module     fast \
     --evidence   "$DISK_IMAGE" \
     --hostname   "$HOSTNAME_ARG" \
-    --output-dir "$REPORTS_DIR" 2>/dev/null || true
+    --case-dir   "$_EARLY_CASE_DIR" 2>/dev/null || true
 
 # ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p \
@@ -113,6 +117,8 @@ mkdir -p \
     "$EXPORTS_DIR/carved" \
     "$EXPORTS_DIR/tsk_recover" \
     "$EXPORTS_DIR/recyclebin" \
+    "$EXPORTS_DIR/machine_details" \
+    "$EXPORTS_DIR/tasks" \
     "$EXPORTS_DIR/autopsy" \
     "$REPORTS_DIR"
 
@@ -161,6 +167,21 @@ printf '{"case_id":"%s","hostname":"%s","disk_image":"%s","started":"%s"}\n' \
 IMAGE_EXT="${DISK_IMAGE##*.}"
 IMAGE_EXT_LOWER="${IMAGE_EXT,,}"
 
+# Split raw images (FTK Imager ".001", ".002", ... convention): collect every
+# numbered sibling segment so TSK tools can read the image as a whole.
+SEGMENTS=()
+if [[ "$IMAGE_EXT_LOWER" == "001" ]]; then
+    _seg_base="${DISK_IMAGE%.001}"
+    _n=1
+    while :; do
+        _seg="$(printf '%s.%03d' "$_seg_base" "$_n")"
+        [[ -f "$_seg" ]] || break
+        SEGMENTS+=("$_seg")
+        _n=$((_n + 1))
+    done
+    echo "[fast] Split raw image: ${#SEGMENTS[@]} segment(s) detected."
+fi
+
 echo "[fast] Verifying image..."
 if [[ "$IMAGE_EXT_LOWER" == "e01" ]] || [[ "$IMAGE_EXT_LOWER" == "ewf" ]]; then
     ewfinfo  "$DISK_IMAGE" > "$ANALYSIS_DIR/ewfinfo.txt"  2>&1 || true
@@ -200,6 +221,9 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         sudo partprobe "$NBD_DEV" 2>/dev/null || true
         echo "[fast] Exposed as $NBD_DEV"
         RAW_DEVICE="$NBD_DEV"
+    elif [[ ${#SEGMENTS[@]} -gt 1 ]]; then
+        echo "[fast] Split raw image (${#SEGMENTS[@]} segments) — partition table read from segment 1."
+        RAW_DEVICE="${SEGMENTS[0]}"
     else
         RAW_DEVICE="$DISK_IMAGE"
     fi
@@ -221,11 +245,35 @@ if [[ $SKIP_MOUNT -eq 0 ]]; then
         OFFSET=$(( START_SECTOR * SECTOR_SIZE ))
         echo "[fast] Partition start: sector $START_SECTOR (offset $OFFSET bytes)"
 
-        # Mount filesystem read-only
+        # Mount filesystem read-only. Split raw images can't be loop-mounted as
+        # separate segments — concatenate to a temp file first if there's room
+        # (OS temp dir is an approved write location per lib/path_guard.py),
+        # otherwise degrade gracefully (TSK tools below still read all segments
+        # natively via TSK_IMAGES).
         echo "[fast] Mounting filesystem (read-only)..."
-        sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
-        sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
-        { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+        if [[ ${#SEGMENTS[@]} -gt 1 ]]; then
+            _total_size=0
+            for _seg in "${SEGMENTS[@]}"; do
+                _total_size=$(( _total_size + $(stat -c%s "$_seg" 2>/dev/null || echo 0) ))
+            done
+            _avail=$(df --output=avail -B1 /tmp 2>/dev/null | tail -1 | tr -d ' ')
+            if [[ "${_avail:-0}" -gt "$_total_size" ]]; then
+                COMBINED_RAW="/tmp/${CASE_ID//[[:space:]]/_}_combined.raw"
+                echo "[fast] Concatenating ${#SEGMENTS[@]} segments → $COMBINED_RAW ..."
+                cat "${SEGMENTS[@]}" > "$COMBINED_RAW"
+                RAW_DEVICE="$COMBINED_RAW"
+                sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+                sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+                { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+            else
+                echo "[fast] WARNING: Not enough space in /tmp ($_total_size bytes needed) to concatenate split image — continuing without mount."
+                SKIP_MOUNT=2
+            fi
+        else
+            sudo mount -o ro,loop,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+            sudo mount -o ro,loop,norecovery,offset="${OFFSET}" "$RAW_DEVICE" "$FS_MOUNT" 2>/dev/null || \
+            { echo "[fast] WARNING: Filesystem mount failed — continuing without mount."; SKIP_MOUNT=2; }
+        fi
 
         # Verify the mount really is read-only before any analysis touches it.
         [[ $SKIP_MOUNT -eq 0 ]] && fgff_assert_ro_mount "$FS_MOUNT"
@@ -236,18 +284,27 @@ fi
 # ── TSK analysis ──────────────────────────────────────────────────────────────
 RAW_FOR_TSK="${RAW_DEVICE:-$DISK_IMAGE}"
 
+# When split segments couldn't be concatenated (no COMBINED_RAW), pass every
+# segment to the TSK tools — they natively support split raw images as a list
+# of positional image arguments.
+if [[ ${#SEGMENTS[@]} -gt 1 && -z "${COMBINED_RAW:-}" ]]; then
+    TSK_IMAGES=("${SEGMENTS[@]}")
+else
+    TSK_IMAGES=("$RAW_FOR_TSK")
+fi
+
 echo "[fast] Running TSK file listing (fls)..."
-sudo fls -r -p "$RAW_FOR_TSK" \
+sudo fls -r -p "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/fls_output.txt" 2>/dev/null || \
-sudo fls -r -p -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" \
+sudo fls -r -p -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/fls_output.txt" 2>/dev/null || \
     echo "[fast] WARNING: fls failed — continuing."
 echo "[fast] fls → $ANALYSIS_DIR/fls_output.txt"
 
 echo "[fast] Generating bodyfile (fls -m)..."
-sudo fls -r -m / "$RAW_FOR_TSK" \
+sudo fls -r -m / "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/bodyfile.txt" 2>/dev/null || \
-sudo fls -r -m / -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" \
+sudo fls -r -m / -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" \
     > "$ANALYSIS_DIR/bodyfile.txt" 2>/dev/null || \
     echo "[fast] WARNING: bodyfile generation failed."
 
@@ -259,12 +316,12 @@ mactime -b "$ANALYSIS_DIR/bodyfile.txt" -z UTC -d \
 echo "[fast] Timeline → $EXPORTS_DIR/fs_timeline.txt"
 
 echo "[fast] Running fsstat..."
-sudo fsstat "$RAW_FOR_TSK" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || \
-sudo fsstat -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || true
+sudo fsstat "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || \
+sudo fsstat -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/fsstat.txt" 2>/dev/null || true
 
 echo "[fast] Running ils (inode listing)..."
-sudo ils "$RAW_FOR_TSK" > "$ANALYSIS_DIR/ils_output.txt" 2>/dev/null || true
-sudo ils -p "$RAW_FOR_TSK" > "$ANALYSIS_DIR/ils_orphan.txt" 2>/dev/null || true
+sudo ils "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/ils_output.txt" 2>/dev/null || true
+sudo ils -p "${TSK_IMAGES[@]}" > "$ANALYSIS_DIR/ils_orphan.txt" 2>/dev/null || true
 
 # ── Artefact extraction (from mounted filesystem) ─────────────────────────────
 if [[ $MOUNTED_FS -eq 1 ]]; then
@@ -310,17 +367,24 @@ if [[ $MOUNTED_FS -eq 1 ]]; then
     sudo cp -r "$FS_MOUNT/Windows/System32/Tasks/." "$EXPORTS_DIR/tasks/" 2>/dev/null || true
 
     echo "[fast] Artefact extraction complete."
+
+    # ── Deep extraction: machine details, recycle bin metadata, IOC seeding ──
+    echo "[fast] Running deep extraction (machine details + recycle bin parse)..."
+    python3 "$PROJECT_ROOT/lib/fast_machine_details.py" \
+        --exports "$EXPORTS_DIR" \
+        --fs-mount "$FS_MOUNT" 2>>"$ANALYSIS_DIR/fast_machine_details.log" || \
+        echo "[fast] WARNING: fast_machine_details.py failed — see $ANALYSIS_DIR/fast_machine_details.log"
 fi
 
 # ── MFT and UsnJrnl via icat ──────────────────────────────────────────────────
 echo "[fast] Extracting MFT (\$MFT, inode 0)..."
-sudo icat "$RAW_FOR_TSK" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
-sudo icat -o "${START_SECTOR:-2048}" "$RAW_FOR_TSK" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
+sudo icat -o "${START_SECTOR:-2048}" "${TSK_IMAGES[@]}" 0 > "$EXPORTS_DIR/mft/\$MFT" 2>/dev/null || \
     echo "[fast] WARNING: MFT extraction failed."
 
 echo "[fast] Extracting USN Change Journal (\$J, inode 11)..."
-sudo icat "$RAW_FOR_TSK" 11-128-4 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
-sudo icat "$RAW_FOR_TSK" 11 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 11-128-4 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
+sudo icat "${TSK_IMAGES[@]}" 11 > "$EXPORTS_DIR/mft/\$J" 2>/dev/null || \
     echo "[fast] WARNING: USN journal extraction failed."
 
 # ── File hash manifest ────────────────────────────────────────────────────────
@@ -331,7 +395,10 @@ if [[ -d "$EXPORTS_DIR/files" ]] && [[ "$(ls -A "$EXPORTS_DIR/files" 2>/dev/null
 fi
 
 # ── Bulk extractor carving (on a size budget — skip if image > 20 GB) ─────────
-IMAGE_SIZE=$(stat -c%s "$DISK_IMAGE" 2>/dev/null || echo "0")
+IMAGE_SIZE=0
+for _img in "${TSK_IMAGES[@]}"; do
+    IMAGE_SIZE=$(( IMAGE_SIZE + $(stat -c%s "$_img" 2>/dev/null || echo 0) ))
+done
 if [[ "$IMAGE_SIZE" -lt 21474836480 ]]; then
     echo "[fast] Running bulk_extractor..."
     rm -rf "$EXPORTS_DIR/carved" && mkdir -p "$EXPORTS_DIR/carved"
@@ -410,10 +477,21 @@ if [[ $NBD_CONNECTED -eq 1 ]]; then
     sudo qemu-nbd --disconnect "$NBD_DEV" 2>/dev/null || true
     NBD_CONNECTED=0
 fi
+if [[ -n "${COMBINED_RAW:-}" && -f "$COMBINED_RAW" ]]; then
+    echo "[fast] Removing concatenated split-image temp file..."
+    rm -f "$COMBINED_RAW"
+fi
 
 # ── Evidence folder preservation (before report generation) ───────────────────
 STEM="${CASE_ID//[[:space:]]/_}"
-EVIDENCE_DIR="$REPORTS_DIR/${CASE_ID}_evidence"
+# New 3-level layout: reports/<case_id>/FAST/<hostname>/
+INVESTIGATION_NAME="${HOSTNAME_ARG:-$STEM}"
+CASE_ROOT="$REPORTS_DIR/$CASE_ID"
+CASE_DIR="$CASE_ROOT/FAST/$INVESTIGATION_NAME"
+DOCS_DIR="$CASE_ROOT/documents"
+mkdir -p "$CASE_DIR" "$DOCS_DIR" "$CASE_ROOT/raw"
+export FGFF_CASE_DIR="$CASE_ROOT"   # record/package write to CASE_ROOT/documents/
+EVIDENCE_DIR="$CASE_DIR/${CASE_ID}_evidence"
 echo "[fast] Preserving analysis artifacts → $EVIDENCE_DIR ..."
 mkdir -p "$EVIDENCE_DIR/storage" "$EVIDENCE_DIR/exports"
 rsync -a "$ANALYSIS_DIR/" "$EVIDENCE_DIR/storage/" 2>/dev/null || true
@@ -428,14 +506,14 @@ for artifact_file in \
     "$EVIDENCE_DIR/exports/fs_timeline.csv"; do
     if [[ -f "$artifact_file" ]]; then
         _hash=$(sha256sum "$artifact_file" | awk '{print $1}')
-        _relname="${CASE_ID}_evidence/$(realpath --relative-to="$EVIDENCE_DIR/.." "$artifact_file")"
+        _relname="FAST/$INVESTIGATION_NAME/${CASE_ID}_evidence/$(realpath --relative-to="$EVIDENCE_DIR/.." "$artifact_file")"
         python3 "$PROJECT_ROOT/lib/research_notes.py" step \
             --case-id "$CASE_ID" \
             --title   "Evidence preserved: $(basename "$artifact_file")" \
             --action  "sha256sum $artifact_file" \
             --why     "Chain of custody — SHA-256 fingerprint of preserved artifact" \
             --outcome "Preserved to ${_relname} — SHA-256: ${_hash}" \
-            --output-dir "$REPORTS_DIR" 2>/dev/null || true
+            --case-dir "$CASE_DIR" 2>/dev/null || true
     fi
 done
 echo "[fast] Evidence folder ready: $EVIDENCE_DIR"
@@ -444,10 +522,11 @@ echo "[fast] Evidence folder ready: $EVIDENCE_DIR"
 echo "[fast] Generating reports (Markdown, PDF, PPTX, DOCX)..."
 FAN_MD=""
 FAME_MD=""
-[[ -f "$REPORTS_DIR/${STEM}_incident_report.md" ]] && \
-    FAN_MD="$(head -60 "$REPORTS_DIR/${STEM}_incident_report.md")"
-[[ -f "$REPORTS_DIR/${STEM}_fame_report.md" ]] && \
-    FAME_MD="$(head -60 "$REPORTS_DIR/${STEM}_fame_report.md")"
+# Check 3-level layout first, then fallback
+_fan_cand=$(find "$CASE_ROOT/FAN" -name "*_incident_report.md" -type f 2>/dev/null | head -1)
+[[ -n "$_fan_cand" ]] && FAN_MD="$(head -60 "$_fan_cand")"
+_fame_cand=$(find "$CASE_ROOT/FAME" -name "*_fame_report.md" -type f 2>/dev/null | head -1)
+[[ -n "$_fame_cand" ]] && FAME_MD="$(head -60 "$_fame_cand")"
 
 python3 "$PROJECT_ROOT/lib/generate_fast_report.py" \
     --case-id      "$CASE_ID" \
@@ -455,7 +534,8 @@ python3 "$PROJECT_ROOT/lib/generate_fast_report.py" \
     --disk-image   "$DISK_IMAGE" \
     --analysis-dir "$ANALYSIS_DIR" \
     --exports-dir  "$EXPORTS_DIR" \
-    --output-dir   "$REPORTS_DIR" \
+    --case-dir     "$CASE_DIR" \
+    --docs-dir     "$DOCS_DIR" \
     ${FAN_MD:+--fan-summary  "$FAN_MD"} \
     ${FAME_MD:+--fame-summary "$FAME_MD"} \
     $([[ $MD_ONLY -eq 1 ]] && echo "--md-only" || true)
@@ -464,10 +544,10 @@ python3 "$PROJECT_ROOT/lib/generate_fast_report.py" \
 if [[ $SKIP_UPLOAD -eq 0 ]]; then
     echo "[fast] Uploading reports to investigations vault..."
 
-    MD_PATH="$REPORTS_DIR/${STEM}_fast_report.md"
-    PDF_PATH="$REPORTS_DIR/${STEM}_fast_report.pdf"
-    PPTX_PATH="$REPORTS_DIR/${STEM}_fast_presentation.pptx"
-    DOCX_PATH="$REPORTS_DIR/${STEM}_fast_report.docx"
+    MD_PATH="$CASE_DIR/${STEM}_fast_report.md"
+    PDF_PATH="$DOCS_DIR/${STEM}_fast_report.pdf"
+    PPTX_PATH="$DOCS_DIR/${STEM}_fast_presentation.pptx"
+    DOCX_PATH="$DOCS_DIR/${STEM}_fast_report.docx"
 
     # Use an array so paths/case-id with spaces or glob chars cannot word-split
     # or inject extra --flags into investigations_upload.py.
@@ -476,27 +556,27 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     [[ -f "$PPTX_PATH" ]] && UPLOAD_ARGS+=(--pptx "$PPTX_PATH")
     [[ -f "$DOCX_PATH" ]] && UPLOAD_ARGS+=(--docx "$DOCX_PATH")
 
-    # Upload evidence folder as ZIP
-    EVIDENCE_ZIP="$REPORTS_DIR/${CASE_ID}_evidence.zip"
+    # Upload evidence folder as ZIP (written to documents dir)
+    EVIDENCE_ZIP="$DOCS_DIR/${CASE_ID}_evidence.zip"
     if [[ -d "$EVIDENCE_DIR" ]]; then
-        (cd "$REPORTS_DIR" && zip -r "${CASE_ID}_evidence.zip" "${CASE_ID}_evidence/" -q) && \
+        (cd "$(dirname "$EVIDENCE_DIR")" && zip -r "$EVIDENCE_ZIP" "$(basename "$EVIDENCE_DIR")/" -q) && \
             UPLOAD_ARGS+=(--zip "$EVIDENCE_ZIP")
     fi
 
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
         echo "[fast] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
 
-    COMBINED_MD="$REPORTS_DIR/${STEM}_combined_report.md"
-    if [[ -f "$COMBINED_MD" ]]; then
-        COMB_ARGS=(--case-id "$CASE_ID" --md "$COMBINED_MD")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_report.pdf"  ]] && \
-            COMB_ARGS+=(--pdf "$REPORTS_DIR/${STEM}_combined_report.pdf")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_presentation.pptx" ]] && \
-            COMB_ARGS+=(--pptx "$REPORTS_DIR/${STEM}_combined_presentation.pptx")
-        [[ -f "$REPORTS_DIR/${STEM}_combined_report.docx" ]] && \
-            COMB_ARGS+=(--docx "$REPORTS_DIR/${STEM}_combined_report.docx")
+    CAMPAIGN_MD="$CASE_ROOT/${CASE_ID}_campaign_report.md"
+    if [[ -f "$CAMPAIGN_MD" ]]; then
+        COMB_ARGS=(--case-id "$CASE_ID" --md "$CAMPAIGN_MD")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.pdf"  ]] && \
+            COMB_ARGS+=(--pdf "$DOCS_DIR/${CASE_ID}_campaign_report.pdf")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx" ]] && \
+            COMB_ARGS+=(--pptx "$DOCS_DIR/${CASE_ID}_campaign_presentation.pptx")
+        [[ -f "$DOCS_DIR/${CASE_ID}_campaign_report.docx" ]] && \
+            COMB_ARGS+=(--docx "$DOCS_DIR/${CASE_ID}_campaign_report.docx")
         python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${COMB_ARGS[@]}" || \
-            echo "[fast] WARNING: Combined report upload failed."
+            echo "[fast] WARNING: Campaign report upload failed."
     fi
 else
     echo "[fast] Upload skipped (--no-upload)."
@@ -509,14 +589,21 @@ fi
 # must never fail the investigation, and runs before local cleanup so the
 # transcript is uploaded with the rest of the artefacts.
 source "$PROJECT_ROOT/scripts/record_session.sh"
-fgff_record_session "$CASE_ID" "$REPORTS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+fgff_record_session "$CASE_ID" "$DOCS_DIR" "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
+
+# ── Chain-of-custody manifest ─────────────────────────────────────────────────
+# Hash every artifact (and the source disk image) into a durable, append-only
+# integrity manifest for court use. Best-effort; never fails the investigation.
+source "$PROJECT_ROOT/scripts/chain_of_custody.sh"
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$DISK_IMAGE"
 
 # ── Artifact bundle (chain of evidence) ───────────────────────────────────────
 # Package every artifact for this case (reports, transcript, exhibits, …) into a
 # timestamped ZIP and upload it to the investigations vault. Runs after the
 # transcript so the bundle includes it. Best-effort; never fails the run.
+# FGFF_CASE_DIR is already set above; fgff_package_artifacts reads it.
 source "$PROJECT_ROOT/scripts/package_artifacts.sh"
-fgff_package_artifacts "$CASE_ID" "$REPORTS_DIR" "$PROJECT_ROOT/exports" "$STEM" \
+fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" \
     "$([[ $SKIP_UPLOAD -eq 0 ]] && echo 1 || echo 0)"
 
 # ── Clean up local artifacts ───────────────────────────────────────────────────
@@ -535,19 +622,18 @@ echo "  Case ID  : $CASE_ID"
 echo "  Host     : $HOSTNAME_ARG"
 echo ""
 echo "  Reports:"
-for ext in md pdf pptx docx; do
-    f="$REPORTS_DIR/${STEM}_fast_report.$ext"
-    [[ "$ext" == "pptx" ]] && f="$REPORTS_DIR/${STEM}_fast_presentation.pptx"
-    [[ -f "$f" ]] && echo "    $ext  → $f"
-done
-[[ -f "$REPORTS_DIR/${STEM}_combined_report.md" ]] && \
-    echo "    combined → $REPORTS_DIR/${STEM}_combined_report.md"
+[[ -f "$CASE_DIR/${STEM}_fast_report.md"        ]] && echo "    md   → $CASE_DIR/${STEM}_fast_report.md"
+[[ -f "$DOCS_DIR/${STEM}_fast_report.pdf"        ]] && echo "    pdf  → $DOCS_DIR/${STEM}_fast_report.pdf"
+[[ -f "$DOCS_DIR/${STEM}_fast_presentation.pptx" ]] && echo "    pptx → $DOCS_DIR/${STEM}_fast_presentation.pptx"
+[[ -f "$DOCS_DIR/${STEM}_fast_report.docx"       ]] && echo "    docx → $DOCS_DIR/${STEM}_fast_report.docx"
+[[ -f "$CASE_ROOT/${CASE_ID}_campaign_report.md" ]] && \
+    echo "    campaign → $CASE_ROOT/${CASE_ID}_campaign_report.md"
 echo ""
 echo "  Analysis : $ANALYSIS_DIR/"
 echo "  Exports  : $EXPORTS_DIR/"
 echo ""
 echo "  Next steps:"
-echo "    1. Review $REPORTS_DIR/${STEM}_fast_report.md"
+echo "    1. Review $CASE_DIR/${STEM}_fast_report.md"
 echo "    2. Parse MFT: MFTECmd.exe --csv ./exports/mft/ -o ./exports/mft_parsed.csv"
 echo "    3. Parse Prefetch: PECmd.exe -d ./exports/prefetch/ --csv ./exports/"
 echo "    4. Review Autopsy results: $EXPORTS_DIR/autopsy/"

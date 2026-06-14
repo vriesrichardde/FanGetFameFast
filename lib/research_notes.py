@@ -33,9 +33,20 @@ _PLACEHOLDER = "<!-- summary-placeholder -->"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _notes_path(case_id: str, output_dir: str | None) -> Path:
-    d = Path(output_dir) if output_dir else REPORTS_DIR
-    d.mkdir(parents=True, exist_ok=True)
+def _notes_path(case_id: str, output_dir: str | None, case_dir: str | None = None) -> Path:
+    """Resolve the research-notes file path.
+
+    - If *case_dir* is provided, it is treated as the directory that will contain
+      `<case_id>_research_notes.md` (often a module directory like `.../FAME/<host>/`).
+    - Else if *output_dir* is provided, it is treated as that containing directory.
+    - Else defaults to `./reports/<case_id>/`.
+    """
+    if case_dir:
+        d = Path(case_dir)
+    elif output_dir:
+        d = Path(output_dir)
+    else:
+        d = REPORTS_DIR / case_id  # default: per-case subdirectory
     return d / f"{case_id}_research_notes.md"
 
 
@@ -69,6 +80,26 @@ def _reflect_count(path: Path) -> int:
 # Public API — importable by report generators
 # ---------------------------------------------------------------------------
 
+def get_findings_with_confidence(case_id: str, output_dir: str | None = None) -> list[dict]:
+    """Return steps enriched with machine-readable confidence fields.
+
+    Each dict contains all parse_steps() fields plus:
+      confidence  — "direct" | "inferred" | "assumed"
+      source_tool — tool name recorded with --source-tool, or ""
+    """
+    steps = parse_steps(case_id, output_dir)
+    for s in steps:
+        outcome = s.get("outcome", "")
+        if s.get("confidence") in ("direct", "inferred", "assumed"):
+            pass  # already set by the new parser
+        elif "[ASSUMPTION]" in outcome:
+            s["confidence"] = "assumed"
+        else:
+            s["confidence"] = "direct"
+        s.setdefault("source_tool", "")
+    return steps
+
+
 def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
     """Return one dict per recorded step: {id, step_num, timestamp, title, action, why, outcome}.
 
@@ -99,14 +130,16 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
 
             step_num = int(num_match.group(1)) if num_match else len(steps) + 1
             current = {
-                "id":        f"RN-{int(id_match.group(1)):03d}" if id_match else None,
-                "step_num":  step_num,
-                "timestamp": ts_match.group(1) if ts_match else "",
-                "title":     title_match.group(1).strip() if title_match else line,
-                "action":    "",
-                "why":       "",
-                "outcome":   "",
-                "dismissed": "",
+                "id":          f"RN-{int(id_match.group(1)):03d}" if id_match else None,
+                "step_num":    step_num,
+                "timestamp":   ts_match.group(1) if ts_match else "",
+                "title":       title_match.group(1).strip() if title_match else line,
+                "action":      "",
+                "why":         "",
+                "outcome":     "",
+                "dismissed":   "",
+                "confidence":  "direct",
+                "source_tool": "",
             }
             continue
 
@@ -119,8 +152,14 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
             current["why"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
         elif "| **Outcome**" in line:
             current["outcome"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+            if "[ASSUMPTION]" in current["outcome"]:
+                current["confidence"] = "assumed"
         elif "| **Dismissed**" in line:
             current["dismissed"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Confidence**" in line:
+            current["confidence"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Source tool**" in line:
+            current["source_tool"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
 
     if current is not None:
         steps.append(current)
@@ -235,7 +274,7 @@ def parse_reflections(case_id: str, output_dir: str | None = None) -> list[dict]
 # ---------------------------------------------------------------------------
 
 def cmd_init(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     module_label = args.module.upper()
     hostname = args.hostname or "—"
     evidence = args.evidence or "—"
@@ -255,7 +294,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_step(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -291,8 +330,20 @@ def cmd_step(args: argparse.Namespace) -> None:
             "</details>\n"
         )
 
-    outcome = f"[ASSUMPTION] {args.outcome}" if getattr(args, "assumption", False) else args.outcome
-    dismissed_row = f"\n| **Dismissed** | {args.dismissed} |" if getattr(args, "dismissed", None) else ""
+    is_assumption = getattr(args, "assumption", False)
+    outcome = f"[ASSUMPTION] {args.outcome}" if is_assumption else args.outcome
+    dismissed_row   = f"\n| **Dismissed** | {args.dismissed} |" if getattr(args, "dismissed", None) else ""
+    source_tool_val = getattr(args, "source_tool", None) or ""
+    # Resolve confidence: explicit flag wins; fall back to assumption detection
+    explicit_conf   = getattr(args, "confidence", None)
+    if explicit_conf:
+        confidence_val = explicit_conf
+    elif is_assumption:
+        confidence_val = "assumed"
+    else:
+        confidence_val = "direct"
+    confidence_row  = f"\n| **Confidence** | {confidence_val} |"
+    source_tool_row = f"\n| **Source tool** | {source_tool_val} |" if source_tool_val else ""
 
     entry = (
         f"### [{_now_utc()}] — Step {step_num} [{step_id}]: {args.title}\n\n"
@@ -302,6 +353,8 @@ def cmd_step(args: argparse.Namespace) -> None:
         f"| **Why** | {args.why} |\n"
         f"| **Outcome** | {outcome} |"
         f"{dismissed_row}"
+        f"{confidence_row}"
+        f"{source_tool_row}"
         f"{raw_block}\n\n"
         "---\n\n"
     )
@@ -313,7 +366,7 @@ def cmd_step(args: argparse.Namespace) -> None:
 
 
 def cmd_assumption(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -332,7 +385,7 @@ def cmd_assumption(args: argparse.Namespace) -> None:
 
 
 def cmd_reflect(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -363,7 +416,7 @@ def cmd_reflect(args: argparse.Namespace) -> None:
 
 
 def cmd_event(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(
             f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
@@ -402,8 +455,43 @@ def cmd_event(args: argparse.Namespace) -> None:
     print(f"[research_notes] Event {event_num} [{event_id}] [{severity}] appended: {args.description[:60]} — {ts_label}")
 
 
+def cmd_followup(args: argparse.Namespace) -> None:
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
+    if not path.exists():
+        print(
+            f"[research_notes] ERROR: notes file not found for {args.case_id} — run 'init' first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    text = path.read_text(encoding="utf-8")
+    if "## Follow-up Questions" not in text:
+        text += "\n## Follow-up Questions\n\n"
+        path.write_text(text, encoding="utf-8")
+
+    output_files = getattr(args, "output_file", None) or []
+    outputs_block = ""
+    if output_files:
+        outputs_block = "\n| **Output file(s)** | " + ", ".join(f"`{f}`" for f in output_files) + " |"
+
+    entry = (
+        f"### [{_now_utc()}] — Follow-up\n\n"
+        "| | |\n"
+        "|---|---|\n"
+        f"| **Question** | {args.question} |\n"
+        f"| **Answer / action** | {args.answer_summary} |"
+        f"{outputs_block}\n\n"
+        "---\n\n"
+    )
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(entry)
+
+    print(f"[research_notes] Follow-up appended: {args.question[:60]}")
+
+
 def cmd_finalize(args: argparse.Namespace) -> None:
-    path = _notes_path(args.case_id, args.output_dir)
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
     if not path.exists():
         print(f"[research_notes] ERROR: notes file not found for {args.case_id}", file=sys.stderr)
         sys.exit(1)
@@ -434,7 +522,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--module",     required=True, choices=["fame", "fast", "fan"], help="Module name")
     pi.add_argument("--evidence",   metavar="PATH", help="Evidence file path shown in the header")
     pi.add_argument("--hostname",   metavar="NAME", help="Target hostname")
-    pi.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pi.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pi.add_argument("--case-dir",   metavar="DIR",  help="Directory to write the notes file into (often reports/<case_id>/<MODULE>/<stem>/); takes precedence over --output-dir")
 
     # step
     ps = sub.add_parser("step", help="Append a timestamped step entry")
@@ -447,19 +536,36 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--raw-file",   metavar="PATH", help="Path to file containing full raw output — wins over --raw (avoids shell arg size limits)")
     ps.add_argument("--assumption", action="store_true",           help="Mark this step's outcome as an assumption (prefixes [ASSUMPTION] for the report generator)")
     ps.add_argument("--dismissed",  metavar="TEXT", help="What was observed in this output but not flagged as significant, and why (optional)")
-    ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    ps.add_argument("--confidence", choices=["direct", "inferred", "assumed"],
+                    help="Override confidence tier (default: auto-detected from --assumption flag)")
+    ps.add_argument("--source-tool", metavar="TOOL",
+                    help="Tool that produced this output, e.g. 'volatility3/psscan' or 'suricata' (optional)")
+    ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    ps.add_argument("--case-dir",   metavar="DIR",  help="Directory containing the notes file (often reports/<case_id>/<MODULE>/<stem>/); takes precedence over --output-dir")
 
     # assumption
     pa = sub.add_parser("assumption", help="Record a standalone analytical assumption")
     pa.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
     pa.add_argument("--text",       required=True, metavar="TEXT", help="The assumption statement")
-    pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pa.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pa.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
+
+    # followup — post-report analyst question, logged for chain of custody
+    pu = sub.add_parser("followup", help="Log a post-report follow-up question and its answer/output")
+    pu.add_argument("--case-id",         required=True, metavar="ID",   help="Case ID")
+    pu.add_argument("--question",        required=True, metavar="TEXT", help="The analyst's follow-up question")
+    pu.add_argument("--answer-summary",  required=True, metavar="TEXT", help="Summary of the action taken / answer given")
+    pu.add_argument("--output-file",     action="append", metavar="PATH",
+                    help="Path to a new/changed output file produced for this question (repeatable)")
+    pu.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pu.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # finalize
     pf = sub.add_parser("finalize", help="Insert investigation summary and mark complete")
     pf.add_argument("--case-id",    required=True, metavar="ID",   help="Case ID")
     pf.add_argument("--summary",    required=True, metavar="TEXT", help="Closing summary paragraph")
-    pf.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/)")
+    pf.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pf.add_argument("--case-dir",   metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # reflect — mid-investigation or pre-finalize structured reflection
     pr = sub.add_parser("reflect", help="Log a structured reflection: re-interpretations and open leads")
@@ -467,7 +573,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--trigger",      required=True, metavar="TEXT", help="What prompted this reflection (e.g. 'post-netscan mid-investigation review')")
     pr.add_argument("--reinterpret",  metavar="TEXT", help="How current findings change interpretation of earlier steps (optional)")
     pr.add_argument("--open-leads",   metavar="TEXT", help="What needs follow-up that this investigation cannot resolve alone (optional)")
-    pr.add_argument("--output-dir",   metavar="DIR",  help="Output directory (default: ./reports/)")
+    pr.add_argument("--output-dir",   metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
+    pr.add_argument("--case-dir",     metavar="DIR",  help="Per-case root directory; takes precedence over --output-dir")
 
     # event — log a confirmed attacker action observed in the evidence
     pe = sub.add_parser("event", help="Log a timestamped attacker-observed event from the evidence")
@@ -482,7 +589,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--detail",       metavar="TEXT", help="Additional forensic context")
     pe.add_argument("--no-timestamp", action="store_true", dest="no_timestamp",
                     help="Mark as finding without a confirmed timestamp (excluded from visual timeline)")
-    pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/)")
+    pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/<case_id>/)")
+    pe.add_argument("--case-dir",     metavar="DIR", help="Per-case root directory; takes precedence over --output-dir")
 
     return p
 
@@ -496,4 +604,5 @@ if __name__ == "__main__":
         "reflect":    cmd_reflect,
         "finalize":   cmd_finalize,
         "event":      cmd_event,
+        "followup":   cmd_followup,
     }[args.command](args)

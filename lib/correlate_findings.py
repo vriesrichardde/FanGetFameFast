@@ -40,6 +40,22 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+try:
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hallucination_guard import (
+        ConfidenceTier,
+        tag_finding,
+        render_confidence_summary,
+        reset_counter as _hg_reset,
+    )
+
 
 # ── Parsers ────────────────────────────────────────────────────────────────────
 
@@ -179,10 +195,17 @@ def _parse_bulk_urls(carved_dir: Path) -> list[dict]:
     return results
 
 
-def _load_fan_json(analysis_dir: Path, module: str) -> list[dict]:
-    """Load threat records from a FAN module JSON file."""
+def _load_fan_json(analysis_dir: Path, module: str, case_dir: Path | None = None) -> list[dict]:
+    """Load threat records from a FAN module JSON file.
+
+    Checks the WIP `analysis/fan_*` layout first, then (for cases where
+    `./analysis/` has already been cleaned up) the preserved-evidence layout
+    under `reports/<case_id>/FAN/**/`.
+    """
     candidates: list[Path] = list(analysis_dir.glob(f"fan_{module}/**/{module}_threats.json"))
     candidates += list(analysis_dir.glob(f"{module}_threats.json"))
+    if case_dir is not None:
+        candidates += list(case_dir.glob(f"FAN/**/{module}_threats.json"))
     for c in candidates:
         try:
             data = json.loads(c.read_text(errors="replace"))
@@ -641,7 +664,131 @@ def _build_markdown(
     a("*Evidence integrity preserved — no evidence directories were modified.*")
     a("")
 
+    # ── Hallucination Guard ───────────────────────────────────────────────────
+    hg = _build_correlation_hallucination_guard(
+        ff_matches, mf_matches, fd_matches, modules_found,
+    )
+    if hg:
+        a(hg)
+        a("")
+
     return "\n".join(lines)
+
+
+def _build_correlation_hallucination_guard(
+    ff_matches: list[dict],
+    mf_matches: list[dict],
+    fd_matches: list[dict],
+    modules_found: list[str],
+) -> str:
+    """
+    Tag each cross-module correlation match with a ConfidenceTier and
+    render the Hallucination Guard section for the correlation report.
+
+    Cross-module matches (2+ modules) → CONFIRMED.
+    Single-module claims → INFERRED (one analytical step removed).
+    Missing modules → UNVERIFIABLE.
+    """
+    _hg_reset()
+    findings = []
+    both_fan_fame  = "FAN" in modules_found and "FAME" in modules_found
+    both_fame_fast = "FAME" in modules_found and "FAST" in modules_found
+    both_fan_fast  = "FAN" in modules_found and "FAST" in modules_found
+
+    # FAN ↔ FAME matches — process seen in memory AND flagged in PCAP → CONFIRMED
+    for m in ff_matches:
+        findings.append(tag_finding(
+            f"Process `{m.get('process_name', '?')}` (PID {m.get('pid', '?')}) "
+            f"→ {m.get('remote_ip', '?')}:{m.get('remote_port', '?')} "
+            f"({m.get('threat_type', '?')}, {m.get('severity', '?').upper()})",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+
+    if both_fan_fame and not ff_matches:
+        findings.append(tag_finding(
+            "FAN ↔ FAME correlation computed — no process-network matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+    elif not both_fan_fame:
+        findings.append(tag_finding(
+            "FAN ↔ FAME correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["volatility3/netscan", "fan_protocol_analyzer"],
+            ["fame", "fan"],
+        ))
+
+    # FAME ↔ FAST matches
+    for m in mf_matches:
+        ctype = m.get("correlation_type", "")
+        if "process_disk" in ctype:
+            findings.append(tag_finding(
+                f"Process `{m.get('process_name', '?')}` running in memory has executable deleted on disk",
+                ConfidenceTier.CONFIRMED,
+                [],
+                ["volatility3/psscan", "tsk/fls"],
+                ["fame", "fast"],
+            ))
+        else:
+            findings.append(tag_finding(
+                f"Disk path `{m.get('disk_path', '?')}` deleted — correlates with memory process evidence",
+                ConfidenceTier.INFERRED,
+                [],
+                ["tsk/ils", "volatility3/psscan"],
+                ["fast", "fame"],
+            ))
+
+    if both_fame_fast and not mf_matches:
+        findings.append(tag_finding(
+            "FAME ↔ FAST correlation computed — no process-disk matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["volatility3/psscan", "tsk/fls"],
+            ["fame", "fast"],
+        ))
+    elif not both_fame_fast:
+        findings.append(tag_finding(
+            "FAME ↔ FAST correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["volatility3/psscan", "tsk/fls"],
+            ["fame", "fast"],
+        ))
+
+    # FAN ↔ FAST matches
+    for m in fd_matches:
+        findings.append(tag_finding(
+            f"Domain `{m.get('domain', '?')}` appeared in DNS traffic AND carved from disk",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+
+    if both_fan_fast and not fd_matches:
+        findings.append(tag_finding(
+            "FAN ↔ FAST correlation computed — no DNS-to-disk domain matches found",
+            ConfidenceTier.CONFIRMED,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+    elif not both_fan_fast:
+        findings.append(tag_finding(
+            "FAN ↔ FAST correlation unavailable — one or both modules did not run",
+            ConfidenceTier.UNVERIFIABLE,
+            [],
+            ["fan_dns_threats", "bulk_extractor"],
+            ["fan", "fast"],
+        ))
+
+    return render_confidence_summary(findings, module_label="Cross-module correlation")
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -671,22 +818,37 @@ def correlate(
     memory_dir  = analysis_dir / "memory"
     storage_dir = analysis_dir / "storage"
     carved_dir  = exports_dir  / "carved"
+    case_dir    = reports_dir / case_id
 
     netscan_path = memory_dir / "netscan.txt"
     if not netscan_path.exists():
         netscan_path = memory_dir / "netstat.txt"
     pslist_path  = memory_dir / "pslist.txt"
     cmdline_path = memory_dir / "cmdline.txt"
-    fls_path     = storage_dir / "fls_output.txt"
+
+    fls_path = storage_dir / "fls_output.txt"
+    if not fls_path.exists():
+        # Preserved-evidence layout (post-cleanup): reports/<case_id>/FAST/<host>/<case_id>_evidence/storage/fls_output.txt
+        fls_candidates = list(case_dir.glob("FAST/*/*_evidence/storage/fls_output.txt"))
+        fls_candidates += list(exports_dir.glob("**/fls_output.txt"))
+        if fls_candidates:
+            fls_path = fls_candidates[0]
+
+    if not (carved_dir / "url.txt").exists() and not (carved_dir / "domain.txt").exists():
+        # Preserved-evidence layout: reports/<case_id>/FAST/<host>/<case_id>_evidence/exports/carved/
+        carved_candidates = list(case_dir.glob("FAST/*/*_evidence/exports/carved"))
+        if carved_candidates:
+            carved_dir = carved_candidates[0]
 
     artifacts: dict[str, bool] = {
         "analysis/memory/netscan.txt":       netscan_path.exists(),
         "analysis/memory/pslist.txt":        pslist_path.exists(),
         "analysis/memory/cmdline.txt":       cmdline_path.exists(),
-        "analysis/storage/fls_output.txt":   fls_path.exists(),
-        "exports/carved/url.txt":            (carved_dir / "url.txt").exists(),
-        "analysis/fan_dns/dns_threats.json": bool(
-            list(analysis_dir.glob("fan_dns*/**/dns_threats.json"))
+        "fls_output.txt":                    fls_path.exists(),
+        "carved/url.txt or domain.txt":      (carved_dir / "url.txt").exists() or (carved_dir / "domain.txt").exists(),
+        "fan_*_threats.json": bool(
+            list(analysis_dir.glob("fan_*/**/*_threats.json"))
+            or list(case_dir.glob("FAN/**/*_threats.json"))
         ),
     }
 
@@ -696,10 +858,10 @@ def correlate(
     _active, fls_deleted   = _parse_fls(fls_path)
     carved_urls            = _parse_bulk_urls(carved_dir)
 
-    dns_threats  = _load_fan_json(analysis_dir, "dns")
-    http_threats = _load_fan_json(analysis_dir, "http")
-    tcp_threats  = _load_fan_json(analysis_dir, "tcp")
-    udp_threats  = _load_fan_json(analysis_dir, "udp")
+    dns_threats  = _load_fan_json(analysis_dir, "dns", case_dir)
+    http_threats = _load_fan_json(analysis_dir, "http", case_dir)
+    tcp_threats  = _load_fan_json(analysis_dir, "tcp", case_dir)
+    udp_threats  = _load_fan_json(analysis_dir, "udp", case_dir)
     all_fan      = dns_threats + http_threats + tcp_threats + udp_threats
 
     fan_conns = _fan_connections(all_fan)
