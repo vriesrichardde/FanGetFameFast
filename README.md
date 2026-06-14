@@ -24,6 +24,14 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 ---
 
+## Demo video
+
+[![Fan Get Fame Fast — demonstration](https://img.youtube.com/vi/G04gxgqYDk4/hqdefault.jpg)](https://www.youtube.com/watch?v=G04gxgqYDk4)
+
+Watch the live walkthrough: **[Fan Get Fame Fast — demonstration](https://www.youtube.com/watch?v=G04gxgqYDk4)**
+
+---
+
 ## Modules
 
 | Module | Domain | Entry point |
