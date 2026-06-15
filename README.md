@@ -26,7 +26,7 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 | README with setup instructions | [Installation](#installation) and [Quick start](#quick-start) below |
 | Step-by-step setup instructions | [Installation](#installation) below · [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
 | Features and functionality description | [What it does](#what-it-does) below · intro paragraphs above |
-| Demonstration video | [YouTube — Fan Get Fame Fast](https://www.youtube.com/watch?v=G04gxgqYDk4) |
+| Demonstration video | [YouTube — Fan Get Fame Fast](https://youtu.be/6NrNfietggo) |
 | Architecture diagram | [docs/ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) · [docs/assets/diagrams/](docs/assets/diagrams/) |
 | Evidence dataset documentation | [accuracy/dataset_documentation.md](accuracy/dataset_documentation.md) |
 | Accuracy report | [accuracy/accuracy.md](accuracy/accuracy.md) · [accuracy/claim_traceability_audit.md](accuracy/claim_traceability_audit.md) |
@@ -44,9 +44,9 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 ## Demo video
 
-[![Fan Get Fame Fast — demonstration](https://img.youtube.com/vi/G04gxgqYDk4/hqdefault.jpg)](https://www.youtube.com/watch?v=G04gxgqYDk4)
+[![Fan Get Fame Fast — demonstration](https://img.youtube.com/vi/6NrNfietggo/hqdefault.jpg)](https://youtu.be/6NrNfietggo)
 
-Watch the live walkthrough: **[Fan Get Fame Fast — demonstration](https://www.youtube.com/watch?v=G04gxgqYDk4)**
+Watch the live walkthrough: **[Fan Get Fame Fast — demonstration](https://youtu.be/6NrNfietggo)**
 
 ---
 
