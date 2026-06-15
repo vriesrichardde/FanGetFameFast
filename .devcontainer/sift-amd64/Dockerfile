@@ -24,7 +24,8 @@ RUN echo 'wireshark-common wireshark-common/install-setuid boolean false' | debc
 # Trim duplicates once a build confirms SIFT's saltstack states already
 # install the equivalent tool.
 # ---------------------------------------------------------------------------
-RUN apt-get update \
+RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         # Python (base:ubuntu22.04 has no Python by default)
         python3 \

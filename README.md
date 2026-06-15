@@ -12,7 +12,8 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 **Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman  
 **Platform:** Ubuntu 24.04 LTS (x86-64)  
-**License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)
+**License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)  
+**Hackathon submission:** [devpost.com/software/fan-get-fame-fast](https://devpost.com/software/fan-get-fame-fast)
 
 ---
 
@@ -469,6 +470,7 @@ This README is the overview; the detailed documentation lives in `docs/` and a f
 - **Actually investigating a case?** → [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — day-to-day investigation workflows, how to use the vault before and after a case, and how to read and interpret the generated reports.
 - **Extending the platform or integrating with it?** → [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md) — module internals, the `lib/` Python API (the per-module reference that previously lived in this README), and the MCP server protocol.
 - **Want the big picture first?** → [docs/ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — how FAN, FAME, FAST, the coordinator, the vault, and the MCP/CTI layers fit together.
+- **Already using protocol-sift on a SIFT Workstation?** → [docs/PROTOCOL_SIFT_INTEGRATION.md](docs/PROTOCOL_SIFT_INTEGRATION.md) — what FanGetFameFast adds on top, a side-by-side coverage comparison, and the recommended adoption path.
 - **Need the dependency inventory?** → [sbom.json](sbom.json) (machine-readable CycloneDX) with a human-readable summary in [sbom.md](sbom.md).
 - **Before you point it at anything?** → [DISCLAIMER.md](DISCLAIMER.md) — the authorized-use statement and no-warranty disclaimer. Read this first.
 
@@ -476,8 +478,26 @@ This README is the overview; the detailed documentation lives in `docs/` and a f
 
 ---
 
+## Judges — sample cases
+
+A password-protected ZIP of all investigation cases is included in the repository root:
+
+**Password (all files):** `FANfameGetFASTH4ckaTh0n!`
+
+Each case is a separate ZIP file (all well under GitHub's 100 MB limit). Every ZIP contains the final reports in all formats, the Markdown source, research notes, the chain-of-custody manifest, and the full Claude Code **prompt log** — the verbatim `.jsonl` of the analyst–AI conversation that produced the investigation, SHA-256 fingerprinted and rendered as Markdown and PDF so the complete reasoning chain is auditable.
+
+| File | Case ID | Domain | Scenario |
+|------|---------|--------|----------|
+| `cases_for_judges_NISTHACK.zip` | NISTHACK | FAN + FAST | MITM / ARP poisoning (NIST hacking dataset, 2004) |
+| `cases_for_judges_NISTLEAK.zip` | NISTLEAK | FAST | Insider data exfiltration via USB ("IAMAN CD") |
+| `cases_for_judges_WIN764NFURY.zip` | WIN764NFURY | FAME + FAST | Malware / credential theft on Windows 7 x64 |
+| `cases_for_judges_NROMANOFF.zip` | NROMANOFF | FAST | Disk forensics — Natasha Romanoff workstation |
+| `cases_for_judges_FAN-2026-NITROBA-V5.zip` | FAN-2026-NITROBA-V5 | FAN | Network intrusion — Nitroba University dataset |
+
+---
+
 ## License
 
-Fan Get Fame Fast is dual-licensed under your choice of the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)) or the **MIT License** ([LICENSE-MIT](LICENSE-MIT)). See [LICENSE](LICENSE) for the dual-license notice.
+Fan Get Fame Fast is dual-licensed under your choice of the **MIT License** ([LICENSE](LICENSE)) or the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)). The full MIT text is in [LICENSE](LICENSE); the full Apache 2.0 text is in [LICENSE-APACHE](LICENSE-APACHE). [LICENSE-MIT](LICENSE-MIT) is a standalone copy of the MIT text for convenience.
 
 *Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman*
