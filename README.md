@@ -17,6 +17,23 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 ---
 
+## Submission checklist
+
+| Requirement | Location |
+|-------------|----------|
+| Code repository | [github.com/vriesrichardde/FanGetFameFast](https://github.com/vriesrichardde/FanGetFameFast) |
+| Open source license | [LICENSE](LICENSE) (MIT) · [LICENSE-APACHE](LICENSE-APACHE) (Apache 2.0) |
+| README with setup instructions | [Installation](#installation) and [Quick start](#quick-start) below |
+| Step-by-step setup instructions | [Installation](#installation) below · [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
+| Features and functionality description | [What it does](#what-it-does) below · intro paragraphs above |
+| Demonstration video | [YouTube — Fan Get Fame Fast](https://www.youtube.com/watch?v=G04gxgqYDk4) |
+| Architecture diagram | [docs/ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) · [docs/assets/diagrams/](docs/assets/diagrams/) |
+| Evidence dataset documentation | [accuracy/dataset_documentation.md](accuracy/dataset_documentation.md) |
+| Accuracy report | [accuracy/accuracy.md](accuracy/accuracy.md) · [accuracy/claim_traceability_audit.md](accuracy/claim_traceability_audit.md) |
+| Agent execution logs | Case ZIPs (see [Judges — sample cases](#judges--sample-cases)) — each ZIP contains the verbatim `.jsonl` Claude Code session log, SHA-256 fingerprinted and rendered as Markdown + PDF |
+
+---
+
 ## What it does
 
 - **Compresses investigation time** during a live incident so containment decisions can be made while the attack is still in progress.
@@ -473,6 +490,8 @@ This README is the overview; the detailed documentation lives in `docs/` and a f
 - **Already using protocol-sift on a SIFT Workstation?** → [docs/PROTOCOL_SIFT_INTEGRATION.md](docs/PROTOCOL_SIFT_INTEGRATION.md) — what FanGetFameFast adds on top, a side-by-side coverage comparison, and the recommended adoption path.
 - **Need the dependency inventory?** → [sbom.json](sbom.json) (machine-readable CycloneDX) with a human-readable summary in [sbom.md](sbom.md).
 - **Before you point it at anything?** → [DISCLAIMER.md](DISCLAIMER.md) — the authorized-use statement and no-warranty disclaimer. Read this first.
+- **Hit an unexpected behaviour or operational edge case?** → [CONSIDERATIONS.md](CONSIDERATIONS.md) — known limitations, concurrency caveats, consistency notes, and workarounds for current rough edges.
+- **Curious what's coming next?** → [TODO.md](TODO.md) — the active roadmap: nightly-investigation support, output stabilisation, architecture alignment across modules, SIEM integration, and MCP-based evidence gathering.
 
 > The project-specific guidance for the AI coordinator itself lives in [CLAUDE.md](CLAUDE.md), and its report-writing voice/register rules are in [VOICE.md](VOICE.md) — useful background if you want to understand or tune how Claude drives an investigation.
 

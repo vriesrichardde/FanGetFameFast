@@ -18,6 +18,10 @@ RUN echo 'wireshark-common wireshark-common/install-setuid boolean false' | debc
 # Trim duplicates once a build confirms SIFT's saltstack states already
 # install the equivalent tool.
 # ---------------------------------------------------------------------------
+# Node.js 18.x via NodeSource — Ubuntu 22.04 default apt ships v12 which is too old for Claude Code (requires >=18).
+# NodeSource's nodejs package bundles npm, so do NOT also install the Ubuntu npm package (they conflict).
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+
 RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -33,9 +37,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         wget \
         git \
         gpg \
-        # Node.js (Claude Code CLI)
+        # Node.js 18 (Claude Code CLI) — npm is bundled by NodeSource, not installed separately
         nodejs \
-        npm \
         # Network forensics
         tshark \
         wireshark-common \
