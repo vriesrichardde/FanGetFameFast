@@ -1,8 +1,8 @@
 {
-  "name": "FanGetFameFast Claude Code (ARM64)",
+  "name": "FanGetFameFast SIFT (arm64)",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "../.."
   },
   "remoteUser": "vscode",
   "remoteEnv": {

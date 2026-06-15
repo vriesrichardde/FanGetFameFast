@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import re
 import shlex
 import subprocess
@@ -42,9 +41,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import path_guard  # noqa: E402  write-path policy enforcement
-
-SSH_HOST    = os.environ.get("INVESTIGATIONS_SSH_HOST", "sansforensics@ubuntudesktop")
-REMOTE_ROOT = os.environ.get("INVESTIGATIONS_ROOT",     "/home/sansforensics/cases")
+from investigations_upload import (  # noqa: E402  shared vault destination config
+    NOT_CONFIGURED_MSG,
+    REMOTE_ROOT,
+    SSH_HOST,
+    _vault_configured,
+)
 
 
 # ── Packaging ─────────────────────────────────────────────────────────────────
@@ -252,6 +254,10 @@ def upload_zip(case_id: str, zip_path: Path) -> None:
     if not zip_path.exists():
         print(f"[upload] ERROR: ZIP not found: {zip_path}", file=sys.stderr)
         sys.exit(1)
+
+    if not _vault_configured():
+        print(NOT_CONFIGURED_MSG)
+        return
 
     remote_dir  = f"{REMOTE_ROOT}/{case_id}"
     remote_path = f"{remote_dir}/{zip_path.name}"

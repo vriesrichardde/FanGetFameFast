@@ -63,8 +63,18 @@ python3 lib/research_notes.py step \
   --why "<case-specific reason — see guidance below>" \
   --outcome "<finding> [source: <case_id>_evidence/<...>.txt]" \
   --dismissed "<what you inspected and decided was not significant — see guidance below>" \
-  [--raw "excerpt if the output contains significant findings"]
+  [--raw "excerpt if the output contains significant findings"] \
+  [--confidence direct|inferred|assumed] \
+  [--source-tool "<tool that produced this output, e.g. volatility3/psscan>"] \
+  [--source-data "<path to the evidence/analysis file this step is based on>"]
 ```
+
+**`--confidence`, `--source-tool`, `--source-data` (optional):**
+`--confidence` overrides the confidence tier shown in the report (default:
+auto-detected from `--assumption`). `--source-tool` and `--source-data` record
+which tool produced the output and where its raw data lives — this provenance
+is what `finalize-evidence` (§1e) later uses to rewrite `Source data` rows to
+zip-relative paths after the `./analysis/` cleanup.
 
 **`--why` — write the case-specific reason, not a generic tool description.**
 Explain the hypothesis you are testing or the question you are answering *at
@@ -179,6 +189,36 @@ python3 lib/research_notes.py finalize \
 Then include the notes file in the upload call — see each module's SKILL.md
 for the exact `investigations_upload.py` invocation (paths differ per
 module).
+
+### 1f — Post-report follow-up questions
+
+Once a case's reports have been generated, any further analyst question that
+references that case — even much later in the same session or in a new
+session — must be logged via the `followup` subcommand:
+
+```bash
+python3 lib/research_notes.py followup \
+  --case-id <case_id> \
+  --case-dir reports/<case_id>/<MODULE>/<hostname-or-stem> \
+  --question "<the analyst's follow-up question>" \
+  --answer-summary "<summary of the action taken / answer given>" \
+  [--output-file <path> ...]
+```
+
+`--output-file` is repeatable — pass one for each new or changed file produced
+while answering the question (an additional analysis export, an exhibit, a
+written answer saved to disk). If any such file was produced, immediately run:
+
+```bash
+python3 lib/chain_of_custody.py update \
+  --case-id <case_id> \
+  --case-dir reports/<case_id> \
+  --trigger followup \
+  --note "<question>"
+```
+
+so the chain-of-custody manifest covers it. See CLAUDE.md's "Follow-up
+questions (post-report)" and "Chain of custody" sections.
 
 ---
 
@@ -312,18 +352,21 @@ matches reported by the tool does not mean no correlation exists.
 
 ## 4. Campaign Report (hand-authored)
 
-If a second module already has a generated report for this case ID, the
-per-case campaign report (`<case_id>_campaign_report.*`) must be
-hand-authored, not auto-generated:
+After this module's report has been generated, the per-case campaign report
+(`<case_id>_campaign_report.*`) must always be hand-authored, not
+auto-generated — for every case, including single-module cases:
 
 1. Read this module's research notes end-to-end, plus the research notes of
-   every other module that has completed for this case ID.
+   every other module that has completed for this case ID (if any).
 2. Hand-author `./reports/<case_id>/<case_id>_campaign_report.md` following
-   `docs/campaign_report_template.md` — Incident Timeline merged across
-   modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs from at least
-   two modules (or stating explicitly that none exist), unified MITRE/IOC
-   tables, and a hand-curated Hallucination Guard FND-list with an overall
-   confidence percentage. `lib/correlate_findings.py`'s output and
+   `docs/campaign_report_template.md`. For a single-module case, the Incident
+   Timeline and findings tables cover this module alone, and the
+   Cross-Domain Correlation section states explicitly that no other module
+   has run for this case ID. For a multi-module case: Incident Timeline
+   merged across modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs
+   from at least two modules (or stating explicitly that none exist), unified
+   MITRE/IOC tables, and a hand-curated Hallucination Guard FND-list with an
+   overall confidence percentage. `lib/correlate_findings.py`'s output and
    `lib/generate_combined_report.py`'s `_merge_*`/`_extract_*` helpers may be
    used as research aids when pre-populating tables.
 3. Render it to PDF/PPTX/DOCX:
@@ -339,8 +382,8 @@ hand-authored, not auto-generated:
 workflow — it remains only as an automated fallback for `--md-only`/headless
 batch runs or very-low-evidence cases.
 
-After generating this module's report, also check whether ≥2 modules now have
-generated reports for this case ID but no campaign report exists:
+After generating this module's report, also check whether any module now has
+a generated report for this case ID but no campaign report exists:
 
 ```bash
 python3 lib/report_completeness.py --campaign-check \

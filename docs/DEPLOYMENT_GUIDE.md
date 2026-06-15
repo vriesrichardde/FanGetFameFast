@@ -385,27 +385,43 @@ If you move the project directory, re-run `setup_folder_structure.sh` to regener
 
 ## 9. Set up SSH key access to the investigations vault
 
-`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the investigations vault on ubuntudesktop. It uses the private key at `~/.ssh/id_ed25519`. This key must exist and be authorized on the remote host before investigations can complete.
+`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the
+configured investigations vault. The destination is **not hardcoded** — it is
+read from `INVESTIGATIONS_SSH_HOST` / `INVESTIGATIONS_ROOT` /
+`INVESTIGATIONS_SSH_KEY` (set via `./scripts/configure_vault.sh`, persisted to
+`~/.soc_env`; see `templates/set_env_template.sh`). The SSH key (default
+`~/.ssh/id_ed25519`) must exist and be authorized on the remote host before
+investigations can complete.
+
+> **Note:** this `INVESTIGATIONS_ROOT` (in `~/.soc_env`, the remote
+> report-upload destination) is independent of the `INVESTIGATIONS_ROOT` set
+> in `.claude/settings.json` §8 above (the local `investigations` MCP server's
+> root, e.g. `~/cases`) — the two can point at different locations.
 
 ```bash
 # Generate the key if you do not already have one
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
 
-# Authorize it on ubuntudesktop
-ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+# Authorize it on your vault host
+ssh-copy-id -i ~/.ssh/id_ed25519 user@your-vault-host
+
+# Configure the destination (writes INVESTIGATIONS_* to ~/.soc_env)
+./scripts/configure_vault.sh user@your-vault-host /remote/cases/root
 
 # Test passwordless access
-ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo SSH OK"
+ssh -i ~/.ssh/id_ed25519 user@your-vault-host "echo SSH OK"
 # Should print "SSH OK" without a password prompt
 ```
 
-If `~/.ssh/known_hosts` does not yet have an entry for ubuntudesktop, add it:
+If `~/.ssh/known_hosts` does not yet have an entry for your vault host, add it:
 
 ```bash
-ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
+ssh-keyscan -H your-vault-host >> ~/.ssh/known_hosts
 ```
 
-Without this setup, the final upload step of every investigation fails. The finished report stays in `./analysis/_reports/<stem>/` and `./analysis/` is not cleared.
+If this is not configured, the final upload step of every investigation is
+skipped with setup guidance — the finished report stays in
+`./reports/<case_id>/` and `./analysis/` is still cleared normally.
 
 ### Session transcript recording (chain of evidence)
 
@@ -501,7 +517,7 @@ cd "$INSTALL_DIR"
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2026-001
 ```
 
-The report lands in `~/cases/FAN-2026-001/reports/` on ubuntudesktop once the investigation completes. All WIP files in `./analysis/` are deleted automatically.
+The report lands in `$INVESTIGATIONS_ROOT/FAN-2026-001/reports/` on the configured vault host once the investigation completes (see "Set up SSH key access to the investigations vault" above; reports stay in `./reports/` if unconfigured). All WIP files in `./analysis/` are deleted automatically.
 
 ### Scheduling nightly per-folder evidence investigation
 
@@ -634,7 +650,7 @@ python3 scripts/generate_sbom.py --check    # CI gate: non-zero exit if stale
 ```
 
 The generator resolves each declared dependency to the concrete installed version and SPDX license.
-Note the copyleft components flagged in `sbom.md` — `sslyze` and `memprocfs` (AGPL-3.0), `CairoSVG`
+Note the copyleft components flagged in `sbom.md` — `memprocfs` (AGPL-3.0), `CairoSVG`
 (LGPL-3.0), and `volatility3` (VSL) — when redistributing a combined work; they are invoked as
 separate tools / optional modules, not statically linked into the Apache-2.0/MIT core.
 
@@ -814,14 +830,18 @@ curl -s -H "Authorization: Bearer $OPENCTI_API_KEY" \
     "$OPENCTI_URL/graphql" -d '{"query":"{me{name}}"}' | jq .
 ```
 
-### Report upload fails (SSH/SCP error)
+### Report upload skipped or fails (SSH/SCP error)
 
-The SSH key at `~/.ssh/id_ed25519` is not authorized on ubuntudesktop, or the `known_hosts` file does not have an entry for ubuntudesktop.
+If `INVESTIGATIONS_SSH_HOST` is unset, the vault is "not configured" and uploads
+are skipped with guidance to run `./scripts/configure_vault.sh` — this is
+expected, not an error. If it *is* configured but SSH/SCP fails, the SSH key
+(`INVESTIGATIONS_SSH_KEY`, default `~/.ssh/id_ed25519`) is likely not authorized
+on the configured host, or `known_hosts` does not have an entry for it.
 
 ```bash
-ssh-keyscan -H ubuntudesktop >> ~/.ssh/known_hosts
-ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
-ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo OK"
+ssh-keyscan -H your-vault-host >> ~/.ssh/known_hosts
+ssh-copy-id -i ~/.ssh/id_ed25519 user@your-vault-host
+ssh -i ~/.ssh/id_ed25519 user@your-vault-host "echo OK"
 ```
 
 If the investigation was interrupted after analysis but before upload, the report files are still in `./analysis/_reports/<stem>/`. Re-run the upload manually:

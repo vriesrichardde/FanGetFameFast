@@ -1065,7 +1065,8 @@ FAST writes confirmed findings to the Obsidian vault automatically:
 | fls shows no deleted files | Filesystem was wiped | Run `blkls -u` for carving; use `photorec` |
 | mactime empty | bodyfile is empty | Verify `fls -r -m /` wrote content |
 | pptx or docx not generated | Missing Python package | `pip3 install python-pptx python-docx` |
-| Upload SSH error | ubuntudesktop unreachable | Check connectivity; use `--no-upload` |
+| Upload skipped: "vault not configured" | `INVESTIGATIONS_SSH_HOST`/`INVESTIGATIONS_ROOT` unset | Run `./scripts/configure_vault.sh user@host /remote/root` (see `templates/set_env_template.sh`); reports stay in `./reports/` until then |
+| Upload SSH error | Configured vault host unreachable | Check connectivity to `$INVESTIGATIONS_SSH_HOST`; use `--no-upload` |
 | bulk_extractor slow | Large image | Limit to targeted features: `-e url -e domain -e email` |
 
 ---

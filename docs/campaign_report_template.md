@@ -214,6 +214,11 @@
 > pivot genuinely cannot be corroborated by a second module, say so
 > explicitly and record it as an open lead in Section 9 / Appendix instead
 > of fabricating a pivot.
+>
+> **Single-module cases:** if no other FAN/FAME/FAST module has run for this
+> case ID, state that explicitly (e.g. "Only the FAN module has run for this
+> case ID; no cross-domain correlation is possible at this time.") and omit
+> the numbered pivot subsections rather than fabricating one.
 
 ### 3.1 `<Named pivot point>`
 

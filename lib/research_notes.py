@@ -20,6 +20,7 @@ The reports/ directory is in .gitignore — notes are never committed to the rep
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from datetime import datetime, timezone
@@ -97,6 +98,7 @@ def get_findings_with_confidence(case_id: str, output_dir: str | None = None) ->
         else:
             s["confidence"] = "direct"
         s.setdefault("source_tool", "")
+        s.setdefault("source_data", "")
     return steps
 
 
@@ -140,6 +142,7 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
                 "dismissed":   "",
                 "confidence":  "direct",
                 "source_tool": "",
+                "source_data": "",
             }
             continue
 
@@ -160,6 +163,8 @@ def parse_steps(case_id: str, output_dir: str | None = None) -> list[dict]:
             current["confidence"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
         elif "| **Source tool**" in line:
             current["source_tool"] = line.split("|", 2)[-1].strip().rstrip("|").strip()
+        elif "| **Source data**" in line:
+            current["source_data"] = line.split("|", 2)[-1].strip().rstrip("|").strip().strip("`")
 
     if current is not None:
         steps.append(current)
@@ -344,6 +349,8 @@ def cmd_step(args: argparse.Namespace) -> None:
         confidence_val = "direct"
     confidence_row  = f"\n| **Confidence** | {confidence_val} |"
     source_tool_row = f"\n| **Source tool** | {source_tool_val} |" if source_tool_val else ""
+    source_data_val = getattr(args, "source_data", None) or ""
+    source_data_row = f"\n| **Source data** | `{source_data_val}` |" if source_data_val else ""
 
     entry = (
         f"### [{_now_utc()}] — Step {step_num} [{step_id}]: {args.title}\n\n"
@@ -355,6 +362,7 @@ def cmd_step(args: argparse.Namespace) -> None:
         f"{dismissed_row}"
         f"{confidence_row}"
         f"{source_tool_row}"
+        f"{source_data_row}"
         f"{raw_block}\n\n"
         "---\n\n"
     )
@@ -506,6 +514,75 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     print(f"[research_notes] Finalized: {path}")
 
 
+def cmd_finalize_evidence(args: argparse.Namespace) -> None:
+    """Hash preserved evidence artifacts, log per-file chain-of-custody steps,
+    and rewrite ``Source data`` rows from their live ``./analysis/...`` paths
+    to the zip-relative path an auditor will see inside ``<case_id>_evidence.zip``.
+
+    Run this AFTER the evidence-preservation rsync+zip step (so the files
+    exist under --evidence-dir) and BEFORE ``./analysis/`` cleanup.
+    """
+    path = _notes_path(args.case_id, args.output_dir, case_dir=getattr(args, "case_dir", None))
+    if not path.exists():
+        print(f"[research_notes] ERROR: notes file not found for {args.case_id}", file=sys.stderr)
+        sys.exit(1)
+
+    text = path.read_text(encoding="utf-8")
+
+    src_prefix = args.src_prefix.rstrip("/") + "/"
+    evidence_dir = Path(args.evidence_dir)
+    zip_prefix = args.zip_prefix.rstrip("/")
+
+    pattern = re.compile(r"\| \*\*Source data\*\* \| `([^`]*)` \|")
+    seen: dict[str, str] = {}
+    for m in pattern.findall(text):
+        if m.startswith(src_prefix) and m not in seen:
+            seen[m] = m[len(src_prefix):]
+
+    if not seen:
+        print(f"[research_notes] No Source data rows under '{src_prefix}' — nothing to finalize")
+        return
+
+    for orig, rel in sorted(seen.items()):
+        artifact = evidence_dir / rel
+        zip_path = f"{zip_prefix}/{rel}"
+        if artifact.is_file():
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            outcome = f"Preserved to {zip_path} — SHA-256: {digest}"
+        else:
+            outcome = f"Preserved to {zip_path} (file not found in evidence snapshot at finalize time)"
+
+        step_num = _step_count(path) + 1
+        step_id = f"RN-{step_num:03d}"
+        entry = (
+            f"### [{_now_utc()}] — Step {step_num} [{step_id}]: Evidence preserved: {Path(rel).name}\n\n"
+            "| | |\n"
+            "|---|---|\n"
+            f"| **Action** | sha256sum {artifact} |\n"
+            "| **Why** | Chain of custody — SHA-256 fingerprint of preserved artifact |\n"
+            f"| **Outcome** | {outcome} |\n"
+            "| **Confidence** | direct |\n\n"
+            "---\n\n"
+        )
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(entry)
+
+    # Rewrite Source data rows to point at the zip-relative path, now that the
+    # final report/auditor will receive the zip rather than ./analysis/.
+    text = path.read_text(encoding="utf-8")
+    for orig, rel in seen.items():
+        text = text.replace(
+            f"| **Source data** | `{orig}` |",
+            f"| **Source data** | `{zip_prefix}/{rel}` |",
+        )
+    path.write_text(text, encoding="utf-8")
+
+    print(
+        f"[research_notes] Finalized evidence: {len(seen)} artifact(s) hashed and logged; "
+        f"Source data rows rewritten to '{zip_prefix}/...'"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -540,6 +617,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Override confidence tier (default: auto-detected from --assumption flag)")
     ps.add_argument("--source-tool", metavar="TOOL",
                     help="Tool that produced this output, e.g. 'volatility3/psscan' or 'suricata' (optional)")
+    ps.add_argument("--source-data", metavar="PATH",
+                    help="Location of the raw data this step is based on, e.g. a path to the evidence file, "
+                         "an ./analysis/ output file, or a persisted tool-output file (optional)")
     ps.add_argument("--output-dir", metavar="DIR",  help="Output directory (default: ./reports/<case_id>/)")
     ps.add_argument("--case-dir",   metavar="DIR",  help="Directory containing the notes file (often reports/<case_id>/<MODULE>/<stem>/); takes precedence over --output-dir")
 
@@ -592,6 +672,21 @@ def _build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/<case_id>/)")
     pe.add_argument("--case-dir",     metavar="DIR", help="Per-case root directory; takes precedence over --output-dir")
 
+    # finalize-evidence — hash preserved artifacts and rewrite Source data paths
+    pg = sub.add_parser("finalize-evidence",
+                         help="Hash preserved evidence artifacts, log chain-of-custody steps, "
+                              "and rewrite Source data paths to zip-relative locations")
+    pg.add_argument("--case-id",      required=True, metavar="ID",   help="Case ID")
+    pg.add_argument("--evidence-dir", required=True, metavar="DIR",
+                     help="Directory of preserved artifacts matching --src-prefix, "
+                          "e.g. ./reports/<case_id>/FAN/<stem>/<case_id>_evidence/analysis")
+    pg.add_argument("--src-prefix",   required=True, metavar="PATH",
+                     help="Live-path prefix recorded in Source data rows during the investigation, e.g. './analysis'")
+    pg.add_argument("--zip-prefix",   required=True, metavar="PATH",
+                     help="Zip-relative prefix to rewrite Source data rows to, e.g. '<case_id>_evidence/analysis'")
+    pg.add_argument("--output-dir",   metavar="DIR", help="Output directory (default: ./reports/<case_id>/)")
+    pg.add_argument("--case-dir",     metavar="DIR", help="Per-case root directory; takes precedence over --output-dir")
+
     return p
 
 
@@ -605,4 +700,5 @@ if __name__ == "__main__":
         "finalize":   cmd_finalize,
         "event":      cmd_event,
         "followup":   cmd_followup,
+        "finalize-evidence": cmd_finalize_evidence,
     }[args.command](args)

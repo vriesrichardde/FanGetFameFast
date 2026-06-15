@@ -131,10 +131,10 @@ Analyst
         │     lib/generate_presentation.py → PPTX (7 slides)
         │     Output: ./analysis/_reports/<pcap-stem>/
         │
-        ├── [8] Upload to investigations vault
+        ├── [8] Upload to investigations vault (skipped with setup guidance if unconfigured)
         │     lib/investigations_upload.py
-        │     SSH key: ~/.ssh/id_ed25519
-        │     SSH host: $INVESTIGATIONS_SSH_HOST (default: sansforensics@ubuntudesktop)
+        │     SSH key: $INVESTIGATIONS_SSH_KEY (default: ~/.ssh/id_ed25519)
+        │     SSH host: $INVESTIGATIONS_SSH_HOST (configured via ./scripts/configure_vault.sh)
         │     Destination: $INVESTIGATIONS_ROOT/<case_id>/reports/
         │
         ├── [9] Vault recording
@@ -266,7 +266,7 @@ Analyst
         │     Output: ./analysis/memory/reports/
         │
         ├── [13] Upload to investigations vault
-        │     lib/investigations_upload.py (SSH/SCP to ubuntudesktop)
+        │     lib/investigations_upload.py (SSH/SCP to configured vault host)
         │
         ├── [14] Vault recording
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
@@ -356,7 +356,7 @@ Analyst
         │     Output: ./analysis/storage/reports/
         │
         ├── [13] Upload to investigations vault
-        │     lib/investigations_upload.py (SSH/SCP to ubuntudesktop)
+        │     lib/investigations_upload.py (SSH/SCP to configured vault host)
         │
         ├── [14] Vault recording
         │     lib/knowledge_extractor.py: record_ioc, record_ttp, close_case
@@ -703,7 +703,7 @@ as a warning and continue.
 
 ### `lib/investigations_upload.py` — report filing via SSH/SCP
 
-Uploads finished report files to the investigations vault on ubuntudesktop. Reads SSH configuration from environment variables; uses the private key at `~/.ssh/id_ed25519` (path hardcoded in `_SSH_OPTS`).
+Uploads finished report files to the configured investigations vault via SSH/SCP. Reads SSH configuration from environment variables (set via `./scripts/configure_vault.sh`, persisted to `~/.soc_env`); uses the private key at `INVESTIGATIONS_SSH_KEY` (default `~/.ssh/id_ed25519`).
 
 ```python
 from lib.investigations_upload import upload
@@ -716,14 +716,15 @@ upload(
     docx_path=Path("/path/to/report.docx"),   # optional
     zip_path=Path("/path/to/artifacts.zip"),  # optional
 )
-# Copies files to $INVESTIGATIONS_ROOT/<case_id>/reports/ on ubuntudesktop
+# Copies files to $INVESTIGATIONS_ROOT/<case_id>/reports/ on the configured vault host
 ```
 
-Environment variables:
-- `INVESTIGATIONS_SSH_HOST`: SSH target (default: `sansforensics@ubuntudesktop`)
-- `INVESTIGATIONS_ROOT`: remote root path (default: `/home/sansforensics/cases`)
+Environment variables (see `templates/set_env_template.sh`):
+- `INVESTIGATIONS_SSH_HOST`: SSH target, e.g. `user@host`. If unset, the vault is "not configured" — uploads are skipped with setup guidance and reports stay in `./reports/`.
+- `INVESTIGATIONS_ROOT`: remote root path, e.g. `/home/user/cases`
+- `INVESTIGATIONS_SSH_KEY`: SSH identity file (default `~/.ssh/id_ed25519`)
 
-`_SSH_OPTS` in `investigations_upload.py` references `~richard/.ssh/id_ed25519` and `~richard/.ssh/known_hosts` by name. On deployments running as a different user, edit those two lines in the library before running any investigation.
+Run `./scripts/configure_vault.sh user@host /remote/root [ssh_key]` to set these once for all future sessions.
 
 ---
 
@@ -1181,8 +1182,9 @@ All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`
 | `PERPLEXITY_API_KEY` | Yes | Perplexity.ai API key — starts with `pplx-` |
 | `OPENCTI_URL` | OpenCTI | OpenCTI instance base URL, e.g. `http://localhost:8080` |
 | `OPENCTI_API_KEY` | OpenCTI | OpenCTI API token — from Settings → API access |
-| `INVESTIGATIONS_SSH_HOST` | No | SSH target (default: `sansforensics@ubuntudesktop`) |
-| `INVESTIGATIONS_ROOT` | No | Remote path for case output (default: `/home/sansforensics/cases`) |
+| `INVESTIGATIONS_SSH_HOST` | No (vault upload skipped if unset) | SSH target — set via `./scripts/configure_vault.sh` |
+| `INVESTIGATIONS_ROOT` | No (vault upload skipped if unset) | Remote path for case output — set via `./scripts/configure_vault.sh` |
+| `INVESTIGATIONS_SSH_KEY` | No | SSH identity file for vault upload (default: `~/.ssh/id_ed25519`) |
 | `EVIDENCE_ROOT` | No | Override local evidence root (default: `~/evidence`) |
 | `PYTHONPATH` | AutoTimeliner | Must include Volatility 3 source path for AutoTimeliner to work |
 
@@ -1318,7 +1320,6 @@ fast_analyze.sh  (FAST)
 | `PyYAML` | YAML frontmatter parsing, configuration files |
 | `plotly` | Interactive HTML timeline visualisation |
 | `volatility3` + `yara-python` | Memory forensics (FAME) and YARA scanning |
-| `sslyze` | TLS / certificate inspection (FAN) |
 | `memprocfs` | MemProcFS physical memory access via LeechCore (FAME optional stage) |
 
 ---

@@ -38,9 +38,12 @@ In the devcontainer, evidence files are located at `/home/vscode/evidence`.
 | FAME | Memory forensics (Volatility 3 + optional Memory Baseliner) | Live |
 | FAST | Storage forensics (disk images — TSK / EWF tools) | Live |
 
-All three modules are live. FAME and FAST auto-detect sibling module reports for the
-same case ID and produce a combined unified report (Markdown + PDF + PPTX + DOCX)
-when more than one module has run.
+All three modules are live. Every module run hand-authors and renders a per-case
+campaign report (Markdown + PDF + PPTX + DOCX, board-deck format) for its case ID —
+this happens for single-module cases too, presenting that module's own findings in
+the board-deck format. FAN, FAME, and FAST also auto-detect sibling module reports
+for the same case ID; when more than one module has run, the campaign report becomes
+a combined unified report covering all of them.
 
 ## Agentic coordinator
 
@@ -112,7 +115,7 @@ IOC values stored in the vault are **defanged** (`192[.]168[.]1[.]1`, `evil[.]co
 | `lib/generate_pptx_report.py` | Management PowerPoint generator (7 slides, CISO language, python-pptx): cover, executive summary, threat landscape, IDS/YARA alerts, IOCs, recommendations, module coverage |
 | `lib/case_packager.py` | Package investigation artifacts into a timestamped `<case_id>_<ts>.zip` and upload via SSH/SCP to the investigations vault. `--all` is the general, format-agnostic mode (bundles **every** artifact for a case — DOCX/PPTX/PDF, the chain-of-evidence chat transcript, exhibit images, evidence ZIPs — with a SHA-256 `MANIFEST.sha256`); the default mode is the legacy PCAP/stem path. Wired into every analysis script via the shared helper `scripts/package_artifacts.sh` (`fgff_package_artifacts`), which runs after `scripts/record_session.sh` so the transcript is included; both helpers are best-effort and never fail the investigation |
 | `lib/chain_of_custody.py` | Court-ready integrity manifest: `update_manifest(case_dir, case_id, evidence_paths=None, examiner=None, trigger="investigation"\|"followup"\|"manual", note=None)` recursively hashes (MD5/SHA-1/SHA-256, size, mtime) every file under `reports/<case_id>/` plus any supplied source evidence file(s), and writes/updates `reports/<case_id>/documents/<case_id>_chain_of_custody.json`. Append-only: each run adds one `history` entry recording added/changed/removed paths, the trigger, examiner, and note — a changed hash for a previously-recorded path is flagged with both old and new digests, and an evidence hash mismatch is preserved as a critical integrity alert rather than overwritten. Wired into every analysis script via `scripts/chain_of_custody.sh` (`fgff_update_custody`), which runs after `scripts/record_session.sh` and before `scripts/package_artifacts.sh`. Self-test: `python3 lib/chain_of_custody.py --test` |
-| `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop) — supports MD, PDF, PPTX, DOCX, ZIP |
+| `lib/investigations_upload.py` | Copy individual report files into the investigations vault (`$INVESTIGATIONS_ROOT/<case_id>/reports/` on the configured vault host — see "Investigations vault configuration" below) — supports MD, PDF, PPTX, DOCX, ZIP |
 | `lib/fan_*.py` | FAN analysis modules (22 protocol detectors + pcap_analyzer, generate_pcap_report) |
 | `lib/generate_fame_report.py` | FAME report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/memory/` Volatility 3 outputs |
 | `lib/generate_fast_report.py` | FAST report generator: Markdown + PDF + PPTX (8 slides) + DOCX from `./analysis/storage/` and `./exports/` TSK outputs |
@@ -172,8 +175,20 @@ reports/<case_id>/
     <case_id>_campaign_report.docx
     <case_id>_chat_transcript.md
     <case_id>_chain_of_custody.json
+    <case_id>_evidence.zip
     <case_id>_<ts>.zip
 ```
+
+`<case_id>_evidence.zip` is a snapshot of each module's raw `./analysis/`
+output (`<case_id>_evidence/analysis/...` for FAN, `.../memory/...` for FAME,
+`.../storage/`+`.../exports/` for FAST), preserved **before** the
+`./analysis/` WIP cleanup so that `--source-data` citations in research notes
+remain independently verifiable after cleanup. Produced automatically by `analyze_pcap.sh`/`fame_analyze.sh`/`fast_analyze.sh`
+(the `/fame` and `/fast` skills invoke these scripts directly, so they get this
+for free). The interactive `/fan` skill runs each module independently rather
+than through `analyze_pcap.sh`, so it must perform the equivalent rsync+zip
+step itself before chain-of-custody/cleanup — see that skill's "Preserve raw
+analysis artifacts" section.
 
 The `--case-id` passed to all three module scripts is the **shared base ID** (e.g., `NIST-HACK-2026`). The module prefix (FAN/FAME/FAST) is encoded as a subdirectory, not part of the case ID.
 
@@ -223,11 +238,12 @@ Two entry points — choose based on whether Claude is in the loop:
 1. Analyst drops PCAP into the evidence vault or provides a path directly.
 2. 22 protocol threat-detection modules run. All WIP output goes to `./analysis/`.
 3. A versioned incident report is generated: MD to `./reports/<case_id>/FAN/<pcap_stem>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
-4. The report is uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
-5. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
-6. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
+4. Claude hand-authors the per-case campaign report (`<case_id>_campaign_report.md`) per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)` — for single-module cases this presents this module's findings in board-deck format; if FAME or FAST reports already exist for the same case ID, it becomes a unified cross-module report instead.
+5. The report(s) are uploaded to the configured investigations vault at `$INVESTIGATIONS_ROOT/<case_id>/reports/` (see "Investigations vault configuration" below). If the vault isn't configured yet, this step is skipped and reports stay in `./reports/<case_id>/`.
+6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
+7. All `./analysis/` WIP directories for this PCAP are deleted — the analysis folder is left empty.
 
-**Investigations vault** — case folders live at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop.
+**Investigations vault** — case folders live at `$INVESTIGATIONS_ROOT/<case_id>/reports/` on the configured vault host (e.g. `/home/sansforensics/cases/<case_id>/reports/` on a SANS SIFT box is one example).
 
 ## Forensic analysis memory (FAME)
 
@@ -245,7 +261,7 @@ Two entry points — choose based on whether Claude is in the loop:
 1. Analyst provides a memory image path.
 2. `fame_analyze.sh` runs Volatility 3 plugins (pslist, psscan, netstat, netscan, malfind, svcscan, modules, filescan, cmdline). If a `baselines/baseline.json` is present, it also runs Memory Baseliner (proc/drv/svc comparison); without one this step is skipped. Linux images fall back to strings-based extraction when ISF symbols are unavailable.
 3. Reports are generated: MD to `./reports/<case_id>/FAME/<hostname>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
-4. If FAN or FAST reports exist for the same case ID, Claude hand-authors the campaign report per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)`.
+4. Claude hand-authors the per-case campaign report (`<case_id>_campaign_report.md`) per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)` — for single-module cases this presents this module's findings in board-deck format; if FAN or FAST reports already exist for the same case ID, it becomes a unified cross-module report instead.
 5. All reports are uploaded to the investigations vault via MCP (`investigations_write_file`).
 6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
 
@@ -267,17 +283,68 @@ Two entry points — choose based on whether Claude is in the loop:
 1. Analyst provides a disk image path (E01, VMDK, raw, or any TSK-compatible format).
 2. `fast_analyze.sh` mounts the image read-only, runs TSK tools (fls, fsstat, mmls, ils, icat), extracts artifacts (EVTX, registry, prefetch, MFT, USN journal, SRUM, browser history), and runs bulk_extractor for carving.
 3. Reports are generated: MD to `./reports/<case_id>/FAST/<hostname>/`, PDF/PPTX/DOCX to `./reports/<case_id>/documents/`.
-4. If FAN or FAME reports exist for the same case ID, Claude hand-authors the campaign report per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)`.
+4. Claude hand-authors the per-case campaign report (`<case_id>_campaign_report.md`) per `docs/campaign_report_template.md`, then renders it via `lib/render_campaign_report.render(md_path, case_id, hostname)` — for single-module cases this presents this module's findings in board-deck format; if FAN or FAME reports already exist for the same case ID, it becomes a unified cross-module report instead.
 5. All reports are uploaded to the investigations vault via MCP.
 6. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim `.jsonl`, SHA-256 fingerprinted) in `./reports/<case_id>/documents/` and uploaded alongside.
 
 **Output voice:** Claude instructs itself to *enhance and elaborate when necessary* on every FAST report section.
 
 MCP servers for vault access:
-- `evidence` (read-only, SSH to `sansforensics@ubuntudesktop`, root: `/home/sansforensics/evidence/`): `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`
-- `investigations` (read-write): `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`
+- `evidence` (read-only, root: `$EVIDENCE_ROOT/`): `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`
+- `investigations` (read-write, root: `$INVESTIGATIONS_ROOT/`): `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`
 
-The SSH-to-`ubuntudesktop` form above is the canonical (production) registration and is not committed. For local development you can register the same servers as plain local processes (`"command": "python3"`, `args: [".../mcp/evidence_server.py"]`) and point them at a local directory via the `EVIDENCE_ROOT` env var — keep this in your gitignored `.claude/settings.local.json`, not the committed `settings.json`.
+**Default registration is local**, not SSH: `scripts/setup_folder_structure.sh`
+auto-generates `.claude/settings.json` with both servers run as plain local
+`python3` processes (`"command": "python3"`, `args: [".../mcp/evidence_server.py"]`),
+with `EVIDENCE_ROOT`/`INVESTIGATIONS_ROOT` in the `env` block pointing at the
+local `~/evidence` and `~/cases` directories. This is the committed config and
+needs no further setup.
+
+**Alternative — remote vault host:** if evidence or cases live on a separate
+host, register the servers over SSH instead (e.g. `sansforensics@ubuntudesktop`
+on a SANS SIFT box is one example, not a fixed requirement) — see the
+docstrings in `mcp/evidence_server.py` / `mcp/investigations_server.py` for the
+exact registration. This SSH-based registration is **not committed**; keep it
+in your gitignored `.claude/settings.local.json`, not the committed
+`settings.json`.
+
+> **Note:** `EVIDENCE_ROOT`/`INVESTIGATIONS_ROOT` in `.claude/settings.json`
+> (local MCP server roots, set above) are independent of the same-named
+> variables described below in "Investigations vault configuration" (the
+> remote report-upload destination set via `~/.soc_env`/`configure_vault.sh`)
+> — the two serve different purposes and can point at different locations.
+
+## Investigations vault configuration
+
+The investigations vault destination (where `/fan`, `/fame`, `/fast` upload finished
+reports at the end of every pipeline) is **not hardcoded** — it is read from
+environment variables, normally set in `~/.soc_env`. This is unrelated to the
+local `EVIDENCE_ROOT`/`INVESTIGATIONS_ROOT` used by the MCP servers above
+(those are set in `.claude/settings.json` and point at local directories):
+
+| Variable | Purpose |
+|----------|---------|
+| `INVESTIGATIONS_SSH_HOST` | SSH target (`user@host`) for the vault |
+| `INVESTIGATIONS_ROOT` | Remote root directory, e.g. `/home/sansforensics/cases` |
+| `INVESTIGATIONS_SSH_KEY` | SSH identity file (default: `~/.ssh/id_ed25519`) |
+| `EVIDENCE_SSH_HOST` / `EVIDENCE_ROOT` | Same, for a remotely-registered evidence MCP server (EVIDENCE_SSH_HOST defaults to `INVESTIGATIONS_SSH_HOST`) |
+
+**Guided setup:** `./scripts/configure_vault.sh user@host /remote/root [ssh_key]`
+writes/updates these in `~/.soc_env` (idempotent — see
+`templates/set_env_template.sh` for the full template, mirroring
+`./scripts/ensure_evidence_path.sh` for the evidence mount).
+
+**If the vault is not configured** (`INVESTIGATIONS_SSH_HOST` unset),
+`lib/investigations_upload.py` and `lib/case_packager.py` skip the upload and
+print setup guidance instead of failing against a hardcoded host — reports stay
+local under `./reports/<case_id>/`.
+
+**Agentic coordinator behavior:** if an upload step reports the vault is not
+configured, ask the analyst (once per project — not once per case) for the
+destination (`user@host`, remote root path, and SSH key if non-default), then run
+`./scripts/configure_vault.sh` with those values and re-run the upload. The
+persisted `~/.soc_env` is the record of this choice — do not ask again in future
+sessions once it's configured.
 
 ## OpenCTI integration (MCP server)
 
@@ -339,7 +406,7 @@ change to `requirements.txt`.
 - Evidence integrity is paramount. Never write to `/mnt/`, `/media/`, or any `evidence/` directory. This is **enforced in code**, not just convention: `lib/path_guard.py` is the single source of truth — every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail (`WritePolicyError`) on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). The MCP `investigations_server` independently rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`. The shell analyze scripts source `scripts/pathguard.sh`, which verifies evidence mounts are read-only (`fgff_assert_ro_mount`) before any analysis runs. Run `python3 lib/path_guard.py --test` to validate the allow/deny matrix.
 - Untrusted input is validated before it reaches a path, shell, or renderer sink: `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` (`validate_case_id` in `lib/case_manager.py`; `fgff_validate_case_id` in `scripts/pathguard.sh`) so it cannot traverse out of the output/cases root; `batch_agentic.sh` rejects unsafe characters in the full evidence path (not just the basename) before it enters the agentic prompt; report PDF rendering uses `md_to_pdf.safe_url_fetcher` to block `file://`/SSRF resource fetches triggered by malicious evidence text; and vault uploads use SSH `StrictHostKeyChecking=accept-new`. The MCP file servers jail paths with `Path.is_relative_to` (not a string prefix). See [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md) for the full guardrail table.
 - Analysis WIP goes to `./analysis/` only. The analysis folder must be empty after a completed investigation.
-- Finalized reports are stored in the investigations vault (`/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop).
+- Finalized reports are stored in the investigations vault (`$INVESTIGATIONS_ROOT/<case_id>/reports/` on the configured vault host — see "Investigations vault configuration"). If unconfigured, reports stay in `./reports/<case_id>/`.
 - Report timestamps use the timezone of the incident's geographical location. If unknown, use UTC and state it explicitly.
 - Internal processing, vault storage, and log entries use UTC.
 - Scoped conclusions must cite their evidence source (e.g., "as observed in the PCAP file", "as found in the memory dump").

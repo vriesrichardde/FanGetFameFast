@@ -1,8 +1,8 @@
 {
-  "name": "FanGetFameFast Claude Code (ARM64)",
+  "name": "FanGetFameFast SIFT (amd64)",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "../.."
   },
   "remoteUser": "vscode",
   "remoteEnv": {
@@ -13,7 +13,7 @@
     "PIP_DISABLE_PIP_VERSION_CHECK": "1"
   },
   "mounts": [
-    "source=${localEnv:FGFF_EVIDENCE_INPUT:/tmp},target=/home/vscode/evidence,type=bind,readonly,consistency=cached"
+    "source=${localEnv:EVIDENCE_PATH:/tmp},target=/home/vscode/evidence,type=bind,readonly,consistency=cached"
   ],
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {

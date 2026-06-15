@@ -60,10 +60,12 @@ Supported file types:
   Compressed  : .7z  .zip  (archives are kept; extracted files deleted after analysis)
   FAME        : .mem  .img  .raw  .lime  .vmem  .dmp
   FAST        : .E01  .ewf  .vmdk  .vdi  .qcow2  .vhd  .vhdx
-  FAN         : .pcap  .pcapng  .cap  (uses bash path — no /fan skill yet)
+  FAN         : .pcap  .pcapng  .cap
 
-Each FAME and FAST case is driven by Claude via 'claude -p "/fame ..."' or
-'claude -p "/fast ..."', producing research notes alongside the formal report.
+Each case is driven by Claude via 'claude -p "/fame ..."', 'claude -p "/fast ..."',
+or 'claude -p "/fan ..."', producing research notes (with the full
+triage->sweep->hypothesize->interpret->reflect loop, Toolbox B deep dives, and
+hand-authored narrative) alongside the formal report.
 EOF
     exit 0
 }
@@ -310,21 +312,17 @@ _process_file() {
             fi
             ;;
         FAN)
-            # FAN has no single agentic skill yet — fall back to the shell script.
-            # Pass --reports-persist-dir so FAN reports land in ./reports/ and
-            # are available to the batch report generator after WIP cleanup.
-            local common_flags=()
-            [[ $NO_VAULT -eq 1 ]] && common_flags+=("--no-vault")
-            if bash "$SCRIPT_DIR/analyze_pcap.sh" "$file" \
-                    --case-id "$case_id" \
-                    --reports-persist-dir "$REPORTS_DOCS_DIR" \
-                    "${common_flags[@]+"${common_flags[@]}"}"; then
+            # Route through the /fan agentic coordinator (triage->sweep->hypothesize
+            # ->interpret->reflect loop, Toolbox B deep dives, hand-authored
+            # narrative + campaign report) instead of the bare analyze_pcap.sh
+            # baseline sweep, so batch FAN cases get the same depth as FAME/FAST.
+            if claude -p "/fan \"$file\" --case-id \"$case_id\"$extra_args"; then
                 PASS=$((PASS + 1))
                 _check_followup "$case_id" "FAN" "$stem"
             else
                 status="failed"
                 FAIL=$((FAIL + 1))
-                _manifest_add_error "FAN analysis failed for: $file"
+                _manifest_add_error "FAN agentic analysis failed for: $file"
             fi
             ;;
     esac

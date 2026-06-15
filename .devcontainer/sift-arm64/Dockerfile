@@ -1,13 +1,30 @@
-FROM mcr.microsoft.com/devcontainers/python:1-3.11-bookworm
+# SIFT Workstation edition (arm64) — installs SANS SIFT via `cast install`
+# (https://www.sans.org/tools/sift-workstation, Option 2a) on top of the same
+# Ubuntu base, then layers on tools known not to be covered by SIFT's
+# saltstack states for this architecture.
+#
+# Base image must be Ubuntu (cast/teamdfir's saltstack states target
+# Ubuntu 20.04/22.04), unlike the Debian-based default `.devcontainer/Dockerfile`.
+FROM mcr.microsoft.com/devcontainers/base:ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Prevent interactive wireshark/tshark package configuration during image build.
 RUN echo 'wireshark-common wireshark-common/install-setuid boolean false' | debconf-set-selections
 
+# ---------------------------------------------------------------------------
+# Base toolset (apt) — same coverage as `.devcontainer/Dockerfile`, kept as a
+# safety net for anything `cast install` below doesn't provide on arm64.
+# Trim duplicates once a build confirms SIFT's saltstack states already
+# install the equivalent tool.
+# ---------------------------------------------------------------------------
 RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        # Python (base:ubuntu22.04 has no Python by default)
+        python3 \
+        python3-pip \
+        python3-venv \
         # Build tools
         build-essential \
         cmake \
@@ -15,13 +32,14 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         curl \
         wget \
         git \
+        gpg \
         # Node.js (Claude Code CLI)
         nodejs \
         npm \
         # Network forensics
         tshark \
         wireshark-common \
-        # silk-tools and yaf are not available in Bookworm apt; built from
+        # silk-tools and yaf are not available in Ubuntu 22.04 apt; built from
         # source in post-create.sh per https://tools.netsa.cert.org/silk/silk-on-box-deb.html
         # Build deps for libfixbuf → SiLK → YAF source builds:
         libglib2.0-dev \
@@ -107,4 +125,25 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         fonts-liberation \
         fonts-liberation2 \
         fonts-noto-core \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
+# ---------------------------------------------------------------------------
+# SANS SIFT Workstation via cast (https://www.sans.org/tools/sift-workstation,
+# Option 2a). Best-effort: `cast install` runs SaltStack states designed for a
+# full Ubuntu host, so some states (e.g. systemd service management) are
+# expected to fail inside a container build. Failures here don't abort the
+# build — the apt-based toolset above and `post-create.sh` (idempotent
+# `command -v` checks) cover the gaps. After a successful build, review the
+# `cast install` log for failed states and add any missing tools above.
+# ---------------------------------------------------------------------------
+ARG CAST_VERSION=1.0.20
+ARG TARGETARCH=arm64
+RUN curl -fsSL -o /tmp/cast.deb \
+        "https://github.com/ekristen/cast/releases/download/v${CAST_VERSION}/cast-v${CAST_VERSION}-linux-${TARGETARCH}.deb" \
+    && dpkg -i /tmp/cast.deb \
+    && rm -f /tmp/cast.deb
+
+RUN cast install --no-os-check --user vscode teamdfir/sift \
+    || echo "[sift] cast install reported failures on arm64 — see comment above for follow-up"

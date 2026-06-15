@@ -4,14 +4,20 @@
 """
 investigations_upload.py — Upload incident reports to the investigations vault.
 
-Connects to ubuntudesktop as sansforensics via SSH/SCP and writes the report
-files to INVESTIGATIONS_ROOT/<case_id>/reports/, mirroring the path structure
-used by investigations_server.py.
+Connects to the configured investigations vault host via SSH/SCP and writes the
+report files to INVESTIGATIONS_ROOT/<case_id>/reports/, mirroring the path
+structure used by investigations_server.py.
 
-SSH host / root are read from environment variables (set in ~/.soc_env):
-  INVESTIGATIONS_SSH_HOST  — default: sansforensics@ubuntudesktop
-  INVESTIGATIONS_ROOT      — default: /home/sansforensics/cases
+SSH host / root / key are read from environment variables, normally set via
+`./scripts/configure_vault.sh user@host /remote/root [ssh_key]` (persisted to
+~/.soc_env — see templates/set_env_template.sh):
+  INVESTIGATIONS_SSH_HOST  — e.g. sansforensics@ubuntudesktop (a SANS SIFT box)
+  INVESTIGATIONS_ROOT      — e.g. /home/sansforensics/cases
   INVESTIGATIONS_SSH_KEY   — default: ~/.ssh/id_ed25519
+
+If INVESTIGATIONS_SSH_HOST is unset, the vault is considered "not configured":
+uploads are skipped with guidance to run configure_vault.sh, and reports stay
+in ./reports/.
 
 Pass --no-upload to skip the upload entirely (reports stay in ./reports/).
 Pass --interactive to be prompted for each setting with the default pre-filled.
@@ -27,9 +33,20 @@ import sys
 from pathlib import Path
 
 
-SSH_HOST    = os.environ.get("INVESTIGATIONS_SSH_HOST", "sansforensics@ubuntudesktop")
-REMOTE_ROOT = os.environ.get("INVESTIGATIONS_ROOT",     "/home/sansforensics/cases")
+SSH_HOST    = os.environ.get("INVESTIGATIONS_SSH_HOST", "")
+REMOTE_ROOT = os.environ.get("INVESTIGATIONS_ROOT",     "")
 SSH_KEY     = os.environ.get("INVESTIGATIONS_SSH_KEY",  str(Path.home() / ".ssh" / "id_ed25519"))
+
+NOT_CONFIGURED_MSG = (
+    "[upload] Investigations vault is not configured — reports stay in ./reports/.\n"
+    "[upload] To configure: ./scripts/configure_vault.sh user@host /remote/root [ssh_key]\n"
+    "[upload]   (see templates/set_env_template.sh for details)"
+)
+
+
+def _vault_configured() -> bool:
+    """True if INVESTIGATIONS_SSH_HOST has been set (via ~/.soc_env or the environment)."""
+    return bool(os.environ.get("INVESTIGATIONS_SSH_HOST"))
 
 
 def _ssh_opts(key: str) -> list[str]:
@@ -144,9 +161,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--docx",                        metavar="FILE",  help="Local Word document path (optional)")
     p.add_argument("--zip",  action="append",        metavar="FILE",  help="Local artefact ZIP path (may be repeated)")
     p.add_argument("--notes",                       metavar="FILE",  help="Local research notes Markdown path (optional)")
-    p.add_argument("--host",        default=SSH_HOST,                help=f"SSH target user@host (default: {SSH_HOST}; env: INVESTIGATIONS_SSH_HOST)")
+    p.add_argument("--host",        default=SSH_HOST,                help=f"SSH target user@host (env: INVESTIGATIONS_SSH_HOST; currently: {SSH_HOST or 'not configured'})")
     p.add_argument("--key",         default=SSH_KEY,                 help=f"SSH identity file (default: {SSH_KEY}; env: INVESTIGATIONS_SSH_KEY)")
-    p.add_argument("--remote-root", default=REMOTE_ROOT,             help=f"Remote root path (default: {REMOTE_ROOT}; env: INVESTIGATIONS_ROOT)")
+    p.add_argument("--remote-root", default=REMOTE_ROOT,             help=f"Remote root path (env: INVESTIGATIONS_ROOT; currently: {REMOTE_ROOT or 'not configured'})")
     p.add_argument("--interactive", action="store_true",             help="Prompt for SSH settings and upload confirmation before proceeding")
     p.add_argument("--no-upload",   action="store_true",             help="Skip upload entirely; reports stay in ./reports/")
     return p
@@ -162,6 +179,10 @@ if __name__ == "__main__":
 
     if args.no_upload:
         print("[upload] --no-upload specified — skipping. Reports are in ./reports/")
+        sys.exit(0)
+
+    if not _vault_configured() and not args.interactive:
+        print(NOT_CONFIGURED_MSG)
         sys.exit(0)
 
     host        = args.host
@@ -188,6 +209,6 @@ if __name__ == "__main__":
         )
     except subprocess.CalledProcessError as exc:
         print(f"[upload] ERROR: SSH/SCP failed: {exc.stderr.decode(errors='replace')}", file=sys.stderr)
-        print("[upload] Tip: set INVESTIGATIONS_SSH_HOST / INVESTIGATIONS_SSH_KEY in ~/.soc_env,")
+        print("[upload] Tip: re-run ./scripts/configure_vault.sh to fix the host/key/root,")
         print("[upload]      or re-run with --no-upload to skip.")
         sys.exit(1)

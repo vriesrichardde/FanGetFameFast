@@ -34,7 +34,6 @@ LICENSE_OVERRIDES = {
     "markdown": "BSD-3-Clause",
     "plotly": "MIT",
     "volatility3": "VSL-1.0",          # Volatility Software License v1.0 (BSD-derived)
-    "sslyze": "AGPL-3.0-or-later",
     "memprocfs": "AGPL-3.0-or-later",
     "weasyprint": "BSD-3-Clause",
     "cairocffi": "BSD-3-Clause",
@@ -173,7 +172,7 @@ def render_markdown(sbom: dict) -> str:
         f"not present in the generating environment; their version is taken "
         f"from the pin.\n\n"
         f"## License notes\n\n"
-        f"- **AGPL-3.0** components (`sslyze`, `memprocfs`) are copyleft. They are "
+        f"- **AGPL-3.0** component (`memprocfs`) is copyleft. It is "
         f"invoked as separate tools / optional modules and are not statically linked "
         f"into the dual Apache-2.0/MIT codebase, but redistribution of a combined "
         f"work should account for their terms.\n"

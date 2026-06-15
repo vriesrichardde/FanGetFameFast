@@ -602,7 +602,8 @@ Negative cross-module results are evidence of scope containment and must be cite
 | Re-running the generator after manual Markdown edits | Expected — generator always rebuilds MD from raw analysis files | No action needed: if `<case_id>_fame_report.md` already exists the new auto-generated content is written to `<case_id>_fame_report_generated.md` instead, preserving the primary file. Review the draft and promote manually if desired. |
 | ISF symbol error / hanging | No symbol file for this kernel | Use `--offline` flag; fall back to strings extraction |
 | `malfind` filled with JIT hits | .NET or Java process | Triage hits manually; ignore regions backed by clr.dll or jvm.dll |
-| Upload SSH error | ubuntudesktop unreachable | Check `ping ubuntudesktop`; use `--no-upload` to skip |
+| Upload skipped: "vault not configured" | `INVESTIGATIONS_SSH_HOST`/`INVESTIGATIONS_ROOT` unset | Run `./scripts/configure_vault.sh user@host /remote/root` (see `templates/set_env_template.sh`); reports stay in `./reports/` until then |
+| Upload SSH error | Configured vault host unreachable | Check connectivity to `$INVESTIGATIONS_SSH_HOST`; use `--no-upload` to skip |
 | Memory Baseliner flags everything | Wrong baseline JSON | Verify baseline was taken from a matching OS/patch level |
 
 ---

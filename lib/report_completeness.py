@@ -18,8 +18,9 @@ Two independent checks, both required for a report to be considered complete:
 ``<case_id>_INVESTIGATION_INCOMPLETE.json`` in the module/host case directory, and
 removes that marker once both checks pass (self-clearing).
 
-``check_campaign_report()`` flags multi-module cases that are missing
-``<case_id>_campaign_report.md``.
+``check_campaign_report()`` flags any case with at least one generated module
+report that is missing ``<case_id>_campaign_report.md`` — every case gets a
+campaign report, single-module or multi-module.
 
 Used by ``generate_fame_report.py``, ``generate_fast_report.py`` and
 ``generate_pcap_report.py`` right after they load the narrative, and by the
@@ -154,7 +155,7 @@ def check_research_notes(case_id: str, case_dir: Path) -> ReasoningResult:
 
 
 def check_campaign_report(case_id: str, reports_dir: Path | None = None) -> bool:
-    """True if >=2 modules have generated reports for *case_id* but
+    """True if >=1 module has a generated report for *case_id* but
     ``<case_id>_campaign_report.md`` does not exist yet."""
     reports_dir = Path(reports_dir) if reports_dir else REPORTS_DIR
     case_root = reports_dir / case_id
@@ -168,7 +169,7 @@ def check_campaign_report(case_id: str, reports_dir: Path | None = None) -> bool
                 (module_dir.is_dir() and any(module_dir.glob("*/*_incident_report.md"))):
             modules_with_reports += 1
 
-    if modules_with_reports < 2:
+    if modules_with_reports < 1:
         return False
 
     return not (case_root / f"{case_id}_campaign_report.md").exists()

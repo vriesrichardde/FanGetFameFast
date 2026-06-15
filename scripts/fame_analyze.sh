@@ -13,9 +13,9 @@
 #   ./scripts/fame_analyze.sh /path/to/image.mem --case-id FAME-2026-001 --hostname SERVER1234
 #   ./scripts/fame_analyze.sh /path/to/image.mem --case-id FAME-2026-001 --no-vault
 #
-# Environment variables (set in ~/.soc_env):
-#   INVESTIGATIONS_SSH_HOST  — default: sansforensics@ubuntudesktop
-#   INVESTIGATIONS_ROOT      — default: /home/sansforensics/cases
+# Environment variables (set via ./scripts/configure_vault.sh, persisted in ~/.soc_env):
+#   INVESTIGATIONS_SSH_HOST  — vault SSH target; if unset, upload is skipped with guidance
+#   INVESTIGATIONS_ROOT      — vault remote root path
 #   OPENCTI_URL              — OpenCTI API endpoint
 #   OPENCTI_API_KEY          — OpenCTI API key
 
@@ -572,7 +572,7 @@ if [[ $SKIP_UPLOAD -eq 0 ]]; then
     fi
 
     python3 "$PROJECT_ROOT/lib/investigations_upload.py" "${UPLOAD_ARGS[@]}" || \
-        echo "[fame] WARNING: Upload failed — check SSH connectivity to ubuntudesktop."
+        echo "[fame] WARNING: Upload failed — check INVESTIGATIONS_SSH_HOST connectivity or run ./scripts/configure_vault.sh."
 
     # Upload campaign report if generated
     CAMPAIGN_MD="$CASE_ROOT/${CASE_ID}_campaign_report.md"
