@@ -28,60 +28,31 @@ raw tool output.
 The unified cross-case report (`CAMPAIGN_<batch_id>_report.*`) is generated once at the
 end of a batch by `/investigate-all` — not per individual FAST case.
 
+See `docs/investigation_discipline.md` for the research-notes cadence, the
+narrative file contract (shared `pptx_*` schema), cross-module correlation,
+campaign-report authoring, and the `lib/report_completeness.py` completeness
+gate — all shared with FAN and FAME. This file covers only FAST-specific
+content: the TSK/EWF/bulk_extractor step table, FAST's narrative `section_*`
+keys, and the deep-dive methodology below.
+
 ---
 
 ## Research Notes
 
 Every FAST investigation produces a **research notes file** (`./reports/<case_id>/FAST/<hostname>/<case_id>_research_notes.md`)
-alongside the formal report. The notes are a timestamped, step-by-step investigative log that lets
-any analyst follow the complete workflow, rationale, and findings from start to finish.
+alongside the formal report. Follow `docs/investigation_discipline.md` §1 for
+the full research-notes cadence (mandatory rule, deviation logging, the
+`init`/`step`/`reflect`/`event`/`finalize` calls, traceability convention,
+and the distinction between auto-logged "Evidence preserved" steps and
+Claude-authored interpretation). FAST-specific deviation examples:
 
-> **MANDATORY RULE: Do NOT proceed to the next analysis step until the current step has been
-> documented in the research notes via `python3 lib/research_notes.py step ...`. Running a tool
-> and immediately launching the next one without logging is not permitted. Read the output,
-> interpret it, call `step`, then advance.**
+- `ewfmount` fails → `step --title "Deviation: ewfmount failed — using qemu-nbd instead"`
+- Filesystem mount fails (dirty NTFS) → `step --title "Deviation: dirty filesystem — added norecovery flag"`
+- `fls` returns no deleted entries → `step --title "Deviation: no deleted entries — filesystem may have been wiped; proceeding with blkls + photorec"`
+- Artifact not present (Prefetch, SRUM, etc.) → `step --title "Deviation: Prefetch absent — possible T1070.004 or non-Windows image"`
+- A tool crashes or times out → `step --title "Deviation: <tool> failed — reason and workaround"`
 
-> **MANDATORY DEVIATION LOGGING: Any time the analysis deviates from the standard workflow —
-> a step is skipped, a fallback is used, a tool returns unexpected results, or an analytical
-> decision is made that differs from the normal path — this MUST be logged as its own `step`
-> call with `--title "Deviation: <what changed>"`. Examples that require a deviation step:**
->
-> - `ewfmount` fails → `step --title "Deviation: ewfmount failed — using qemu-nbd instead"`
-> - Filesystem mount fails (dirty NTFS) → `step --title "Deviation: dirty filesystem — added norecovery flag"`
-> - `fls` returns no deleted entries → `step --title "Deviation: no deleted entries — filesystem may have been wiped; proceeding with blkls + photorec"`
-> - Artifact not present (Prefetch, SRUM, etc.) → `step --title "Deviation: Prefetch absent — possible T1070.004 or non-Windows image"`
-> - A tool crashes or times out → `step --title "Deviation: <tool> failed — reason and workaround"`
->
-> The deviation log ensures any analyst reading the notes understands WHY the investigation
-> took a different path and can reproduce or challenge that decision.
-any analyst follow the complete workflow, rationale, and findings from start to finish.
-
-**Three calls to make during every investigation:**
-
-### 1 — At investigation start (before running any tools)
-
-```bash
-python3 lib/research_notes.py init \
-  --case-id <case_id> \
-  --module fast \
-  --evidence /path/to/image.E01 \
-  --hostname <hostname>
-```
-
-### 2 — After reading and interpreting each tool output
-
-Call `step` once per analysis action, immediately after Claude has read and understood the output:
-
-```bash
-python3 lib/research_notes.py step \
-  --case-id <case_id> \
-  --title "Image Verification (ewfverify)" \
-  --action "ewfverify /path/to/image.E01 → <case_id>_evidence/storage/ewfverify.txt" \
-  --why "<case-specific reason — see guidance below>" \
-  --outcome "MD5 and SHA1 hashes verified successfully. No corruption detected. [source: <case_id>_evidence/storage/ewfverify.txt]" \
-  --dismissed "<what you inspected and decided was not significant — see guidance below>" \
-  [--raw "verification output if it shows errors or unexpected checksums"]
-```
+`init` is called with `--module fast --evidence /path/to/image.E01 --hostname <hostname>`.
 
 **`--why` — write the case-specific reason, not a generic tool description.** Explain the hypothesis you are testing or the question you are answering *at this moment in this investigation*. Do not restate what the tool does.
 > ✗ Generic (do not write): `"Hash verification confirms evidence integrity — required before any findings can be cited in legal proceedings"`
@@ -93,7 +64,7 @@ python3 lib/research_notes.py step \
 > - `"mactime shows no file activity outside 08:00–09:00 UTC window — no evidence of persistence installed outside the incident timeframe"`
 > - `"browser history present but all domains are legitimate corporate sites; no C2 or phishing domains identified"`
 
-**Traceability convention:** always reference the **preserved evidence path** (`<case_id>_evidence/storage/<tool>.txt`) in both `--action` and at the end of `--outcome` as `[source: <case_id>_evidence/storage/<tool>.txt]`. This survives the `./analysis/` cleanup and unambiguously links each research-notes step to the artifact that produced it.
+Evidence paths use `<case_id>_evidence/storage/<tool>.txt`.
 
 **Steps that each require a `step` call (in order):**
 
@@ -148,9 +119,8 @@ This uses the `reflect` subcommand, not `step`. It does not increment the RN cou
 
 ### 2b — When you discover a confirmed attacker action in the evidence
 
-Whenever TSK tools, MFT analysis, EVTX parsing, prefetch records, or bulk_extractor output
-reveals an action **performed by the attacker** — and that action has a **confirmed
-timestamp from the evidence** — log it immediately using the `event` subcommand:
+Follow `docs/investigation_discipline.md` §1d (the `event` subcommand,
+severity levels, and the confirmed-timestamp rule). Example for FAST:
 
 ```bash
 python3 lib/research_notes.py event \
@@ -163,45 +133,12 @@ python3 lib/research_notes.py event \
   --detail "Deletion timestamp 08:07:02 UTC from mactime — precedes orderly shutdown; SHA256 matches known RAT dropper"
 ```
 
-**Rules:**
-- **Only call `event` if there is a confirmed timestamp** from an artifact (MAC time,
-  event log timestamp, prefetch execution time, USN journal entry). Do not estimate.
-- If a significant finding has **no confirmed timestamp**, log it as a `step` instead and
-  do NOT call `event`. It will appear in the *Unconfirmed Findings* section of the report.
-- `--severity critical` — direct evidence of compromise, active malware, ransomware execution
-- `--severity high` — deleted executables, privilege escalation artefacts, persistence keys
-- `--severity medium` — anomalies that may be benign but require follow-up
-- `--source` must name the specific artifact (inode, MFT entry, registry path, file path)
-
 ### 3 — Pre-finalize open leads review (mandatory)
 
-Before calling `finalize`, read the complete research notes file from top to bottom:
-
-```bash
-cat ./reports/<case_id>/FAST/<hostname>/<case_id>_research_notes.md
-```
-
-For every finding marked `[ASSUMPTION]`, every event without a confirmed timestamp, and every
-`--dismissed` observation, ask: does the complete picture explain this, or does it remain open?
-Then write the second reflect entry:
-
-```bash
-python3 lib/research_notes.py reflect \
-  --case-id <case_id> \
-  --trigger "Pre-finalize complete case review" \
-  --reinterpret "<final pass: state any step that needs reinterpretation given the full picture — or: 'All steps consistent with final conclusion'>" \
-  --open-leads "<what this investigation cannot resolve alone — specify what evidence (FAME memory image, FAN PCAP, sandbox detonation) would change or confirm the conclusion>"
-```
-
-Then call finalize:
-
-```bash
-python3 lib/research_notes.py finalize \
-  --case-id <case_id> \
-  --summary "One-paragraph summary: key findings, main pivot point, MITRE techniques confirmed, and conclusion."
-```
-
-Then include the notes file in the upload call.
+Follow `docs/investigation_discipline.md` §1e: read
+`./reports/<case_id>/FAST/<hostname>/<case_id>_research_notes.md` end to end,
+write the pre-finalize `reflect` entry, then call `finalize` with a real
+investigation summary. Then include the notes file in the upload call.
 
 **If `--md-only` was set (batch run via `/investigate-all`) — only MD and notes were generated:**
 ```bash
@@ -242,7 +179,8 @@ rely on `lib/narrative_generator.py`'s keyword-matching heuristics to fill these
 that generator is a headless fallback for batch/no-Claude runs only and produces
 noticeably weaker, often generic content.
 
-### Schema (copy exactly, fill every section)
+For the shared `pptx_*` schema and authoring rules, see
+`docs/investigation_discipline.md` §2. FAST's own narrative sections are:
 
 ```markdown
 <!-- narrative:<case_id> generated:<UTC timestamp> model:claude-sonnet-4-6 -->
@@ -267,57 +205,13 @@ reveal about attacker behaviour? What should an analyst look at first?]
 [Interpret any carved URLs, domains, or IPs from bulk_extractor. Cross-reference
 with FAN findings if available. Note any exfiltration indicators.]
 
-## pptx_executive_summary
-
-[3–5 bullet points. CISO language. No file paths, inode numbers, or hash values.
-Example: "• Evidence of file deletion was found on the server disk image.
-• The deletion timestamps coincide with the reported incident window.
-• No evidence of data exfiltration to external locations was found."]
-
-## pptx_risk
-
-[Business risks: data integrity, regulatory, operational, reputational.
-No technical identifiers.]
-
-## pptx_impact
-
-[What was affected: systems, users, services, data. Business language.]
-
-## pptx_mitigations
-
-[What has already been done and what is in progress.]
-
-## pptx_recommendations
-
-[Concrete follow-up actions with suggested owner labels (CISO / IT / Legal).]
-
-## pptx_timeline
-
-[4-6 bullets: the board-level timeline. Same chronology as attack_timeline, but
-plain language, no file paths/inode numbers/hostnames/RN-NNN citations — "On
-[date] at [time], ..." Each bullet should be readable on its own as a slide line.]
-
-## pptx_root_cause
-
-[1-2 sentences: how did this happen, in plain language — e.g. phishing, an
-exposed/weak service, compromised credentials, an unpatched vulnerability,
-physical access, misconfiguration. Be specific to what you actually found on
-this disk image; do not use a generic placeholder if the evidence supports a
-real conclusion.]
-
-## pptx_lessons_learned
-
-[3-5 bullets: what worked well in this investigation/response, and what gaps
-or improvements this incident points to. Plain language, board-appropriate.]
+... followed by the eight shared pptx_* sections (docs/investigation_discipline.md §2)
 ```
 
-### Rules
-- Write **all** sections even if evidence is thin.
-- Keep management sections (`pptx_*`) free of file paths, inode numbers, sector
-  offsets, hash values, hostnames/workstation IDs, and RN-/EVT- citation
-  references — write them as you would for a board/CISO audience, not a
-  technical one.
-- Use RN-NNN references in `attack_timeline` to link back to research notes.
+Example wording for FAST's `pptx_executive_summary`: *"• Evidence of file
+deletion was found on the server disk image. • The deletion timestamps
+coincide with the reported incident window. • No evidence of data
+exfiltration to external locations was found."*
 
 ---
 
@@ -588,70 +482,14 @@ grep -i "\.mem\b\|\.vmem\b\|\.dmp\b\|hiberfil\.sys\|pagefile\.sys\|\.raw\b\|\.li
 
 ---
 
-## Cross-module correlation
+## Cross-module correlation & Campaign Report
 
-Run the correlation engine **after** bulk_extractor has completed but **before**
-cleaning up `./analysis/` — it reads raw TSK and bulk_extractor output files directly:
-
-```bash
-python3 lib/correlate_findings.py \
-    --case-id <case_id> \
-    --hostname <hostname>
-```
-
-Then log the step in research notes:
-
-```bash
-python3 lib/research_notes.py step \
-  --case-id <case_id> \
-  --title "Cross-module Correlation (FAN / FAME / FAST)" \
-  --action "python3 lib/correlate_findings.py --case-id <case_id> → ./reports/<case_id>_correlation.md" \
-  --why "Correlates netscan connections to PCAP threats (FAN↔FAME), process images to deleted disk entries (FAME↔FAST), and DNS queries to carved URLs (FAN↔FAST) — surfaces kill-chain connections that no single module identifies alone" \
-  --outcome "<N FAN↔FAME matches, M FAME↔FAST matches, K FAN↔FAST matches — key finding>"
-```
-
-| Correlation | What it computes |
-|-------------|-----------------|
-| FAN ↔ FAME | Netscan connections matched to FAN flagged flows — links a specific process to suspicious network traffic |
-| FAME ↔ FAST | Process image names matched to deleted fls entries — confirms post-execution cleanup (T1070.004) |
-| FAN ↔ FAST | DNS-queried domains matched to bulk_extractor carved URLs — confirms active endpoint use |
-
-`correlate_findings.py`'s output (`<case_id>_correlation.md`/`.json`) is a
-**best-effort research aid**, not the campaign report itself: read it as one
-input when drafting Section 3 of the campaign report, but ground that section
-in the research notes regardless — zero matches reported by the tool does not
-mean no correlation exists.
-
----
-
-## Campaign Report (hand-authored)
-
-If FAN, FAME, or another FAST run already exists for this case ID, the
-per-case campaign report (`<case_id>_campaign_report.*`) must be hand-authored,
-not auto-generated:
-
-1. Read this module's research notes end-to-end, plus the research notes of
-   every other module that has completed for this case ID.
-2. Hand-author `./reports/<case_id>/<case_id>_campaign_report.md` following
-   `docs/campaign_report_template.md` — Incident Timeline merged across
-   modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs from at least
-   two modules (or stating explicitly that none exist), unified MITRE/IOC
-   tables, and a hand-curated Hallucination Guard FND-list with an overall
-   confidence percentage. `lib/correlate_findings.py`'s output and
-   `lib/generate_combined_report.py`'s `_merge_*`/`_extract_*` helpers may be
-   used as research aids when pre-populating tables.
-3. Render it to PDF/PPTX/DOCX:
-   ```python
-   import sys; sys.path.insert(0, "./lib")
-   from render_campaign_report import render
-
-   paths = render(md_path="./reports/<case_id>/<case_id>_campaign_report.md",
-                   case_id="<case_id>", hostname="<hostname>")
-   ```
-
-`lib/generate_combined_report.py`'s `generate()` is deprecated for this
-workflow — it remains only as an automated fallback for `--md-only`/headless
-batch runs or very-low-evidence cases.
+Follow `docs/investigation_discipline.md` §3 (cross-module correlation via
+`lib/correlate_findings.py`) and §4 (hand-authored campaign report +
+completeness check via `lib/report_completeness.py --campaign-check`). Run
+the correlation engine **after** bulk_extractor has completed but **before**
+cleaning up `./analysis/` — it reads raw TSK and bulk_extractor output files
+directly.
 
 ---
 
@@ -1227,7 +1065,8 @@ FAST writes confirmed findings to the Obsidian vault automatically:
 | fls shows no deleted files | Filesystem was wiped | Run `blkls -u` for carving; use `photorec` |
 | mactime empty | bodyfile is empty | Verify `fls -r -m /` wrote content |
 | pptx or docx not generated | Missing Python package | `pip3 install python-pptx python-docx` |
-| Upload SSH error | ubuntudesktop unreachable | Check connectivity; use `--no-upload` |
+| Upload skipped: "vault not configured" | `INVESTIGATIONS_SSH_HOST`/`INVESTIGATIONS_ROOT` unset | Run `./scripts/configure_vault.sh user@host /remote/root` (see `templates/set_env_template.sh`); reports stay in `./reports/` until then |
+| Upload SSH error | Configured vault host unreachable | Check connectivity to `$INVESTIGATIONS_SSH_HOST`; use `--no-upload` |
 | bulk_extractor slow | Large image | Limit to targeted features: `-e url -e domain -e email` |
 
 ---

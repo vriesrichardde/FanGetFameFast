@@ -27,6 +27,14 @@ header() { echo ""; echo -e "${C_BOLD}${C_CYAN}══ $* ══${C_RESET}"; }
 PASSED=0; FAILED=0
 TEST_EVIDENCE=1; TEST_INVESTIGATIONS=1; TEST_OPENCTI=1
 
+# Vault destination (see ./scripts/configure_vault.sh / templates/set_env_template.sh).
+# EVIDENCE_SSH_HOST falls back to INVESTIGATIONS_SSH_HOST since both servers usually
+# live on the same remote host.
+INVESTIGATIONS_SSH_HOST="${INVESTIGATIONS_SSH_HOST:-}"
+INVESTIGATIONS_ROOT="${INVESTIGATIONS_ROOT:-}"
+EVIDENCE_SSH_HOST="${EVIDENCE_SSH_HOST:-$INVESTIGATIONS_SSH_HOST}"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-}"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --evidence-only)      TEST_INVESTIGATIONS=0; TEST_OPENCTI=0; shift ;;
@@ -64,53 +72,63 @@ mcp_ping() {
     fi
 }
 
-# ── 1. Evidence MCP server (SSH → ubuntudesktop) ─────────────────────────────
+# ── 1. Evidence MCP server (SSH → configured vault host) ─────────────────────
 if [[ $TEST_EVIDENCE -eq 1 ]]; then
-    header "Evidence MCP Server (sansforensics@ubuntudesktop)"
+    header "Evidence MCP Server"
 
-    info "Checking SSH connectivity to ubuntudesktop ..."
-    if timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=4 sansforensics@ubuntudesktop true 2>/dev/null; then
-        ok "SSH: sansforensics@ubuntudesktop reachable"
-
-        info "Checking evidence_server.py exists on remote ..."
-        if ssh sansforensics@ubuntudesktop "test -f /home/sansforensics/evidence/evidence_server.py" 2>/dev/null; then
-            ok "Remote file: /home/sansforensics/evidence/evidence_server.py"
-        else
-            fail "Remote file not found: /home/sansforensics/evidence/evidence_server.py"
-            warn "Deploy with: scp $PROJECT_ROOT/mcp/evidence_server.py sansforensics@ubuntudesktop:/home/sansforensics/evidence/"
-        fi
-
-        info "Sending MCP initialize to evidence server ..."
-        mcp_ping "Evidence MCP initialize" 10 \
-            ssh sansforensics@ubuntudesktop \
-            "EVIDENCE_ROOT=/home/sansforensics/evidence python3 /home/sansforensics/evidence/evidence_server.py"
+    if [[ -z "$EVIDENCE_SSH_HOST" || -z "$EVIDENCE_ROOT" ]]; then
+        warn "Evidence vault not configured — set EVIDENCE_SSH_HOST/EVIDENCE_ROOT"
+        warn "(or run ./scripts/configure_vault.sh; see templates/set_env_template.sh)"
     else
-        fail "SSH: cannot reach sansforensics@ubuntudesktop (timeout or key error)"
+        info "Checking SSH connectivity to $EVIDENCE_SSH_HOST ..."
+        if timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=4 "$EVIDENCE_SSH_HOST" true 2>/dev/null; then
+            ok "SSH: $EVIDENCE_SSH_HOST reachable"
+
+            info "Checking evidence_server.py exists on remote ..."
+            if ssh "$EVIDENCE_SSH_HOST" "test -f $EVIDENCE_ROOT/evidence_server.py" 2>/dev/null; then
+                ok "Remote file: $EVIDENCE_ROOT/evidence_server.py"
+            else
+                fail "Remote file not found: $EVIDENCE_ROOT/evidence_server.py"
+                warn "Deploy with: scp $PROJECT_ROOT/mcp/evidence_server.py $EVIDENCE_SSH_HOST:$EVIDENCE_ROOT/"
+            fi
+
+            info "Sending MCP initialize to evidence server ..."
+            mcp_ping "Evidence MCP initialize" 10 \
+                ssh "$EVIDENCE_SSH_HOST" \
+                "EVIDENCE_ROOT=$EVIDENCE_ROOT python3 $EVIDENCE_ROOT/evidence_server.py"
+        else
+            fail "SSH: cannot reach $EVIDENCE_SSH_HOST (timeout or key error)"
+        fi
     fi
 fi
 
-# ── 2. Investigations MCP server (SSH → ubuntudesktop) ───────────────────────
+# ── 2. Investigations MCP server (SSH → configured vault host) ───────────────
 if [[ $TEST_INVESTIGATIONS -eq 1 ]]; then
-    header "Investigations MCP Server (sansforensics@ubuntudesktop)"
+    header "Investigations MCP Server"
 
-    info "Checking SSH connectivity to ubuntudesktop ..."
-    if timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=4 sansforensics@ubuntudesktop true 2>/dev/null; then
-        ok "SSH: sansforensics@ubuntudesktop reachable"
-
-        info "Checking investigations_server.py exists on remote ..."
-        if ssh sansforensics@ubuntudesktop "test -f /home/sansforensics/cases/investigations_server.py" 2>/dev/null; then
-            ok "Remote file: /home/sansforensics/cases/investigations_server.py"
-        else
-            fail "Remote file not found: /home/sansforensics/cases/investigations_server.py"
-            warn "Deploy with: scp $PROJECT_ROOT/mcp/investigations_server.py sansforensics@ubuntudesktop:/home/sansforensics/cases/"
-        fi
-
-        info "Sending MCP initialize to investigations server ..."
-        mcp_ping "Investigations MCP initialize" 10 \
-            ssh sansforensics@ubuntudesktop \
-            "INVESTIGATIONS_ROOT=/home/sansforensics/cases python3 /home/sansforensics/cases/investigations_server.py"
+    if [[ -z "$INVESTIGATIONS_SSH_HOST" || -z "$INVESTIGATIONS_ROOT" ]]; then
+        warn "Investigations vault not configured — set INVESTIGATIONS_SSH_HOST/INVESTIGATIONS_ROOT"
+        warn "(run ./scripts/configure_vault.sh user@host /remote/root; see templates/set_env_template.sh)"
     else
-        fail "SSH: cannot reach sansforensics@ubuntudesktop (timeout or key error)"
+        info "Checking SSH connectivity to $INVESTIGATIONS_SSH_HOST ..."
+        if timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=4 "$INVESTIGATIONS_SSH_HOST" true 2>/dev/null; then
+            ok "SSH: $INVESTIGATIONS_SSH_HOST reachable"
+
+            info "Checking investigations_server.py exists on remote ..."
+            if ssh "$INVESTIGATIONS_SSH_HOST" "test -f $INVESTIGATIONS_ROOT/investigations_server.py" 2>/dev/null; then
+                ok "Remote file: $INVESTIGATIONS_ROOT/investigations_server.py"
+            else
+                fail "Remote file not found: $INVESTIGATIONS_ROOT/investigations_server.py"
+                warn "Deploy with: scp $PROJECT_ROOT/mcp/investigations_server.py $INVESTIGATIONS_SSH_HOST:$INVESTIGATIONS_ROOT/"
+            fi
+
+            info "Sending MCP initialize to investigations server ..."
+            mcp_ping "Investigations MCP initialize" 10 \
+                ssh "$INVESTIGATIONS_SSH_HOST" \
+                "INVESTIGATIONS_ROOT=$INVESTIGATIONS_ROOT python3 $INVESTIGATIONS_ROOT/investigations_server.py"
+        else
+            fail "SSH: cannot reach $INVESTIGATIONS_SSH_HOST (timeout or key error)"
+        fi
     fi
 fi
 

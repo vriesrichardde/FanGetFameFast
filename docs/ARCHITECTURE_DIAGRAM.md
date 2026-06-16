@@ -110,6 +110,8 @@ flowchart TB
     classDef out fill:#7c2d12,stroke:#fdba74,color:#fff
 ```
 
+![diagram 01 one slide system overview](assets/diagrams/diagram_01_one_slide_system_overview.png)
+
 **The one-sentence pitch:** *Every serious incident leaves traces in the network, in memory,
 and on disk. A human can read each one. Nobody can correlate all three fast enough to matter
 during a live incident. FanGetFameFast does — and it shows its work.*
@@ -150,6 +152,8 @@ flowchart LR
     classDef corr fill:#7f1d1d,stroke:#fca5a5,color:#fff
     classDef out fill:#064e3b,stroke:#34d399,color:#fff
 ```
+
+![diagram 02 the agentic investigation loop](assets/diagrams/diagram_02_the_agentic_investigation_loop.png)
 
 **Why it matters to the judges:** the loop is *enforced*, not aspirational. The FAME/FAST/FAN
 skills carry a **MANDATORY RULE**: *"Do NOT proceed to the next analysis step until the current
@@ -206,6 +210,8 @@ flowchart TB
     classDef drop fill:#7f1d1d,stroke:#fca5a5,color:#fff
 ```
 
+![diagram 03 trust reliability layer](assets/diagrams/diagram_03_trust_reliability_layer.png)
+
 **The anti-hallucination guarantee:** vault entries are derived **only** from the
 analyst-reviewed report tables — never auto-scraped from raw tool output. A value an analyst
 did not vet into the final report never becomes an institutional record. Rows explicitly marked
@@ -241,6 +247,8 @@ flowchart LR
     classDef report fill:#7c2d12,stroke:#fdba74,color:#fff
     classDef vault fill:#064e3b,stroke:#34d399,color:#fff
 ```
+
+![diagram 04 audit trail traceability chain](assets/diagrams/diagram_04_audit_trail_traceability_chain.png)
 
 A judge can pick **any** IOC or TTP in the vault, read its `source: … RN-NNN` attribution, open the
 matching research note, follow the `[source: …]` tag to the preserved artifact file, and re-run the
@@ -314,6 +322,8 @@ flowchart TB
     classDef deny fill:#7f1d1d,stroke:#fca5a5,color:#fff
 ```
 
+![diagram 05 architectural guardrails](assets/diagrams/diagram_05_architectural_guardrails.png)
+
 **Test-for-bypass talking point:** the evidence MCP server has **no write handlers at all** — a
 write is not "denied", it is *unimplemented*. Path traversal (`../../etc/passwd`) and sibling-prefix
 escape (`evidence_exfil`) are rejected by `_safe_path()` because the resolved absolute path fails the
@@ -347,6 +357,8 @@ flowchart TB
     classDef flag fill:#7c2d12,stroke:#fdba74,color:#fff
     classDef ok fill:#064e3b,stroke:#34d399,color:#fff
 ```
+
+![diagram 06 anti hallucination pipeline](assets/diagrams/diagram_06_anti_hallucination_pipeline.png)
 
 Every branch that is *not* a confirmed fact is **visibly flagged** in the report rather than
 silently dropped or silently asserted. The reader always knows the epistemic status of a claim.
@@ -386,6 +398,8 @@ flowchart TB
     classDef p fill:#064e3b,stroke:#34d399,color:#fff
 ```
 
+![diagram 07 failure handling self correction map](assets/diagrams/diagram_07_failure_handling_self_correction_map.png)
+
 Bash orchestrators run `set -euo pipefail` for fail-fast on *critical* steps, while *optional*
 steps use `|| true` + a logged warning so a missing tool degrades gracefully. Python integrations
 (`fame_memprocfs.py`, `perplexity_client.py`, `investigations_upload.py`) **return structured
@@ -418,6 +432,8 @@ flowchart LR
     classDef out fill:#064e3b,stroke:#34d399,color:#fff
 ```
 
+![diagram 08 cross module correlation](assets/diagrams/diagram_08_cross_module_correlation.png)
+
 A single suspicious network connection found by FAN asks FAME *which process opened it* and FAST
 *what landed on disk*. The correlation engine assigns confidence by the **number of independent
 modules** that corroborate the same pivot — a single-source artifact is explicitly tagged
@@ -448,6 +464,8 @@ flowchart TB
     classDef log fill:#4c1d95,stroke:#c4b5fd,color:#fff
     classDef out fill:#064e3b,stroke:#34d399,color:#fff
 ```
+
+![diagram 09 batch campaign scale out](assets/diagrams/diagram_09_batch_campaign_scale_out.png)
 
 The manifest records every case outcome and de-duplicates already-processed stems, so an
 interrupted batch resumes without re-analyzing completed evidence.

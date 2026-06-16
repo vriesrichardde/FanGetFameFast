@@ -87,9 +87,10 @@ nano ~/.soc_env            # fill in PERPLEXITY_API_KEY, OPENCTI_URL, OPENCTI_AP
 echo 'source ~/.soc_env' >> ~/.bashrc
 source ~/.soc_env
 
-# 5. Set up SSH key access to the investigations vault (ubuntudesktop)
+# 5. Set up SSH key access to the investigations vault, then configure its destination
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""    # skip if you already have this key
-ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+ssh-copy-id -i ~/.ssh/id_ed25519 user@your-vault-host
+./scripts/configure_vault.sh user@your-vault-host /remote/cases/root
 
 # 6. Verify
 ./scripts/test_solution.sh
@@ -106,18 +107,18 @@ Container**, or `devcontainer up`). The image builds the full forensic toolchain
 — tshark, Volatility 3, The Sleuth Kit, EWF tools, bulk_extractor, YARA,
 Suricata, WeasyPrint — plus the Claude Code CLI, on both amd64 and arm64.
 
-To analyze your own evidence inside the container, point `FGFF_EVIDENCE_INPUT` at
-a directory of images on the **host** before building it:
+To analyze your own evidence inside the container, set `EVIDENCE_PATH` to a
+directory of images on the **host** before building it:
 
 ```bash
-export FGFF_EVIDENCE_INPUT="/path/to/your/evidence"   # then build / rebuild the container
+./scripts/ensure_evidence_path.sh /path/to/your/evidence   # then build / rebuild the container
 ```
 
-That directory is mounted read-only at `/home/vscode/evidence`. If the variable
-is unset the container still builds and starts — the mount falls back to a
-placeholder, so nothing breaks and you can supply evidence paths by hand. API
-credentials are still set via `~/.soc_env` inside the container as in step 4
-above.
+That directory is mounted read-only at `/home/vscode/evidence`. If
+`EVIDENCE_PATH` is unset it falls back to `/tmp` and the container still builds
+and starts — the mount is just a placeholder, so nothing breaks and you can
+supply evidence paths by hand. API credentials are still set via `~/.soc_env`
+inside the container as in step 4 above.
 
 ### Analyze network traffic
 
@@ -131,7 +132,7 @@ cd /path/to/FanGetFameFast
 ./scripts/analyze_pcap.sh /path/to/capture.pcap --case-id FAN-2026-001
 ```
 
-The finished report goes to `/home/sansforensics/cases/FAN-2026-001/reports/` on ubuntudesktop. All WIP files under `./analysis/` are deleted once the upload completes.
+The finished report goes to `$INVESTIGATIONS_ROOT/FAN-2026-001/reports/` on the configured vault host (see "SSH key setup for report upload" below; reports stay in `./reports/` if unconfigured). All WIP files under `./analysis/` are deleted once the upload completes.
 
 ---
 
@@ -168,7 +169,7 @@ FAN is a manual PCAP investigation pipeline. There is no daemon or auto-trigger.
 4. IP and FQDN extraction runs; each indicator is enriched via vault lookup then Perplexity on a cache miss
 5. An incident report (Markdown + PDF) is generated in `./analysis/_reports/<stem>/`
 6. A management PowerPoint briefing (PPTX) is generated in `./analysis/_reports/<stem>/`
-7. The reports and management briefing are uploaded to the investigations vault: `/home/sansforensics/cases/<case_id>/` on ubuntudesktop via SSH/SCP
+7. The reports and management briefing are uploaded to the configured investigations vault: `$INVESTIGATIONS_ROOT/<case_id>/` via SSH/SCP (skipped with setup guidance if not configured)
 8. Vault recording runs: IOCs, TTPs, and the case summary are written to `./vault/`
 9. The full Claude Code coordination session is recorded as a chain-of-evidence transcript (Markdown + PDF + verbatim, SHA-256-fingerprinted `.jsonl`)
 10. Every artifact for the case — reports, the transcript, exhibits, and all module outputs — is bundled into a single timestamped ZIP with a SHA-256 manifest (in `./exports/`) and uploaded to the vault. The bundle runs **after** the transcript so the transcript travels inside it
@@ -727,20 +728,25 @@ Credentials (`OPENCTI_URL`, `OPENCTI_API_KEY`) come from environment variables s
 
 ### SSH key setup for report upload
 
-`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the investigations vault on ubuntudesktop. It reads the SSH private key from `~/.ssh/id_ed25519`. The key must be authorized on the remote host before any investigation can complete:
+`lib/investigations_upload.py` uses SSH/SCP to copy finished reports to the configured investigations vault (`INVESTIGATIONS_SSH_HOST`/`INVESTIGATIONS_ROOT`, set via `./scripts/configure_vault.sh` — see `templates/set_env_template.sh`). It reads the SSH private key from `INVESTIGATIONS_SSH_KEY` (default `~/.ssh/id_ed25519`). The key must be authorized on the remote host before any investigation can complete:
 
 ```bash
 # Generate a key if you do not have one
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
 
-# Authorize it on ubuntudesktop
-ssh-copy-id -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop
+# Authorize it on your vault host
+ssh-copy-id -i ~/.ssh/id_ed25519 user@your-vault-host
+
+# Configure the destination (writes to ~/.soc_env)
+./scripts/configure_vault.sh user@your-vault-host /remote/cases/root
 
 # Test
-ssh -i ~/.ssh/id_ed25519 sansforensics@ubuntudesktop "echo OK"
+ssh -i ~/.ssh/id_ed25519 user@your-vault-host "echo OK"
 ```
 
-Without this, the final upload step fails and the finished report stays in `./analysis/_reports/<stem>/` rather than being moved to the investigations vault.
+If the vault is not configured at all, the upload step is skipped with setup
+guidance and the finished report stays in `./reports/<case_id>/` rather than
+being moved to a vault.
 
 ### Verifying MCP servers
 
@@ -884,8 +890,9 @@ All variables are set in `~/.soc_env` (template: `templates/set_env_template.sh`
 | `PERPLEXITY_API_KEY` | Yes | Perplexity.ai API key (`pplx-...`) |
 | `OPENCTI_URL` | Yes (for OpenCTI) | OpenCTI instance URL, e.g. `http://localhost:8080` |
 | `OPENCTI_API_KEY` | Yes (for OpenCTI) | OpenCTI API token from Settings → API access |
-| `INVESTIGATIONS_SSH_HOST` | No | SSH target for investigations vault (default: `sansforensics@ubuntudesktop`) |
-| `INVESTIGATIONS_ROOT` | No | Remote root path for case output (default: `/home/sansforensics/cases`) |
+| `INVESTIGATIONS_SSH_HOST` | No (vault upload skipped if unset) | SSH target for investigations vault — set via `./scripts/configure_vault.sh` |
+| `INVESTIGATIONS_ROOT` | No (vault upload skipped if unset) | Remote root path for case output — set via `./scripts/configure_vault.sh` |
+| `INVESTIGATIONS_SSH_KEY` | No | SSH identity file for vault upload (default: `~/.ssh/id_ed25519`) |
 | `EVIDENCE_ROOT` | No | Override local evidence root (default: `~/evidence`) |
 | `PYTHONPATH` | No (for AutoTimeliner) | Must include path to Volatility 3 source, e.g. `/opt/volatility3-2.20.0` |
 

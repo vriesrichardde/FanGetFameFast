@@ -21,8 +21,14 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
         # Network forensics
         tshark \
         wireshark-common \
-        silk-tools \
-        yaf \
+        # silk-tools and yaf are not available in Bookworm apt; built from
+        # source in post-create.sh per https://tools.netsa.cert.org/silk/silk-on-box-deb.html
+        # Build deps for libfixbuf → SiLK → YAF source builds:
+        libglib2.0-dev \
+        liblzo2-dev \
+        zlib1g-dev \
+        libgnutls28-dev \
+        libmaxminddb-dev \
         # File / process utilities
         inotify-tools \
         jq \

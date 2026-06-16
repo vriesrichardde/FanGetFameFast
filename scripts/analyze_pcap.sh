@@ -320,6 +320,12 @@ REPORT_DOCX="$DOCS_DIR/${STEM}_fan_report.docx"
 [[ ! -f "$REPORT_MD" ]] && { err "Report markdown not found — aborting upload."; exit 1; }
 ok "Report v${REPORT_VERSION}: $REPORT_MD"
 
+# ── Completeness check ───────────────────────────────────────────────────────
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --check \
+    --case-id "$CASE_ID" --module FAN --case-dir "$CASE_DIR" || true
+python3 "$PROJECT_ROOT/lib/report_completeness.py" --campaign-check \
+    --case-id "$CASE_ID" --reports-dir "$PROJECT_ROOT/reports" || true
+
 # ── Bundle all artefacts into a zip ──────────────────────────────────────────
 header "Bundling Artefacts"
 
@@ -430,6 +436,13 @@ fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$PCAP_ABS"
 header "Bundling & Uploading Artifacts"
 source "$SCRIPT_DIR/package_artifacts.sh"
 fgff_package_artifacts "$CASE_ID" "$CASE_ROOT" "$DOCS_DIR" "$STEM" 1 "$REPORTS_TMP"
+
+# ── Chain-of-custody manifest (post-package) ─────────────────────────────────
+# Re-run the custody update so the case ZIP just written above is itself hashed
+# into the manifest, and every prior artifact's hash is re-verified immediately
+# before upload. update_manifest() is idempotent. Best-effort.
+header "Updating Chain-of-Custody Manifest (post-package)"
+fgff_update_custody "$CASE_ID" "$CASE_ROOT" "$PCAP_ABS"
 
 # ── Cleanup WIP analysis directories ─────────────────────────────────────────
 header "Cleaning Up WIP Analysis Directories"

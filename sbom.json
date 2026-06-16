@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:25b8523a-eaac-47c3-924d-8120c774b0a5",
+  "serialNumber": "urn:uuid:4c847484-3ede-4ba3-a95f-ab0ebbb94a12",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-06-07T07:30:19Z",
+    "timestamp": "2026-06-15T19:31:53Z",
     "tools": [
       {
         "vendor": "FanGetFameFast",
@@ -59,7 +59,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -84,7 +84,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -109,7 +109,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -123,7 +123,7 @@
       "licenses": [
         {
           "license": {
-            "id": "MIT"
+            "name": "UNKNOWN"
           }
         }
       ],
@@ -134,7 +134,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -148,7 +148,7 @@
       "licenses": [
         {
           "license": {
-            "id": "MIT"
+            "name": "UNKNOWN"
           }
         }
       ],
@@ -159,7 +159,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -184,7 +184,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -198,7 +198,7 @@
       "licenses": [
         {
           "license": {
-            "id": "MIT"
+            "name": "UNKNOWN"
           }
         }
       ],
@@ -209,7 +209,7 @@
         },
         {
           "name": "resolved:installed",
-          "value": "true"
+          "value": "false"
         }
       ]
     },
@@ -281,31 +281,6 @@
         {
           "name": "requirement:spec",
           "value": "==4.3.1"
-        },
-        {
-          "name": "resolved:installed",
-          "value": "true"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:pypi/sslyze",
-      "name": "sslyze",
-      "version": "5.0.0",
-      "purl": "pkg:pypi/sslyze@5.0.0",
-      "scope": "required",
-      "licenses": [
-        {
-          "license": {
-            "id": "AGPL-3.0-or-later"
-          }
-        }
-      ],
-      "properties": [
-        {
-          "name": "requirement:spec",
-          "value": "==5.0.0"
         },
         {
           "name": "resolved:installed",

@@ -12,7 +12,25 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 **Authors:** Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman  
 **Platform:** Ubuntu 24.04 LTS (x86-64)  
-**License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)
+**License:** Apache 2.0 or MIT (your choice) — see [LICENSE](LICENSE)  
+**Hackathon submission:** [devpost.com/software/fan-get-fame-fast](https://devpost.com/software/fan-get-fame-fast)
+
+---
+
+## Submission checklist
+
+| Requirement | Location |
+|-------------|----------|
+| Code repository | [github.com/vriesrichardde/FanGetFameFast](https://github.com/vriesrichardde/FanGetFameFast) |
+| Open source license | [LICENSE](LICENSE) (MIT) · [LICENSE-APACHE](LICENSE-APACHE) (Apache 2.0) |
+| README with setup instructions | [Installation](#installation) and [Quick start](#quick-start) below |
+| Step-by-step setup instructions | [Installation](#installation) below · [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
+| Features and functionality description | [What it does](#what-it-does) below · intro paragraphs above |
+| Demonstration video | [YouTube — Fan Get Fame Fast](https://youtu.be/6NrNfietggo) |
+| Architecture diagram | [docs/ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) · [docs/assets/diagrams/](docs/assets/diagrams/) |
+| Evidence dataset documentation | [accuracy/dataset_documentation.md](accuracy/dataset_documentation.md) |
+| Accuracy report | [accuracy/accuracy.md](accuracy/accuracy.md) · [accuracy/claim_traceability_audit.md](accuracy/claim_traceability_audit.md) |
+| Agent execution logs | Case ZIPs (see [Judges — sample cases](#judges--sample-cases)) — each ZIP contains the verbatim `.jsonl` Claude Code session log, SHA-256 fingerprinted and rendered as Markdown + PDF |
 
 ---
 
@@ -26,9 +44,9 @@ The goal is simple: the analyst spends 100% of their time on analysis. The repor
 
 ## Demo video
 
-[![Fan Get Fame Fast — demonstration](https://img.youtube.com/vi/G04gxgqYDk4/hqdefault.jpg)](https://www.youtube.com/watch?v=G04gxgqYDk4)
+[![Fan Get Fame Fast — demonstration](https://img.youtube.com/vi/6NrNfietggo/hqdefault.jpg)](https://youtu.be/6NrNfietggo)
 
-Watch the live walkthrough: **[Fan Get Fame Fast — demonstration](https://www.youtube.com/watch?v=G04gxgqYDk4)**
+Watch the live walkthrough: **[Fan Get Fame Fast — demonstration](https://youtu.be/6NrNfietggo)**
 
 ---
 
@@ -48,7 +66,7 @@ All three modules are live. When more than one module has run against the same c
 
 You point FAN at a PCAP — either by dropping it into the evidence vault or by passing a path directly — and the script asks for a case ID if you didn't supply one, then opens a running research-notes log that every subsequent step appends to. It starts by extracting the netflow picture (unique IPs, FQDNs, conversations) and then sweeps the capture with its full battery of protocol threat detectors: ARP, DHCP, DNS, HTTP/S, ICMP, LLMNR, mDNS, NBNS, NetBIOS, NTP, QUIC, SNMP, SSDP, STUN, TCP, UDP, and TLS (including certificate inspection and JA4 fingerprinting). On top of the protocol layer it extracts and hashes transferred files, runs a Suricata IDS pass, and sweeps both the raw capture and any carved files with YARA rules. When OpenCTI or Perplexity are configured, the IPs and FQDNs are enriched against external threat intelligence; when they are not, FAN leans on the local vault cache and continues.
 
-From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP with a SHA-256 integrity manifest. The reports and that artifact ZIP are uploaded to the investigations vault at `/home/sansforensics/cases/<case_id>/reports/` on ubuntudesktop, and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — recorded *before* the ZIP so it travels inside it, and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
+From those outputs Claude writes a versioned incident report (Markdown + PDF), generates a CISO-facing management briefing as a PowerPoint deck, and bundles every artifact into a timestamped ZIP with a SHA-256 integrity manifest. The reports and that artifact ZIP are uploaded to the configured investigations vault at `$INVESTIGATIONS_ROOT/<case_id>/reports/` (set up once via `./scripts/configure_vault.sh`; `/home/sansforensics/cases/<case_id>/reports/` on a SANS SIFT box is one example destination, not a fixed one — see `templates/set_env_template.sh`), and the entire Claude Code coordination session is captured as a chain-of-evidence transcript — Markdown, PDF, and the verbatim, SHA-256-fingerprinted `.jsonl` — recorded *before* the ZIP so it travels inside it, and uploaded alongside them. Finally the `./analysis/` working directories for that capture are deleted, leaving the analysis folder empty while the finalized reports persist in `./reports/` and in the vault.
 
 ---
 
@@ -126,12 +144,14 @@ Model Context Protocol (MCP) servers are how the AI coordinator reaches the outs
 
 | Server | Access | Root |
 |--------|--------|------|
-| `evidence` | Read-only (SSH) | `/home/sansforensics/evidence/` on ubuntudesktop |
-| `investigations` | Read-write | `/home/sansforensics/cases/` on ubuntudesktop |
+| `evidence` | Read-only (SSH) | `$EVIDENCE_ROOT/` on the configured evidence host |
+| `investigations` | Read-write | `$INVESTIGATIONS_ROOT/` on the configured vault host |
 | `opencti` | Read-write | Your OpenCTI instance |
 
+The vault host/root/SSH key are configured once via `./scripts/configure_vault.sh` (persisted to `~/.soc_env` — see `templates/set_env_template.sh`); a SANS SIFT box (`sansforensics@ubuntudesktop`, `/home/sansforensics/...`) is one example deployment, not a fixed requirement.
+
 - **`evidence` — read-only access to the source material.** This server lets the coordinator list, read, and fingerprint evidence files (and find PCAPs) over SSH, but it is **physically incapable of writing** — the connection is read-only by design. This is the first line of defence for evidence integrity: even if the coordinator were instructed to modify a memory image or disk image, this path cannot do it. Tools: `evidence_list_directory`, `evidence_read_file`, `evidence_get_file_info`, `evidence_find_pcaps`.
-- **`investigations` — read-write access to the case vault.** This is where finalized reports, transcripts, and artifact bundles are stored, organized per case under `/home/sansforensics/cases/<case_id>/reports/`. It is the *only* write path the coordinator has to durable storage, and it independently enforces the write policy — it rejects any write under `/mnt`, `/media`, or the evidence root, and jails every path inside the case root — so a malformed case ID or a path-traversal attempt cannot escape it. Tools: `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`.
+- **`investigations` — read-write access to the case vault.** This is where finalized reports, transcripts, and artifact bundles are stored, organized per case under `$INVESTIGATIONS_ROOT/<case_id>/reports/`. It is the *only* write path the coordinator has to durable storage, and it independently enforces the write policy — it rejects any write under `/mnt`, `/media`, or the evidence root, and jails every path inside the case root — so a malformed case ID or a path-traversal attempt cannot escape it. Tools: `investigations_list_directory`, `investigations_read_file`, `investigations_write_file`, `investigations_create_directory`, `investigations_delete`, `investigations_get_file_info`, `investigations_list_cases`.
 - **`opencti` — structured threat-intelligence exchange.** This server connects the platform to your OpenCTI instance so the coordinator can both *consume* accumulated STIX intelligence (searching entities and indicators) and *contribute* new indicators discovered during an investigation, closing the loop between what is found on the wire/in memory/on disk and your organization's central CTI knowledge base. Tools: `opencti_search_stix`, `opencti_search_ioc`, `opencti_create_indicator`. This server is optional — see [Live threat intel](#live-threat-intel-perplexity) and the [requirements note](#requirements) under Installation.
 
 ---
@@ -167,7 +187,7 @@ These are not style guidelines — they are the rules that make the platform tru
 - **Evidence is never written to — and that's enforced in code, not by convention.** The platform must never write to `/mnt/`, `/media/`, or any `evidence/` directory, because altering source material would destroy its evidentiary value and break chain of custody. This is guaranteed by `lib/path_guard.py`, the single source of truth for the write policy: every Python write chokepoint (`obsidian_bridge`, `md_to_pdf`, all `generate_*` report generators, `case_packager`) routes through `assert_writable`/`guard_output_dir`, which hard-fail with `WritePolicyError` on any write outside the approved output folders (`analysis`, `exports`, `reports`, `archive`, `vault`, `cases`, `demo`, `docs`, plus the OS temp dir). Two independent layers back this up: the `investigations` MCP server separately rejects writes under `/mnt`, `/media`, or `EVIDENCE_ROOT`, and the shell analyze scripts source `scripts/pathguard.sh` to confirm evidence mounts are read-only *before* any analysis runs. Validate the whole allow/deny matrix with `python3 lib/path_guard.py --test`.
 - **Untrusted evidence input is validated before it can reach a dangerous sink.** Evidence is attacker-controlled data, so anything derived from it is treated as hostile until proven safe: a `case_id` is constrained to `[A-Za-z0-9._-]{1,64}` so it cannot traverse out of the case/output root, PDF rendering blocks `file://`/SSRF resource fetches that malicious text in an evidence file might trigger, and the MCP file servers jail every path with `Path.is_relative_to` rather than a string prefix. The full guardrail table is in [docs/DEPLOYMENT_GUIDE.md §13](docs/DEPLOYMENT_GUIDE.md), and a CycloneDX SBOM of the dependency set is checked in at [sbom.json](sbom.json) (regenerate with `python3 scripts/generate_sbom.py`) so the supply chain is auditable.
 - **Working files live only in `./analysis/`, and that folder is emptied when an investigation completes.** All intermediate, work-in-progress output is confined to one place so it is easy to reason about and clean up; a completed investigation leaves `./analysis/` empty, which is both a tidiness guarantee and a signal that the pipeline ran to the end and the only surviving outputs are the finalized reports.
-- **Finalized reports live in the investigations vault, not in the project directory.** The authoritative copy of every report is stored per case under `/home/sansforensics/cases/<case_id>/reports/` (via the `investigations` MCP server), so deliverables are centralized, durable, and separated from the working code checkout.
+- **Finalized reports live in the investigations vault, not in the project directory.** The authoritative copy of every report is stored per case under `$INVESTIGATIONS_ROOT/<case_id>/reports/` (via the `investigations` MCP server), so deliverables are centralized, durable, and separated from the working code checkout. If the vault isn't configured yet (`./scripts/configure_vault.sh`), reports stay locally in `./reports/<case_id>/`.
 - **Report timestamps use the incident's local timezone; when it's unknown, UTC is used and said so explicitly.** A forensic timeline is only meaningful if the reader knows which clock it's on, so reports are anchored to the timezone where the incident actually happened — and never silently default to UTC, which would misrepresent when events occurred.
 - **All internal processing, vault storage, and log entries use UTC.** While *reports* speak in incident-local time for the reader, the platform's own bookkeeping is kept in a single, unambiguous reference timezone so records from different cases and machines can be ordered and compared without conversion errors.
 - **Every scoped conclusion must name the evidence source it rests on.** Conclusions are written as scoped, sourced statements — e.g. "as observed in the PCAP file" or "as found in the memory dump" — so a reader (or a court) can always see exactly which artifact supports a claim, and an absence of evidence in one source is never overstated as proof across all sources.
@@ -403,17 +423,25 @@ code .
 # Then: "Reopen in Container" (Dev Containers extension), or `devcontainer up`.
 ```
 
-**Mounting evidence (optional):** set `FGFF_EVIDENCE_INPUT` on the **host** to a
+**Mounting evidence (optional):** set `EVIDENCE_PATH` on the **host** to a
 directory of memory/disk images **before** building the container. It is mounted
 read-only at `/home/vscode/evidence` inside the container.
 
 ```bash
-export FGFF_EVIDENCE_INPUT="/path/to/your/evidence"   # then rebuild the container
+./scripts/ensure_evidence_path.sh /path/to/your/evidence   # then rebuild the container
 ```
 
-If the variable is unset the container still builds and starts normally — the
-evidence mount simply falls back to a harmless placeholder, so you can explore
-the solution and supply evidence paths manually later.
+`./scripts/ensure_evidence_path.sh` persists `export EVIDENCE_PATH=...` in
+`~/.bashrc` so every future shell/VS Code window has it set. The checked-in
+[.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) reads it via
+`${localEnv:EVIDENCE_PATH:/tmp}` — `${localEnv:...}` is resolved on the **host**,
+from the environment of the shell/process that launches VS Code, so it must be
+set there (and a new shell/VS Code window opened) before "Reopen in Container".
+
+If the variable is unset, `EVIDENCE_PATH` falls back to `/tmp` and the container
+still builds and starts normally — the evidence mount is just a harmless
+placeholder, so you can explore the solution and supply evidence paths manually
+later.
 
 ### Required API credentials
 
@@ -459,15 +487,36 @@ This README is the overview; the detailed documentation lives in `docs/` and a f
 - **Actually investigating a case?** → [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — day-to-day investigation workflows, how to use the vault before and after a case, and how to read and interpret the generated reports.
 - **Extending the platform or integrating with it?** → [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md) — module internals, the `lib/` Python API (the per-module reference that previously lived in this README), and the MCP server protocol.
 - **Want the big picture first?** → [docs/ARCHITECTURE_DIAGRAM.md](docs/ARCHITECTURE_DIAGRAM.md) — how FAN, FAME, FAST, the coordinator, the vault, and the MCP/CTI layers fit together.
+- **Already using protocol-sift on a SIFT Workstation?** → [docs/PROTOCOL_SIFT_INTEGRATION.md](docs/PROTOCOL_SIFT_INTEGRATION.md) — what FanGetFameFast adds on top, a side-by-side coverage comparison, and the recommended adoption path.
 - **Need the dependency inventory?** → [sbom.json](sbom.json) (machine-readable CycloneDX) with a human-readable summary in [sbom.md](sbom.md).
 - **Before you point it at anything?** → [DISCLAIMER.md](DISCLAIMER.md) — the authorized-use statement and no-warranty disclaimer. Read this first.
+- **Hit an unexpected behaviour or operational edge case?** → [CONSIDERATIONS.md](CONSIDERATIONS.md) — known limitations, concurrency caveats, consistency notes, and workarounds for current rough edges.
+- **Curious what's coming next?** → [TODO.md](TODO.md) — the active roadmap: nightly-investigation support, output stabilisation, architecture alignment across modules, SIEM integration, and MCP-based evidence gathering.
 
 > The project-specific guidance for the AI coordinator itself lives in [CLAUDE.md](CLAUDE.md), and its report-writing voice/register rules are in [VOICE.md](VOICE.md) — useful background if you want to understand or tune how Claude drives an investigation.
 
 ---
 
+## Judges — sample cases
+
+A password-protected ZIP of all investigation cases is included in the repository root:
+
+**Password (all files):** `FANfameGetFASTH4ckaTh0n!`
+
+Each case is a separate ZIP file (all well under GitHub's 100 MB limit). Every ZIP contains the final reports in all formats, the Markdown source, research notes, the chain-of-custody manifest, and the full Claude Code **prompt log** — the verbatim `.jsonl` of the analyst–AI conversation that produced the investigation, SHA-256 fingerprinted and rendered as Markdown and PDF so the complete reasoning chain is auditable.
+
+| File | Case ID | Domain | Scenario |
+|------|---------|--------|----------|
+| `cases_for_judges_NISTHACK.zip` | NISTHACK | FAN + FAST | MITM / ARP poisoning (NIST hacking dataset, 2004) |
+| `cases_for_judges_NISTLEAK.zip` | NISTLEAK | FAST | Insider data exfiltration via USB ("IAMAN CD") |
+| `cases_for_judges_WIN764NFURY.zip` | WIN764NFURY | FAME + FAST | Malware / credential theft on Windows 7 x64 |
+| `cases_for_judges_NROMANOFF.zip` | NROMANOFF | FAST | Disk forensics — Natasha Romanoff workstation |
+| `cases_for_judges_FAN-2026-NITROBA-V5.zip` | FAN-2026-NITROBA-V5 | FAN | Network intrusion — Nitroba University dataset |
+
+---
+
 ## License
 
-Fan Get Fame Fast is dual-licensed under your choice of the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)) or the **MIT License** ([LICENSE-MIT](LICENSE-MIT)). See [LICENSE](LICENSE) for the dual-license notice.
+Fan Get Fame Fast is dual-licensed under your choice of the **MIT License** ([LICENSE](LICENSE)) or the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)). The full MIT text is in [LICENSE](LICENSE); the full Apache 2.0 text is in [LICENSE-APACHE](LICENSE-APACHE). [LICENSE-MIT](LICENSE-MIT) is a standalone copy of the MIT text for convenience.
 
 *Copyright 2026 Richard de Vries · Jeffrey Everling · Malin Janssen · Suzanne Maquelin · Joost Beekman*

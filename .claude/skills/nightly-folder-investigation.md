@@ -115,6 +115,60 @@ plus already-extracted archive contents) against
 - **Queue empty after re-scan:** stop the loop — "queue empty, no new
   evidence" for tonight.
 
+### 4. Follow-up remediation pass
+
+`batch_agentic.sh` runs each host's `/fame` or `/fast` as a separate
+`claude -p` subprocess with no memory of this session. After report
+generation, `lib/report_completeness.py` checks two things and — if either
+fails — writes
+`reports/<batch_id>/<MODULE>/<hostname>/<batch_id>_INVESTIGATION_INCOMPLETE.json`
+and records `MODULE:hostname` in `batch_work/<batch_id>/needs_followup.txt`:
+
+1. **Narrative gaps** — `<batch_id>_narrative.md` is missing or missing
+   required sections (`attack_timeline`, module-specific `section_*`, all
+   `pptx_*`). Phase 4 of `batch_agentic.sh` already ran the headless
+   `lib/narrative_generator.py` fallback against each flagged host, which may
+   have closed this gap on its own.
+2. **Reasoning gaps** — the research notes show no `Reflect RF-` entries, the
+   `<!-- summary-placeholder -->` was never finalized, or every step is an
+   auto-logged `Evidence preserved: ...` chain-of-custody entry with no
+   Claude-authored interpretation. **The headless fallback cannot fix this —
+   only this session can.**
+
+For each `MODULE:hostname` still listed in
+`batch_work/<batch_id>/needs_followup.txt` (re-read the marker JSON to confirm
+it's still present — Phase 4's fallback may have already cleared the narrative
+portion):
+
+1. Read the preserved evidence under
+   `reports/<batch_id>/<MODULE>/<hostname>/<batch_id>_evidence/` — the same
+   plugin/tool outputs the per-host `claude -p` run already hashed.
+2. Add the missing Claude-authored interpretation steps to
+   `<batch_id>_research_notes.md` via `lib/research_notes.py step` (one per
+   plugin/tool output, following the module's normal step cadence — see
+   `docs/investigation_discipline.md`), then a `reflect` entry, then
+   `finalize` to replace `<!-- summary-placeholder -->` with a real
+   investigation summary.
+3. Hand-write `<batch_id>_narrative.md` per the module's schema in
+   `docs/investigation_discipline.md` (overwrite any Phase-4 fallback content
+   with real, host-specific findings).
+4. Re-run `lib/generate_fame_report.py` / `lib/generate_fast_report.py` for
+   this host (same `--case-dir`/`--docs-dir` the per-host run used) so the
+   report picks up the new narrative and research notes, and confirm
+   `<batch_id>_INVESTIGATION_INCOMPLETE.json` is gone.
+
+If time runs out mid-folder, leave the remaining entries in
+`needs_followup.txt` — they are picked up again the next time this folder's
+batch completes (the file is read fresh each run; already-resolved hosts no
+longer have a marker so they're skipped).
+
+After working through `needs_followup.txt`, check whether any case now has
+`>=2` modules with reports but no `<batch_id>_campaign_report.md`
+(`python3 lib/report_completeness.py --campaign-check --case-id <batch_id>`).
+If flagged, hand-author the campaign report per
+`docs/campaign_report_template.md` and render it via
+`lib/render_campaign_report.py`.
+
 ### 5. Verify and spot-check
 
 - Verify `./analysis/` is empty. Leftover WIP means a case inside the batch
@@ -122,7 +176,9 @@ plus already-extracted archive contents) against
   yourself.
 - Spot-check one or two newly-generated reports under
   `./reports/<batch_id>/` for obviously broken output (empty report, missing
-  sections) before declaring a case successful in the summary.
+  sections, or an `⚠️ INVESTIGATION INCOMPLETE` banner) before declaring a
+  case successful in the summary. After step 4, spot-checked reports should
+  show no `INCOMPLETE` banners.
 
 ### 6. Morning summary
 

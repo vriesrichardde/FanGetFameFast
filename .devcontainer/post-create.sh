@@ -85,6 +85,112 @@ else
     cd /workspaces/FanGetFameFast
 fi
 
+# ---------------------------------------------------------------------------
+# SiLK + YAF — not in Debian Bookworm apt; built from source per:
+#   https://tools.netsa.cert.org/silk/silk-on-box-deb.html
+# Build order: libfixbuf → SiLK → YAF
+# ---------------------------------------------------------------------------
+
+# SHA-256 digests from the official CERT/NetSA download pages:
+#   https://tools.netsa.cert.org/fixbuf2/download.html
+#   https://tools.netsa.cert.org/silk/download.html
+#   https://tools.netsa.cert.org/yaf2/download.html
+# Update these whenever the pinned versions above change.
+_FIXBUF_SHA256="106b8e1e560928a4dc91d8264326bd2463767570d77417535964f450de1f972e"
+_SILK_SHA256="9ea9c1391f9c1ba14394af68b2bd7e66bf73b664c3cee342c5a39e5b13e45398"
+_YAF_SHA256="6b03bc3d25495c01d8d8020b00a908ef1ed28b6edf78f631618208d81e809b30"
+
+_verify_sha256() {
+    local file="$1" expected="$2" label="$3"
+    local actual
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "[devcontainer] ERROR: SHA-256 mismatch for ${label}" >&2
+        echo "[devcontainer]   expected: ${expected}" >&2
+        echo "[devcontainer]   got:      ${actual}" >&2
+        return 1
+    fi
+    echo "[devcontainer] SHA-256 verified: ${label}"
+}
+
+_install_silk_yaf_from_source() {
+    local FIXBUF_VERSION="2.5.4"
+    local SILK_VERSION="3.24.2"
+    local YAF_VERSION="2.19.3"
+    local BASE_URL="https://tools.netsa.cert.org/releases"
+    local tmp; tmp="$(mktemp -d)"
+
+    echo "[devcontainer] Building libfixbuf ${FIXBUF_VERSION} from source..."
+    curl -fsSL "${BASE_URL}/libfixbuf-${FIXBUF_VERSION}.tar.gz" \
+        -o "${tmp}/libfixbuf.tar.gz" \
+        || { echo "[devcontainer] Warning: libfixbuf download failed"; rm -rf "$tmp"; return 1; }
+    _verify_sha256 "${tmp}/libfixbuf.tar.gz" "$_FIXBUF_SHA256" "libfixbuf-${FIXBUF_VERSION}.tar.gz" \
+        || { rm -rf "$tmp"; return 1; }
+    tar -zxf "${tmp}/libfixbuf.tar.gz" -C "$tmp"
+    cd "${tmp}/libfixbuf-${FIXBUF_VERSION}"
+    ./configure --prefix=/usr/local --enable-silent-rules \
+        && make -j"$(nproc)" \
+        && sudo make install \
+        && echo "[devcontainer] libfixbuf ${FIXBUF_VERSION} installed" \
+        || { echo "[devcontainer] Warning: libfixbuf build failed — skipping SiLK + YAF"; rm -rf "$tmp"; return 1; }
+
+    echo "[devcontainer] Building SiLK ${SILK_VERSION} from source..."
+    curl -fsSL "${BASE_URL}/silk-${SILK_VERSION}.tar.gz" \
+        -o "${tmp}/silk.tar.gz" \
+        || { echo "[devcontainer] Warning: SiLK download failed"; rm -rf "$tmp"; return 1; }
+    _verify_sha256 "${tmp}/silk.tar.gz" "$_SILK_SHA256" "silk-${SILK_VERSION}.tar.gz" \
+        || { rm -rf "$tmp"; return 1; }
+    tar -zxf "${tmp}/silk.tar.gz" -C "$tmp"
+    cd "${tmp}/silk-${SILK_VERSION}"
+    ./configure \
+            --prefix=/usr/local \
+            --enable-silent-rules \
+            --enable-data-rootdir=/var/silk/data \
+            --enable-ipv6 \
+            --enable-ipset-compatibility=3.14.0 \
+            --enable-output-compression \
+            --with-python \
+            --with-python-prefix \
+        && make -j"$(nproc)" \
+        && sudo make install \
+        && echo "[devcontainer] SiLK ${SILK_VERSION} installed" \
+        || { echo "[devcontainer] Warning: SiLK build failed"; rm -rf "$tmp"; return 1; }
+
+    echo "[devcontainer] Building YAF ${YAF_VERSION} from source..."
+    curl -fsSL "${BASE_URL}/yaf-${YAF_VERSION}.tar.gz" \
+        -o "${tmp}/yaf.tar.gz" \
+        || { echo "[devcontainer] Warning: YAF download failed"; rm -rf "$tmp"; return 1; }
+    _verify_sha256 "${tmp}/yaf.tar.gz" "$_YAF_SHA256" "yaf-${YAF_VERSION}.tar.gz" \
+        || { rm -rf "$tmp"; return 1; }
+    tar -zxf "${tmp}/yaf.tar.gz" -C "$tmp"
+    cd "${tmp}/yaf-${YAF_VERSION}"
+    ./configure \
+            --prefix=/usr/local \
+            --enable-silent-rules \
+            --enable-applabel \
+            --enable-metadata \
+            --enable-plugins \
+        && make -j"$(nproc)" \
+        && sudo make install \
+        && echo "[devcontainer] YAF ${YAF_VERSION} installed" \
+        || echo "[devcontainer] Warning: YAF build failed — YAF features unavailable"
+
+    # Update the dynamic linker cache so /usr/local/lib is found at runtime.
+    if ! grep -qr '/usr/local/lib' /etc/ld.so.conf.d/ 2>/dev/null; then
+        echo '/usr/local/lib' | sudo tee /etc/ld.so.conf.d/silk.conf > /dev/null
+    fi
+    sudo ldconfig
+
+    rm -rf "$tmp"
+    cd /workspaces/FanGetFameFast
+}
+
+if command -v rwfilter &>/dev/null && command -v yaf &>/dev/null; then
+    echo "[devcontainer] SiLK/YAF already installed: rwfilter $(rwfilter --version 2>&1 | head -1), yaf $(yaf --version 2>&1 | head -1)"
+else
+    _install_silk_yaf_from_source
+fi
+
 echo "[devcontainer] Upgrading pip"
 python -m pip install --upgrade pip
 

@@ -416,12 +416,17 @@ def _derive_lessons_learned(module: str, steps: list[dict], recs: list[str]) -> 
 # Main generator                                                               #
 # --------------------------------------------------------------------------- #
 
-def generate_narrative(case_id: str, reports_dir: Path) -> Path:
+def generate_narrative(case_id: str, reports_dir: Path, module: str | None = None) -> Path:
     """
     Read existing reports + research notes, write {case_id}_narrative.md.
     Returns the path written.
+
+    *module* ("fame" | "fast" | "fan") overrides the case_id-prefix-based
+    detection — required when reports_dir is a per-host module directory
+    (reports/<case_id>/<MODULE>/<hostname>/) whose case_id carries no
+    FAME/FAST/FAN prefix.
     """
-    module = _detect_module(case_id)
+    module = (module or _detect_module(case_id)).lower()
 
     notes_text = _read(reports_dir / f"{case_id}_research_notes.md")
     steps       = _load_steps(case_id, reports_dir)
@@ -546,9 +551,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--case-id",     required=True, metavar="ID")
     p.add_argument("--reports-dir", default=str(REPORTS_DIR), metavar="DIR")
+    p.add_argument("--module", choices=["fame", "fast", "fan", "FAME", "FAST", "FAN"], default=None,
+                    help="Override case-id-prefix module detection (required for per-host "
+                         "module directories, e.g. reports/<case_id>/FAME/<hostname>/)")
     return p
 
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
-    generate_narrative(args.case_id, Path(args.reports_dir))
+    generate_narrative(args.case_id, Path(args.reports_dir), module=args.module)

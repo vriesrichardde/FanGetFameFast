@@ -16,8 +16,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-SSH_HOST="${INVESTIGATIONS_SSH_HOST:-sansforensics@ubuntudesktop}"
-REMOTE_ROOT="${INVESTIGATIONS_ROOT:-/home/sansforensics/cases}"
+SSH_HOST="${INVESTIGATIONS_SSH_HOST:-}"
+REMOTE_ROOT="${INVESTIGATIONS_ROOT:-}"
+
+if [[ -z "$SSH_HOST" || -z "$REMOTE_ROOT" ]]; then
+    echo "[remove_case] Investigations vault is not configured."
+    echo "[remove_case] To configure: ./scripts/configure_vault.sh user@host /remote/root [ssh_key]"
+    echo "[remove_case]   (see templates/set_env_template.sh for details)"
+    exit 0
+fi
 
 C_CYAN='\033[0;36m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'
 C_RED='\033[0;31m'; C_BOLD='\033[1m'; C_RESET='\033[0m'

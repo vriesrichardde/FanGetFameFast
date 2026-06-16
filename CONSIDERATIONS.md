@@ -1,0 +1,6 @@
+- Work on the support of nightly investigations as it can be very time consuming
+- Stabilising the output. We want to limit chance of drifting in certain areas, especially note taking, and reporting. This should be as consistent as possible
+- Improve architecture to have a consistent investigation path for each module
+- Implement more tools
+- Integrate with SIEM
+- Allow MCP based evidence gathering

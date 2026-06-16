@@ -42,16 +42,29 @@ fuel.
 ### Invocation
 
 ```
-/fan /path/to/capture.pcap [--case-id FAN-YYYY-XXX]
+/fan /path/to/capture.pcap [--case-id FAN-YYYY-XXX] [--no-vault] [--no-upload]
 ```
 
 If `--case-id` is omitted, derive it as `FAN-<YYYY>-<STEM>` where `<STEM>` is
 the PCAP filename without extension, uppercased, with hyphens preserved and
 spaces replaced by hyphens. Use the current year for `<YYYY>`.
 
+`--no-vault` and `--no-upload` mirror the identically-named flags on
+`fame_analyze.sh`/`fast_analyze.sh`/`analyze_pcap.sh`:
+
+| Flag | Effect |
+|------|--------|
+| `--no-vault` | Skip the "Vault findings write" step (`lib/vault_writer.py --module fan`) at the end of the investigation — no TTPs/IOCs/risks are written to the Obsidian vault for this case. |
+| `--no-upload` | Skip the "Upload all artifacts to the investigations vault via MCP" step — reports stay local under `./reports/<CASE_ID>/` only. |
+
 ---
 
 ## Research notes — logging rule (CLAUDE.md constraint)
+
+See `docs/investigation_discipline.md` §1 for the shared `init`/`step`/
+`reflect`/`event`/`finalize` cadence (FAN's `init` call is in Step 0 below;
+`--module fan`). The logging rule below is FAN's phase-loop-specific framing
+of that same discipline.
 
 > Do NOT run the next investigation action until the output of the current
 > action has been read, interpreted, and appended to research notes via
@@ -63,7 +76,9 @@ spaces replaced by hyphens. Use the current year for `<YYYY>`.
 For every action:
 1. Read the raw output (JSON, report.md, tshark output, etc.) in full.
 2. Call `python3 lib/research_notes.py step` with a title, the action taken,
-   the question it was meant to answer (`--why`), and the outcome.
+   the question it was meant to answer (`--why`), the outcome, and
+   `--source-data` pointing at the raw output this step is based on (see
+   "Preserve raw analysis artifacts" below for the path convention).
 3. If any finding is severity **HIGH** or **CRITICAL**, or is itself a major
    new lead (like RN-029 in a past case): surface it immediately to the
    analyst before continuing.
@@ -71,6 +86,14 @@ For every action:
 5. Note any pivot opened up by this result as `[PIVOT: ...]` — this is the
    input to step 5 of the loop (Reflect & pivot). A pivot is not optional
    color; it is a candidate for the next iteration of step 3.
+6. **If this step establishes a confirmed action by the traffic's subject
+   (attacker, victim, or other monitored host) with a direct timestamp from
+   the evidence** — e.g. a session-cookie replay, a malicious upload/download,
+   a C2 check-in, a form submission — **also log it via
+   `python3 lib/research_notes.py event ...`** per
+   `docs/investigation_discipline.md` §1d, in addition to the `step` entry.
+   This is what populates the attacker-perspective timeline
+   (`lib/generate_timeline.py`); a `step`-only entry will not appear there.
 
 **Analytical judgements with no direct tool backing** must be prefixed with
 `[ASSUMPTION]` in research notes. The hallucination guard maps this tag to
@@ -148,6 +171,24 @@ For any finding severity **HIGH** or **CRITICAL**, or any non-zero malicious
 OSINT verdict (file hashes, CTI): surface immediately with the finding text
 and MITRE technique(s).
 
+**Mandatory content/identity sweep trigger.** If Phase 1's protocol hierarchy
+shows *any* payload-bearing application protocol — HTTP, FTP, SMTP/POP3/IMAP,
+Telnet, IRC, IM protocols (MSN/YMSG/XMPP/AIM), SMB/CIFS, or any other protocol
+whose stream can be reconstructed as human-readable content via `tshark -z
+follow,tcp,ascii,N` or `--export-objects` — run the Content/Identity pattern
+sweep (Toolbox B, below) across the entire capture as part of this baseline,
+not as an opportunistic Phase 3 technique gated on a detector firing or a
+pivot. Log it as its own step even if it returns nothing
+(`UNVERIFIABLE`/"no identity strings or notable content observed").
+Rationale: the 22 detectors are reputation/signature-based and structurally
+cannot flag a normal-looking session on a benign-reputation host or protocol
+that carries abusive, coercive, or incriminating *content* (e.g. an
+anonymous-harassment webmail POST to a clean-reputation site, or extortion
+language inside an otherwise-ordinary IM session) — the only way to catch
+this class of finding — including malicious-insider, extortion, and
+harassment scenarios — is to read the content itself, unconditionally,
+whenever a content-bearing protocol is present.
+
 ### Phase 3 — Hypothesize & investigate
 
 This is where the investigation actually happens. Using everything from
@@ -199,6 +240,53 @@ After interpreting, explicitly ask:
   opening a new question about it?
 - Would a human analyst, reading this finding, immediately want to know
   something else?
+- **For every host/flow already characterized as benign or ordinary**
+  (streaming, browsing, chat, routine background traffic): has its *content* —
+  not just its destinations or protocol mix — actually been read via the
+  Content/Identity sweep? A "benign" label based on protocol/destination alone
+  is not the same as having read what was said or sent. A host running
+  webmail, IM, file transfer, or any user-content-bearing protocol is an
+  automatic candidate for this sweep regardless of how unremarkable its
+  traffic otherwise looks.
+- **Does any finding reference content that was not fully resolved to its
+  original, readable form?** A finding is incomplete — not concluded — if it
+  identifies a specific object, request, message, file, or session
+  (e.g. a viewed thread, an attachment, a compressed/encoded payload, a
+  fragment split across streams) but stops at metadata because the payload
+  was compressed, encoded, binary, truncated, or otherwise not directly
+  legible with the technique first tried. Any such lead is a mandatory pivot:
+  apply whatever technique recovers the underlying data (decompression,
+  re-assembly across streams/fragments, decoding, carving, following a
+  reference/URL/ID to the object it points at, correlating with another
+  module's output) and re-read the result before writing "bits and pieces,"
+  "unrecoverable," "not further examined," or any similarly scoped-down
+  conclusion. Recovered context can itself surface new findings (credentials,
+  additional identities, further pivots) — treat it as a first-class
+  investigative step, not cleanup.
+- **Has every host attributed as the actor behind a significant finding**
+  (sender/recipient of a harassing or threatening message, party to a
+  session-hijack, source of exfiltration or policy-violating traffic, etc.)
+  been run through the Actor Profiling pivot (Toolbox B)? Attribution to an
+  IP/MAC address alone is a starting point, not an endpoint — a finding that
+  names a responsible host but stops there, without attempting
+  attribution-layer disambiguation, device fingerprinting, logged-in-identity
+  extraction, and an intent/premeditation timeline around the event window, is
+  incomplete. This pivot is mandatory, not opportunistic — run it
+  automatically the moment a host is attributed to a significant finding,
+  without waiting to be asked.
+- **Does an identity attributed to a host actually reach the attribution
+  layer the finding needs?** If a host/network/device was profiled once (e.g.
+  earlier in the investigation) and a later finding on the "same" host reuses
+  that profile's identity, re-check step 0 of Actor Profiling: a single WAN IP
+  can hide multiple MACs/devices (NAT, shared connection, DHCP reassignment); a
+  single device can run multiple browsers/app instances, each with its own
+  User-Agent and persistent identifier cookies (e.g. Google `PREF=ID=...`);
+  and a single browser session can authenticate as different accounts at
+  different times, or have its cookies replayed by a different session
+  entirely. An identity is only corroboration for a *specific* finding if the
+  finding's own traffic carries evidence reaching that identity's layer —
+  otherwise it is a separate, unconfirmed lead and the finding's actual actor
+  may still be unidentified.
 
 If yes to any of the above: return to Phase 3 with that question. If no new
 pivots remain and every flagged item from Phases 1–2 has been either explained
@@ -268,6 +356,116 @@ tshark -r "$PCAP" -T fields -e eth.src_resolved
 OUI reveals vendor → device class. NBNS announcements reveal Windows NetBIOS
 hostnames on the segment.
 
+### Actor profiling (mandatory pivot for any host attributed to a finding)
+
+The moment any host is named as the responsible party for a significant
+finding — sender/recipient of a harassing or threatening message, the device
+behind a session-hijack or cookie-replay, the source of exfiltration or a
+policy violation, etc. — run this profile automatically, without waiting for
+the analyst to ask "who is this?" or "what else can we find on them?". An
+IP/MAC attribution is the start of attribution, not the end of it.
+
+**0. Attribution-layer disambiguation** — is "this host" actually one actor?
+
+Every attribution is anchored at some *layer*, and a match at one layer does
+not prove a match at a finer one:
+
+| Layer | Identifier(s) | A match here means... | ...but does NOT prove |
+|-------|---------------|------------------------|------------------------|
+| Network | WAN/source IP, subnet | traffic crossed this address | one device — the address may be a NAT gateway, shared connection, or DHCP-reassigned over time |
+| Device | MAC, TCP/IP stack & OS fingerprint (TTL, window size, OUI) | traffic came from this physical/virtual NIC | one user or one running session — a device can run multiple browsers/VMs/users |
+| Application session | User-Agent, persistent client cookies (e.g. Google `PREF=ID=...`), IM/app session/login IDs | traffic came from this specific browser/app instance | one identity for all time — the same session can log in as different accounts sequentially, or one account's cookies can be replayed by a different session (cookie hijack) |
+| Account / identity | logged-in username, email, display name, account ID | this account was authenticated in this session | this is the *person* — accounts can be shared, spoofed, or fake/sockpuppet |
+
+Before reusing any identity discovered elsewhere in the case (an IM login, a
+webmail account, a device fingerprint) to explain a *new* finding, identify
+which layer the new finding is anchored at, and check whether the earlier
+identity's evidence reaches that same layer — don't silently promote a
+coarser-layer match into a finer-layer claim. Concretely:
+
+```bash
+# Multiple MACs behind one IP (NAT/shared gateway, or a reassigned DHCP lease over time)
+tshark -r "$PCAP" -Y "ip.src==<HOST>" -T fields -e frame.time -e eth.src 2>/dev/null | sort -u
+
+# Multiple distinct User-Agents / OS fingerprints from one IP, with active time ranges
+tshark -r "$PCAP" -Y "http.request && ip.src==<HOST>" -T fields -e frame.time -e http.user_agent 2>/dev/null | sort -u
+
+# Persistent per-browser/app identifier cookies (e.g. Google PREF=ID=..., other long-lived
+# tracking/session cookies), with timestamps — a change in this value mid-capture is a
+# different browser instance even if the UA string is identical
+tshark -r "$PCAP" -Y "http.cookie && ip.src==<HOST>" -T fields -e frame.time -e tcp.stream -e http.cookie 2>/dev/null \
+  | grep -Eo 'PREF=ID=[a-f0-9]+|[A-Za-z_]+=[A-Za-z0-9._-]{16,}' | sort -u
+```
+
+If any of these show **more than one distinct value for the same coarser
+identifier** (two MACs on one IP, two UA/cookie fingerprints on one MAC, two
+account identities in one browser session), treat each as a *candidate
+separate actor* — e.g. one machine running two browsers (native OS + VM), a
+NAT gateway/shared connection serving multiple devices, or a session-cookie
+replay (one browser, two accounts: the legitimate user and an attacker).
+Then verify which fingerprint the finding's own traffic carries at the layer
+that matters for that finding, and only attribute identities whose evidence
+**reaches that layer**. An identity recovered at a coarser layer than the
+finding requires is a separate, unconfirmed lead — log it as its own actor
+profile and an open `[PIVOT: relationship between <actor A> and <actor B>
+sharing <network/device> <HOST> — same operator, different individuals, or a
+hijacked session?]`, not as corroboration of the first.
+
+**1. Device/application fingerprint** — what is this host, concretely?
+
+```bash
+tshark -r "$PCAP" -Y "http.request && ip.src==<HOST>" -T fields -e http.user_agent 2>/dev/null | sort -u
+```
+
+User-Agent strings reveal OS, browser(s), and any client applications (IM
+clients, update agents, RSS readers, etc.) — distinct applications with
+distinct UAs sharing one host is itself informative (e.g. a single
+multi-protocol chat client explaining several IM-protocol findings at once).
+
+**2. Logged-in identity extraction** — does this host carry session state for
+any service that ties it to a real name, email address, or account ID?
+
+```bash
+# Cookies set for / sent by the host across all observed services
+tshark -r "$PCAP" -Y "(http.cookie || http.set_cookie) && ip.addr==<HOST>" -T fields \
+  -e frame.time -e ip.dst -e http.host -e http.cookie -e http.set_cookie 2>/dev/null \
+  | grep -Eio '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|c_user=[0-9]+|email=[^&;]+'
+```
+
+For any service session found (webmail, social network, forum, etc.), apply
+the general "resolve referenced content" rule above: if the relevant response
+is gzip/compressed, export and decompress it (`--export-objects http`), then
+grep the decompressed page for the account's display name / real name (e.g.
+`"<UID>", "<Display Name>",` patterns in social-network JS, `Welcome,
+<name>`, profile links). A session cookie carrying an email address or account
+ID is a direct identity lead and must be followed to the page content it
+unlocks, not left as a bare cookie value.
+
+**3. Intent / premeditation timeline** — what did this host do in the minutes
+before and after the event?
+
+```bash
+# Full search-query / navigation history for the host around the event window
+tshark -r "$PCAP" -Y "http.request && ip.src==<HOST> && http.host contains \"google\"" \
+  -T fields -e frame.time -e http.request.uri 2>/dev/null | grep -i "q="
+```
+
+Read the sequence of searches/page visits immediately before and after the
+event. A search for the method ("how to <do the thing>") or an explicit
+statement of motive/target shortly before the event converts an isolated
+technical finding into evidence of a deliberate, planned act — and a search
+immediately after can reveal follow-on intent. Report this timeline alongside
+the finding it corroborates.
+
+**Output of this pivot**: a short profile — which attribution layer/fingerprint
+performed the finding (step 0), that fingerprint's OS/browser/apps, any
+real-name/email/account identity recovered *for that same fingerprint*, and
+an intent timeline — attached to the finding that named the host. Treat gaps
+in any of the four as open `[PIVOT: ...]` items, not as "not applicable," and
+treat identities tied to a *different* fingerprint sharing the same coarser
+layer (network, device) as separate, unconfirmed leads rather than folding
+them into this profile.
+
 ### Session cookie and credential extraction
 
 For HTTP sessions carrying authentication tokens in cleartext:
@@ -323,14 +521,42 @@ the stream index for any POST request to recover the submitted form body. For
 webmail/web-form sessions this includes the full submitted content
 (`Body=`, `Subject=`, `To=`, `email=`, etc.).
 
-### Content / PII pattern sweep
+**General rule — resolve referenced content to its readable form (mandatory):**
+whenever a finding identifies a *specific* object, request, message, or
+session (e.g. a viewed thread, an attachment, a downloaded file, a fragment
+referenced by ID/URL) but the payload as first retrieved is not directly
+legible — compressed, encoded, binary, truncated, or split across
+streams/fragments — that illegibility is not the conclusion. Apply whatever
+recovery technique fits (decompression, re-assembly, decoding, carving,
+following the reference to the object it names, cross-module correlation),
+then run the content/identity pattern sweep (below) against the recovered
+data. Do not write "bits and pieces," "unrecoverable," or "not further
+examined" for content that names a specific object until that recovery step
+has been tried and read.
+
+**Worked example — gzip-compressed webmail/AJAX responses:** many webmail and
+AJAX endpoints (Gmail, Outlook Web Access, etc.) serve `Content-Encoding: gzip`
+JSON/JS responses. `follow,tcp,ascii` does **not** decompress these — it dumps
+raw gzip bytes that look like binary garbage and will be (wrongly) read as
+"nothing recoverable." `--export-objects http` *does* auto-decompress on
+export. Whenever a session-hijack, cookie-replay, or webmail-access finding
+identifies specific request URIs (e.g. Gmail `view=cv&th=<thread_id>`), run
+`--export-objects http` and locate the exported file matching that URI/query
+string — it will be the actual decompressed JS/JSON response body. Recovered
+viewed-thread content can itself contain new correlative findings (e.g.
+plaintext credentials shared by email, secondary account identities,
+additional named individuals) — apply the general rule above to those too.
+
+### Content / identity pattern sweep
 
 Reputation- and signature-based detectors will not flag a normal-looking
-request to a benign-reputation host. This sweep catches *what was said/sent*,
-independent of *where it went*. Run this whenever the investigation involves
-webmail, web forms, chat, or any user-content-bearing protocol — and as a
-standing check even when nothing else points to it, since this is precisely
-the class of finding the rest of the toolbox is structurally blind to.
+session on a benign-reputation host or protocol. This sweep catches *what was
+said/sent*, independent of *where it went or which protocol carried it*. Run
+this whenever the investigation involves webmail, web forms, chat, file
+transfer, or any user-content-bearing protocol — and as a standing check even
+when nothing else points to it, since this is precisely the class of finding
+(including malicious-insider, extortion, and harassment scenarios) that the
+rest of the toolbox is structurally blind to.
 
 ```bash
 # Email addresses anywhere in decoded HTTP request/response content
@@ -341,12 +567,26 @@ tshark -r "$PCAP" -Y "http" -T fields -e frame.number -e ip.src -e ip.dst \
 # Same, restricted to POST form submissions (most likely to carry composed content)
 tshark -r "$PCAP" -Y "http.request.method == POST" -T fields \
   -e frame.number -e tcp.stream -e http.host -e http.request.uri -e http.file_data 2>/dev/null
+
+# Full-capture string search across ALL protocols/streams (not just HTTP) —
+# covers FTP, SMTP/POP3/IMAP, Telnet, IRC, IM (MSN/YMSG/XMPP/AIM), SMB, etc.
+tshark -r "$PCAP" -Y "frame contains \"@\"" -T fields -e frame.number -e ip.src -e ip.dst -e tcp.stream 2>/dev/null
+
+# For each content-bearing TCP stream found above, reconstruct and scan it:
+tshark -r "$PCAP" -q -z follow,tcp,ascii,N 2>/dev/null \
+  | grep -Eio '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|bitcoin|wallet|wire transfer|iban|account number|ransom|extort|blackmail|pay(ment)?|deadline|or else|don'"'"'t tell|expose|leak|delete this|password|credentials'
+
+# Same sweep against exported (auto-decompressed) HTTP objects — required for
+# any gzip/AJAX webmail response identified above:
+grep -Erio '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|password|credential' /tmp/http_exports/ 2>/dev/null
 ```
 
-Treat every distinct email address, username, or identity string found this
-way as a candidate IOC/identity and a candidate pivot: who sent it, who
-received it, was it spoofed, was delivery confirmed (check the response in
-the same stream)?
+Treat every distinct email address, username, identity string, payment
+reference, or coercive/urgency phrase found this way as a candidate
+IOC/identity and a candidate pivot: who sent it, who received it, was it
+spoofed, was delivery confirmed (check the response in the same stream), and
+does the language itself indicate a threat, demand, or insider disclosure
+independent of where the traffic was destined?
 
 ### UPnP/SSDP gateway profiling
 
@@ -415,55 +655,17 @@ capture window. No raw IPs or port numbers — describe behaviour in business te
 Use "confirmed" when backed by direct detector output; "assumed" when inferred from
 cross-module correlation.]
 
-## pptx_executive_summary
-
-[3–5 bullet points. CISO language. No IPs, ports, or protocol names.
-Example: "• Outbound communications consistent with command-and-control activity
-were observed throughout the capture window."]
-
-## pptx_risk
-
-[Business risks — data exposure, regulatory, operational. No technical identifiers.]
-
-## pptx_impact
-
-[What was affected: services, users, data — in plain language.]
-
-## pptx_mitigations
-
-[Containment or monitoring actions taken or in progress.]
-
-## pptx_recommendations
-
-[Concrete follow-up actions with suggested owner labels.]
-
-## pptx_timeline
-
-[4-6 bullets: the board-level timeline. Same chronology as attack_timeline, but
-plain language, no IPs/ports/protocol names/RN-NNN citations — "On [date] at
-[time], ..." Each bullet should be readable on its own as a slide line.]
-
-## pptx_root_cause
-
-[1-2 sentences: how did this happen, in plain language — e.g. phishing, an
-exposed/weak service, compromised credentials, an unpatched vulnerability,
-physical access, misconfiguration. Be specific to what you actually found in
-this capture; do not use a generic placeholder if the evidence supports a
-real conclusion.]
-
-## pptx_lessons_learned
-
-[3-5 bullets: what worked well in this investigation/response, and what gaps
-or improvements this incident points to. Plain language, board-appropriate.]
+... followed by the eight shared pptx_* sections (docs/investigation_discipline.md §2)
 ```
 
-**Rules:**
-- Write all sections even if evidence is thin — note the gap explicitly.
+For the shared `pptx_*` schema and authoring rules, see
+`docs/investigation_discipline.md` §2. Example wording for FAN's
+`pptx_executive_summary`: *"• Outbound communications consistent with
+command-and-control activity were observed throughout the capture window."*
+
+**Rules (FAN-specific, in addition to docs/investigation_discipline.md §2):**
 - `attack_timeline` must span the entire capture window chronologically.
 - Use RN-NNN references to link each event to the research notes step.
-- `pptx_*` sections must be free of IPs, ports, protocol names, file paths,
-  hostnames/workstation IDs, and RN-/EVT- citation references — write them as
-  you would for a board/CISO audience, not a technical one.
 
 ---
 
@@ -537,30 +739,109 @@ report's signal-to-noise ratio. Before finalizing, hand-edit the generated MD:
 After hand-editing, regenerate the PDF via `lib.md_to_pdf.convert()` (same
 pattern as the `./analysis/`-cleaned-up note above).
 
-### Timeline visualisation
+## Preserve raw analysis artifacts (evidence ZIP)
+
+**Before** the chain-of-custody update and the `./analysis/` cleanup step,
+preserve every module's raw output so each research-notes step's
+`--source-data` citation remains independently verifiable after cleanup:
 
 ```bash
-python3 lib/generate_timeline.py "$CASE_ID" "./reports/$CASE_ID" "./reports/$CASE_ID/FAN/$STEM"
+source ./scripts/package_evidence.sh
+EVIDENCE_ZIP="$(fgff_package_evidence "$CASE_ID" "./reports/$CASE_ID/FAN/$STEM" "./analysis" "analysis")"
+
+python3 lib/research_notes.py finalize-evidence \
+  --case-id     "$CASE_ID" \
+  --evidence-dir "./reports/$CASE_ID/FAN/$STEM/${CASE_ID}_evidence/analysis" \
+  --src-prefix  "./analysis" \
+  --zip-prefix  "${CASE_ID}_evidence/analysis" \
+  --case-dir    "./reports/$CASE_ID/FAN/$STEM"
 ```
 
-Produces swimlane PNG images and an interactive HTML timeline from the research notes:
-- `./reports/<CASE_ID>/<CASE_ID>_timeline.html`
-- `./reports/<CASE_ID>/<CASE_ID>_timeline_attacker_p1.png`
-- `./reports/<CASE_ID>/<CASE_ID>_timeline_defender_p1.png`
-- `./reports/<CASE_ID>/<CASE_ID>_timeline_combined_p1.png`
+`fgff_package_evidence` is the same shared rsync+zip helper that
+`analyze_pcap.sh` (and the FAME/FAST entry scripts) run inline as part of
+their own evidence-preservation step — `/fan` runs each module independently
+rather than through `analyze_pcap.sh`, so it must call this helper explicitly
+here — in this order, before chain-of-custody and `./analysis/` cleanup — or
+the raw outputs cited by `--source-data` are lost when `./analysis/` is
+wiped. The helper never fails the investigation: on any error it logs a
+warning to stderr and returns 0 with `$EVIDENCE_ZIP` empty.
 
-### Upload all artifacts to the investigations vault via MCP
+`research_notes.py finalize-evidence` then, for every `--source-data` row
+recorded under `./analysis/...` during the investigation: computes its
+SHA-256 from the copy now inside `$EVIDENCE_ZIP`, appends a per-file
+"Evidence preserved: <file>" step (mirroring the FAME/FAST chain-of-custody
+pattern — action/why/outcome/SHA-256), and rewrites that `Source data` row
+from its live `./analysis/...` path to the zip-relative path
+`${CASE_ID}_evidence/analysis/...`. This matters because the auditor receives
+`$EVIDENCE_ZIP`, not the `./analysis/` working directory — every `Source
+data` citation in the final research notes must resolve to a path *inside the
+archive the auditor actually gets*.
+
+After this step, run `python3 lib/chain_of_custody.py update --case-id
+"$CASE_ID" --case-dir "./reports/$CASE_ID" --trigger investigation` so
+`$EVIDENCE_ZIP`'s hash is captured in the manifest, and include it in the MCP
+upload alongside the report/PPTX/DOCX (see below).
+
+### `--source-data` convention
+
+While the investigation is running, every `python3 lib/research_notes.py
+step` call should set `--source-data` to the raw-output location for that
+step, using the **live `./analysis/...` path at the time the step is
+logged**:
+
+- **Toolbox A (module scripts)**: `--source-data "./analysis/<module>/<STEM>/<output_file>"`
+  (e.g. `./analysis/http_threats/nitroba/http_threats.json`).
+- **Toolbox B (manual `tshark`/CLI techniques)**: redirect the command's
+  output to a file under `./analysis/manual/<STEM>/RN-NNN_<slug>.txt` and pass
+  that path, so it is swept up by the evidence-preservation step above. If a
+  step draws directly on the evidence file with no separate output worth
+  saving (e.g. a quick `tshark -Y ... | head`), `--source-data` may instead
+  point at the evidence file path (the one passed to `research_notes.py init
+  --evidence`) — this is left untouched by `finalize-evidence` since it
+  doesn't start with `./analysis/`.
+
+**After** `finalize-evidence` runs (above), every `./analysis/<path>`
+recorded this way has been rewritten in the research notes to
+`${CASE_ID}_evidence/analysis/<path>` — the path an auditor extracting
+`$EVIDENCE_ZIP` will actually find the cited file at, with a logged SHA-256
+to verify it against. Do not hand-edit `Source data` rows after this step
+runs.
+
+### Record findings to the vault (skip if `--no-vault`)
+
+Mirrors `analyze_pcap.sh`'s "Vault findings write" step. Unless `--no-vault`
+was passed, parse the finalised incident report and write confirmed TTPs,
+IOCs, and risks to the Obsidian vault:
+
+```bash
+python3 lib/vault_writer.py \
+  --module fan \
+  --report "./reports/$CASE_ID/FAN/$STEM/${STEM}_incident_report.md" \
+  --case-id "$CASE_ID" \
+  --reports-dir ./reports
+```
+
+If `--no-vault` was passed, skip this step entirely (do not run
+`vault_writer.py`, and do not invoke `/obsidian-record` for this case).
+
+### Upload all artifacts to the investigations vault via MCP (skip if `--no-upload`)
+
+If `--no-upload` was passed, skip this step entirely — leave all reports under
+`./reports/<CASE_ID>/` only. If the investigations vault is not configured
+(`INVESTIGATIONS_SSH_HOST`/`INVESTIGATIONS_ROOT` unset — see CLAUDE.md
+"Investigations vault configuration"), ask the analyst once for the destination,
+run `./scripts/configure_vault.sh`, then proceed. Otherwise (paths below are
+relative to `$INVESTIGATIONS_ROOT`, the investigations MCP server's root —
+e.g. `/home/sansforensics/cases` is one example root, not a fixed one):
 
 ```
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<STEM>_incident_report.md
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/documents/<STEM>_incident_report.pdf
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/documents/<STEM>_fan_presentation.pptx
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/documents/<STEM>_fan_report.docx
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_narrative.md
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_research_notes.md
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_timeline.html
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_timeline_attacker_p1.png
-investigations_write_file: /home/sansforensics/cases/<CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_timeline_combined_p1.png
+investigations_write_file: <CASE_ID>/reports/FAN/<STEM>/<STEM>_incident_report.md
+investigations_write_file: <CASE_ID>/reports/documents/<STEM>_incident_report.pdf
+investigations_write_file: <CASE_ID>/reports/documents/<STEM>_fan_presentation.pptx
+investigations_write_file: <CASE_ID>/reports/documents/<STEM>_fan_report.docx
+investigations_write_file: <CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_narrative.md
+investigations_write_file: <CASE_ID>/reports/FAN/<STEM>/<CASE_ID>_research_notes.md
+investigations_write_file: <CASE_ID>/reports/documents/<CASE_ID>_evidence.zip
 ```
 
 ---
@@ -591,35 +872,19 @@ cross-references for any analyst reading either file.
 
 ---
 
-## Campaign Report (hand-authored)
+## Cross-module correlation, Campaign Report & completeness gate
 
-If FAME, FAST, or another FAN run already exists for this case ID, the
-per-case campaign report (`<case_id>_campaign_report.*`) must be hand-authored,
-not auto-generated:
-
-1. Read this module's research notes end-to-end, plus the research notes of
-   every other module that has completed for this case ID.
-2. Hand-author `./reports/<case_id>/<case_id>_campaign_report.md` following
-   `docs/campaign_report_template.md` — Incident Timeline merged across
-   modules, Cross-Domain Correlation pivots citing RN-/EVT- IDs from at least
-   two modules (or stating explicitly that none exist), unified MITRE/IOC
-   tables, and a hand-curated Hallucination Guard FND-list with an overall
-   confidence percentage. `lib/correlate_findings.py`'s output (a best-effort
-   research aid) and `lib/generate_combined_report.py`'s
-   `_merge_*`/`_extract_*` helpers may be used as research aids when
-   pre-populating tables.
-3. Render it to PDF/PPTX/DOCX:
-   ```python
-   import sys; sys.path.insert(0, "./lib")
-   from render_campaign_report import render
-
-   paths = render(md_path="./reports/<case_id>/<case_id>_campaign_report.md",
-                   case_id="<case_id>", hostname="<hostname>")
-   ```
-
-`lib/generate_combined_report.py`'s `generate()` is deprecated for this
-workflow — it remains only as an automated fallback for `--md-only`/headless
-batch runs or very-low-evidence cases.
+Follow `docs/investigation_discipline.md` §3 (cross-module correlation via
+`lib/correlate_findings.py`), §4 (always hand-author the per-case campaign
+report after this module's report is generated — single-module cases get a
+campaign report covering this module alone in board-deck format; if FAME,
+FAST, or another FAN run already exists for this case ID, it becomes a
+unified cross-module report; use `lib/report_completeness.py
+--campaign-check` to confirm it was created), and §5 (the
+`generate_pcap_report.py` completeness gate — narrative + research-notes
+reasoning checks, the `⚠️ INVESTIGATION INCOMPLETE` banner, and
+`<case_id>_INVESTIGATION_INCOMPLETE.json`). If the generated report shows that
+banner, address it per §5 before considering this investigation complete.
 
 ---
 

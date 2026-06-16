@@ -18,6 +18,9 @@ archive/
 # Claude Code local settings (machine-specific paths, MCP servers, credentials)
 .claude/settings.local.json
 
+# Temporary export of Claude Code session transcripts for container rebuild migration
+.claude-sessions-backup/
+
 # Claude Code runtime lock files (ephemeral process state)
 .claude/*.lock
 

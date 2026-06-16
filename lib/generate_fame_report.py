@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import path_guard  # noqa: E402  write-path policy enforcement
+import report_completeness  # noqa: E402  narrative/reasoning completeness gate
 from typing import Any
 
 try:
@@ -213,7 +214,7 @@ _DKOM_AFFECTED = {"pstree", "cmdline", "svcscan", "malfind", "filescan", "hiveli
 _EXPECTED_PLUGINS: list[tuple[str, str, str]] = [
     ("Image Type Detection",          "banners",      "OS type unknown — cannot select correct plugin chain"),
     ("Hidden Process Scan (psscan)",  "psscan",       "Critical — authoritative process list when DKOM active"),
-    ("Active Process List (pslist)",  "pslist",       "EPROCESS walk; empty output confirms DKOM (T1014) active"),
+    ("Active Process List (pslist)",  "pslist",       "EPROCESS walk; empty output may indicate DKOM (T1014) or a symbol/version mismatch"),
     ("Process Tree (pstree)",         "pstree",       "Parent-child relationships unavailable"),
     ("Command Lines (cmdline)",       "cmdline",      "Process command arguments unverifiable"),
     ("Network Connections (netscan)", "netscan",      "C2 connection pivot source"),
@@ -238,11 +239,12 @@ def _compute_plugin_completeness(data: dict[str, Any], dkom: bool) -> list[dict]
                           if l.strip() and l.strip()[0].isdigit()]
             if not proc_lines and dkom:
                 rows.append({"step": label, "status": "Empty result",
-                             "notes": "DKOM active — EPROCESS list unlinked by rootkit; not authoritative"})
+                             "notes": "Possible DKOM (active-list unlinking) or symbol/version "
+                                      "mismatch — psscan remains authoritative either way"})
                 continue
 
         if dkom and key in _DKOM_AFFECTED:
-            rows.append({"step": label, "status": "Skipped — DKOM active", "notes": missing_note})
+            rows.append({"step": label, "status": "Empty — possible DKOM", "notes": missing_note})
             continue
 
         if key == "banners" and not has_data:
@@ -267,11 +269,14 @@ def _detect_gaps(
     gaps = []
     if dkom:
         gaps.append(
-            "**DKOM cascade (T1014):** A rootkit driver suppressed 7 standard Volatility plugins — "
-            "pslist, pstree, cmdline, svcscan, malfind, filescan, and hivelist all returned empty. "
-            "Process-level evidence (command lines, injected regions, service registry entries) is "
-            "unavailable from this image alone. A disk image (FAST) or a secondary memory capture "
-            "with a rootkit-resistant profile would recover this data."
+            "**Possible DKOM (T1014) or symbol/version mismatch:** `pslist` returned empty while "
+            "`psscan` recovered a process list, and several other plugins — pstree, cmdline, "
+            "svcscan, malfind, filescan, hivelist — also returned empty. This pattern is "
+            "consistent with active-list unlinking by a rootkit, but can equally arise from a "
+            "Volatility 3 / symbol-table version mismatch for this kernel build. Process-level "
+            "evidence (command lines, injected regions, service registry entries) could not be "
+            "confirmed from this image alone. A disk image (FAST), a secondary memory capture, or "
+            "re-running with a matching symbol table would help distinguish the two explanations."
         )
     if not data.get("proc_baseline"):
         gaps.append(
@@ -339,12 +344,14 @@ def _score_overall_confidence(dkom: bool, data: dict[str, Any]) -> tuple[str, st
     if dkom:
         return (
             "MEDIUM",
-            "DKOM (T1014) is active — a rootkit driver unlinked critical process structures from "
-            "the EPROCESS doubly-linked list, suppressing six standard Volatility plugins. "
-            "Pool-scan alternatives (psscan, netscan, modscan) remain authoritative and were used "
-            "as the primary evidence basis. Confidence is MEDIUM because living-off-the-land "
-            "activity and process injection evidence that would normally come from cmdline and "
-            "malfind is absent.",
+            "`pslist` returned empty while `psscan` recovered a process list, and several other "
+            "EPROCESS-walk-dependent plugins also returned empty — consistent with either DKOM "
+            "(T1014, active-list unlinking) or a Volatility 3 / symbol-table version mismatch for "
+            "this kernel build. Pool-scan alternatives (psscan, netscan, modscan) remain "
+            "authoritative either way and were used as the primary evidence basis. Confidence is "
+            "MEDIUM because process command-line and injection evidence that would normally come "
+            "from cmdline and malfind is absent, and the cause of the empty pslist has not been "
+            "independently confirmed.",
         )
     if psscan_ran and netscan_ran and yara_ran:
         return (
@@ -514,7 +521,8 @@ def _build_hallucination_guard_section(
             ))
         elif dkom:
             findings.append(tag_finding(
-                "pslist returned empty — DKOM active (rootkit unlinked EPROCESS list)",
+                "pslist empty, psscan has data — possible DKOM (T1014) or "
+                "symbol/version mismatch",
                 ConfidenceTier.CONFIRMED,
                 [],
                 ["volatility3/pslist"],
@@ -698,6 +706,14 @@ def _build_markdown(
     reports_dir = reports_dir or (PROJECT_ROOT / "reports")
     narrative = _load_narrative(case_id, reports_dir)
 
+    narrative_result = report_completeness.check_narrative(case_id, "FAME", reports_dir)
+    reasoning_result = report_completeness.check_research_notes(case_id, reports_dir)
+    report_completeness.write_incomplete_marker(reports_dir, case_id, narrative_result, reasoning_result)
+    incomplete_banner = report_completeness.format_incomplete_banner(narrative_result, reasoning_result)
+    if incomplete_banner:
+        print(f"[fame] WARNING: investigation incomplete for {case_id}/{hostname} — "
+              f"see {case_id}_INVESTIGATION_INCOMPLETE.json", file=sys.stderr)
+
     # ── Header ────────────────────────────────────────────────────────────────
     a(f"# FAME Memory Forensics Report")
     a(f"")
@@ -710,6 +726,8 @@ def _build_markdown(
     a(f"| Analyst | Claude Code — FAME skill |")
     a(f"| Generated (UTC) | {generated_utc} |")
     a(f"")
+    if incomplete_banner:
+        lines.extend(incomplete_banner)
 
     # ── Cross-module summary ───────────────────────────────────────────────────
     if fan_summary or fast_summary:
@@ -1180,15 +1198,20 @@ def _build_recommendations(data: dict[str, Any], shutdown_md: str) -> list[str]:
             "**Audit sudo policy** — msfadmin has unrestricted sudo access (`/bin/bash`). "
             "Restrict to specific commands required for legitimate operations and enforce MFA for sudo."
         )
-    if not any("ISF" in str(v) for v in data.values()):
+    if _is_dkom_active(data):
         recs.append(
-            "**Generate Volatility 3 ISF symbols** for the target kernel (Linux 2.6.24-16-server) to enable full plugin analysis "
-            "in future investigations. Without symbols, only strings-based extraction is possible."
+            "**Corroborate the empty active-process-list (pslist) result** — `pslist` returned no "
+            "entries while `psscan` recovered a full process list, which can indicate either DKOM "
+            "(active-list unlinking, MITRE T1014) or a Volatility 3 / symbol-table version mismatch "
+            "for this kernel build. Re-run `windows.pslist` with an alternate Volatility 3 release "
+            "or matching ISF symbol table to rule out a tooling artifact before treating this as a "
+            "rootkit indicator."
         )
-    recs.append(
-        "**Document all maintenance windows** — the 'unexpected' nature of this shutdown indicates a gap in change management. "
-        "Require pre-approved change tickets for any console-level server intervention."
-    )
+    if "unexpected" in shutdown_md.lower():
+        recs.append(
+            "**Document all maintenance windows** — the 'unexpected' nature of this shutdown indicates a gap in change management. "
+            "Require pre-approved change tickets for any console-level server intervention."
+        )
     recs.append(
         "**Cross-reference with FAN (network) and FAST (storage)** — if PCAP or disk images are available for the same time window, "
         "run a combined investigation to rule out lateral movement or data staging before the shutdown."
@@ -1414,6 +1437,91 @@ def _load_rekall_status(analysis_dir: Path) -> str:
     return p.read_text(errors="replace") if p.exists() else ""
 
 
+def _build_generic_methodology_section(
+    doc: Any,
+    data: dict,
+    case_id: str,
+    hostname: str,
+    image_path: str,
+    analysis_dir: Path,
+    _heading: Any,
+    _para: Any,
+    _note: Any,
+    _table_2col: Any,
+    _code: Any,
+) -> None:
+    """Generic, data-driven Part A/B methodology section.
+
+    Used for every case that did not populate the legacy
+    Kali/Metasploitable shutdown-investigation artifacts
+    (shutdown_report, isf_investigation, yara_summary, ...).
+    Describes only the plugins that actually produced output for
+    this case — no hardcoded host names, kernels, or findings.
+    """
+    image_name = Path(image_path).name if image_path else "memory.image"
+
+    _heading("Part A — Investigation Methodology", 1)
+    doc.add_paragraph()
+
+    _heading("A.1  Evidence acquisition and integrity", 2)
+    _para(
+        f"The memory image {image_name!r} was analysed read-only via Volatility 3. "
+        "No tool in this pipeline writes back to the image file. All analysis output "
+        "is written to a separate working directory (analysis/memory/) and archived "
+        "in the case evidence folder for long-term preservation; SHA-256 hashes of "
+        "each preserved artifact are recorded in the research notes (Appendix B)."
+    )
+    doc.add_paragraph()
+
+    _heading("A.2  Tool suite", 2)
+    try:
+        import volatility3 as _vol3
+        vol_version = getattr(_vol3, "__version__", "unknown")
+    except Exception:
+        vol_version = "unknown"
+    _table_2col([
+        ("Volatility 3", f"v{vol_version} — memory structure analysis"),
+        ("python-docx",  "Document generation"),
+    ])
+    doc.add_paragraph()
+
+    _heading("A.3  Chain of custody summary", 2)
+    _para(
+        f"Image: {image_name}  →  read-only analysis by Volatility 3  →  "
+        "output preserved in the case evidence folder  →  archived in case ZIP  →  "
+        "uploaded to the investigations vault."
+    )
+    doc.add_page_break()
+
+    # ── Part B: Artifact Extraction Catalog ───────────────────────────────────
+    _heading("Part B — Artifact Extraction Catalog", 1)
+    _note(
+        "For each Volatility 3 plugin that produced output for this image: "
+        "what it extracts and its role in the investigation."
+    )
+    doc.add_paragraph()
+
+    plugin_roles = {key: note for _label, key, note in _EXPECTED_PLUGINS}
+    for key in _available_plugins(data):
+        if key.startswith("_") or key in ("shutdown_report", "isf_investigation", "syslog_patterns"):
+            continue
+        role = plugin_roles.get(key, "")
+        _para(key, bold=True)
+        content = str(data.get(key, ""))
+        proc_lines = [l for l in content.splitlines() if l.strip() and l.strip()[0].isdigit()]
+        if proc_lines:
+            _para(f"{len(proc_lines)} data row(s) recovered.")
+        elif content.strip():
+            _para("Output produced (see preserved artifact for details).")
+        else:
+            _para("No output.")
+        if role:
+            _para(f"Role: {role}")
+        doc.add_paragraph()
+
+    doc.add_page_break()
+
+
 def _build_methodology_section(
     doc: Any,
     data: dict,
@@ -1438,6 +1546,18 @@ def _build_methodology_section(
       - Role in the investigation (which analytical question it answers)
     """
     from docx.shared import Pt, RGBColor
+
+    # The detailed Part A/B narrative below was hand-authored for one specific
+    # legacy case (Kali/Metasploitable shutdown investigation) and references
+    # that case's tools, hosts, and findings by name. Only use it when this
+    # case actually populated those legacy analysis artifacts; otherwise emit
+    # a generic, data-driven methodology section.
+    if not data.get("shutdown_report"):
+        _build_generic_methodology_section(
+            doc, data, case_id, hostname, image_path, analysis_dir,
+            _heading, _para, _note, _table_2col, _code,
+        )
+        return
 
     memprocfs_results = _load_memprocfs_results(analysis_dir)
     rekall_status_txt = _load_rekall_status(analysis_dir)
