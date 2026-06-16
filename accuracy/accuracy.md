@@ -79,9 +79,25 @@ not copied from a published answer key.
 
 ---
 
-## 3. Per-Case Self-Assessment
+## 3. Manual Assessment
+During the testing/benchmarking of our solution, we regularly reviewed the expected output 
+defined in the NIST answers, as well as the 
+[VIGIA cases](https://github.com/annatchijova/vigia-cases/tree/main/cases). What we noticed 
+was that the outcome would be different each time the run had taken place. By carefully 
+tuning the missing content, we came to a more complete report each time, but still there 
+were small deviations of things it would not find without us providing some direction. This 
+confirms our suspicion that for the (near) future it will stay a tool that is used with a 
+human-in-the-loop to confirm what it has found, ask questions on what might be there to find 
+and tune the results based on these events.
 
-### 3.1 NISTHACK (FAN + FAST, 2 hosts — DELLCPI and AFCASE2)
+We did confirm that with a few small questions, major findings can be uncovered by Claude as 
+our solution is built to let Claude be as intelligent as possible and to ensure that we as 
+analysts can follow its way of working. Below is a self assessment by Claude that goes into 
+a bit more depth on certain findings.
+
+## 4. Per-Case Self-Assessment
+
+### 4.1 NISTHACK (FAN + FAST, 2 hosts — DELLCPI and AFCASE2)
 
 **Confidence summary (campaign report §10):** 17 substantive findings — 6 CONFIRMED
 (2 with two-module corroboration), 6 INFERRED, 1 ASSUMED, 4 UNVERIFIABLE → 71%
@@ -117,7 +133,7 @@ analogue — both caught and corrected before reaching the final report.
 
 ---
 
-### 3.2 NISTLEAK (FAST, two evidence items — INFORMANT-PC and RM2-MEDIA)
+### 4.2 NISTLEAK (FAST, two evidence items — INFORMANT-PC and RM2-MEDIA)
 
 **Confidence summary (campaign report §8):** 14 substantive findings — 6 CONFIRMED
 (all with both-evidence-item corroboration), 5 INFERRED, 1 ASSUMED, 2 UNVERIFIABLE →
@@ -153,7 +169,7 @@ correctly reflecting that disk evidence does not prove an upload occurred.
 
 ---
 
-### 3.3 FAN-2026-NITROBA-V5 (FAN only)
+### 4.3 FAN-2026-NITROBA-V5 (FAN only)
 
 **Confidence summary (campaign report §8):** 16 substantive findings — 6 CONFIRMED
 (all from FAN module alone, since no FAME/FAST modules ran for this case), 4 INFERRED,
@@ -205,7 +221,7 @@ required removal for being unsupported.
 
 ---
 
-### 3.4 NROMANOFF (FAME + FAST)
+### 4.4 NROMANOFF (FAME + FAST)
 
 **Confidence summary (campaign report §9):** 14 substantive findings — 9 CONFIRMED
 (all with two-module FAME+FAST corroboration), 4 INFERRED, 1 ASSUMED, 0 UNVERIFIABLE
@@ -245,7 +261,7 @@ record).
 
 ---
 
-### 3.5 WIN764NFURY (FAME + FAST)
+### 4.5 WIN764NFURY (FAME + FAST)
 
 **Confidence summary (campaign report §9):** 12 substantive findings — 6 CONFIRMED
 (5 from FAST alone; 1 corroborated by FAME + cross-case vault), 5 INFERRED, 1 ASSUMED,
