@@ -77,6 +77,24 @@ to an actual tool execution recorded in that case's research notes (Section 4) �
 *evidence trail* in this run was independently re-derived from the supplied image/pcap,
 not copied from a published answer key.
 
+**Reproducibility for independent reviewers:** The three public-domain cases can be
+reproduced in full by any reviewer — the evidence is freely downloadable from the
+sources cited in the dataset table above:
+
+- **NISTHACK/DELLCPI:** https://cfreds.nist.gov/Hacking_Case.html
+- **NISTLEAK:** https://cfreds.nist.gov/data-leakage-case/data-leakage-case.html
+- **FAN-2026-NITROBA-V5:** https://digitalcorpora.org/corpora/scenarios/nitroba-university-harassment-scenario/
+
+**NROMANOFF** and **WIN764NFURY** use memory and disk images from a licensed SANS course
+(Stark Research Labs Data Breach Intrusion). These files are distributed to course
+attendees and are not redistributable; a reviewer without a SANS course license cannot
+independently re-run the agent against those two evidence sets. The case ZIPs in the
+repository root (`cases_for_judges_NROMANOFF.zip`, `cases_for_judges_WIN764NFURY.zip`)
+include the full investigation artifacts — reports, research notes, chain-of-custody
+manifest, and the verbatim `.jsonl` session transcript — so the complete reasoning
+chain is auditable without the original evidence. Independent end-to-end reproduction
+of those two cases requires SANS course access.
+
 ---
 
 ## 3. Manual Assessment

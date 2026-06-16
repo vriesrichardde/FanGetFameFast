@@ -513,6 +513,16 @@ Each case is a separate ZIP file (all well under GitHub's 100 MB limit). Every Z
 | `cases_for_judges_NROMANOFF.zip` | NROMANOFF | FAST | Disk forensics — Natasha Romanoff workstation |
 | `cases_for_judges_FAN-2026-NITROBA-V5.zip` | FAN-2026-NITROBA-V5 | FAN | Network intrusion — Nitroba University dataset |
 
+> **Dataset note — reproducibility:** NISTHACK, NISTLEAK, and FAN-2026-NITROBA-V5
+> use publicly downloadable evidence (NIST CFReDS and Digital Corpora — source URLs
+> in [accuracy/accuracy.md](accuracy/accuracy.md)). **NROMANOFF** and **WIN764NFURY**
+> use memory and disk images from a licensed SANS course (Stark Research Labs Data
+> Breach Intrusion); those files are distributed to course attendees and cannot be
+> redistributed. A reviewer without SANS course access cannot independently re-run
+> the agent against those two cases, but the ZIP contents — reports, research notes,
+> chain-of-custody manifest, and the verbatim `.jsonl` session transcript — are
+> fully auditable without the original evidence.
+
 ---
 
 ## License
