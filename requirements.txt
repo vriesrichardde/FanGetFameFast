@@ -8,7 +8,7 @@
 #   python3 scripts/generate_sbom.py
 
 # PDF generation
-weasyprint==68.1
+weasyprint==70.0
 cairocffi==1.7.1
 CairoSVG==2.9.0
 
